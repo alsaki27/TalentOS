@@ -2,7 +2,7 @@
 // clearance field, so this is a best-effort text signal. Federal and
 // clearance-required roles are never wanted in the inbox at all: this is a
 // permanent exclusion applied to every mail query, not a togglable filter,
-// and it applies even with "show hidden" mail included. Shared between
+// and it applies even when AI-hidden mail is included. Shared between
 // gmail-communications (the mail list itself) and inbox/counts (category
 // breakdown) so both agree on what counts as excluded.
 export const CLEARANCE_KEYWORDS = [

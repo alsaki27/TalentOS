@@ -1,6 +1,6 @@
 import React from 'react';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { Globe, Link2, Code2, Mail, Phone, MapPin } from 'lucide-react';
+import { getResumeTitleSpacingStyle, ResumeContactLine, ResumeProjectTitle } from '../ResumeTemplateParts';
 
 interface TemplateProps {
   data: ResumeData;
@@ -47,8 +47,8 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
 
   return (
     <div
-      className={`w-full h-full ${isEditorial ? 'pl-4 border-l-4' : ''}`}
-      style={{ fontSize: getFontSizePx(), color: displayColors.text,
+      className={`resume-template w-full h-full ${isEditorial ? 'pl-4 border-l-4' : ''}`}
+      style={{ ...getResumeTitleSpacingStyle(data.titleSpacing), fontSize: getFontSizePx(), color: displayColors.text,
         fontFamily: fontFamily || 'Georgia, serif',
         lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid',
@@ -74,60 +74,11 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
             {personalInfo.jobTitle}
           </h2>
         )}
-        {/* Contact Info */}
-        <div className={`flex ${isExecutive || isEditorial || isModernExecutive ? 'justify-start' : 'justify-center'} flex-wrap gap-x-4 gap-y-1 text-xs`}>
-          {personalInfo.email && (
-            <div className="flex items-center gap-1">
-              {/* <Mail className="w-3 h-3" style={{ color: colors.accent }} /> */}
-              <span>{personalInfo.email}</span>
-            </div>
-          )}
-          |
-          {personalInfo.phone && (
-            <div className="flex items-center gap-1">
-              {/* <Phone className="w-3 h-3" style={{ color: colors.accent }} /> */}
-              <span>{personalInfo.phone}</span>
-            </div>
-          )}
-          |
-          {personalInfo.location && (
-            <div className="flex items-center gap-1">
-              {/* <MapPin className="w-3 h-3" style={{ color: colors.accent }} /> */}
-              <span>{personalInfo.location}</span>
-            </div>
-          )}
-          |
-          {personalInfo.linkedin && (
-            <div className="flex items-center gap-1">
-              {/* <Link2 className="w-3 h-3" style={{ color: colors.accent }} /> */}
-              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
-            </div>
-          )}
-        </div>
-
-        {/* Links
-        {(personalInfo.website || personalInfo.linkedin || personalInfo.github) && (
-          <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 text-xs mt-1">
-            {personalInfo.website && (
-              <div className="flex items-center gap-1">
-                <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
-              </div>
-            )}
-            {personalInfo.linkedin && (
-              <div className="flex items-center gap-1">
-                <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
-              </div>
-            )}
-            {personalInfo.github && (
-              <div className="flex items-center gap-1">
-                <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
-              </div>
-            )}
-          </div>
-        )} */}
+        <ResumeContactLine
+          personalInfo={personalInfo}
+          separator="|"
+          className={`text-xs ${isExecutive || isEditorial || isModernExecutive ? 'justify-start' : 'justify-center'}`}
+        />
       </div>
 
       {/* Main Content - Single Column */}
@@ -246,7 +197,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                   {projects.map((project) => (
                     <div key={project.id}>
                       <div className="flex justify-between items-start mb-1">
-                        <h4 className="text-xs font-bold">{project.title}</h4>
+                        <ResumeProjectTitle project={project} className="text-xs font-bold" />
                         {(project.startDate || project.endDate) && (
                           <span
                             className="text-xs font-medium"

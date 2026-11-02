@@ -34,13 +34,16 @@ import {
   DEFAULT_COLORS,
   DEFAULT_PAGE_PADDING,
   DEFAULT_LINE_SPACING,
+  DEFAULT_TITLE_SPACING,
+  MIN_TITLE_SPACING,
+  MAX_TITLE_SPACING,
   DEFAULT_SECTIONS,
   DEFAULT_FONT_SIZE,
 } from "@/components/falood/resumify/types/resume";
 
 export type ResumePresentation = Pick<
   ResumeData,
-  "template" | "colors" | "fontSize" | "fontFamily" | "pageFormat" | "pagePadding" | "lineSpacing" | "sections"
+  "template" | "colors" | "fontSize" | "fontFamily" | "pageFormat" | "pagePadding" | "lineSpacing" | "titleSpacing" | "sections"
 >;
 
 /** The exact keys that make up a presentation, so callers never restate them. */
@@ -52,6 +55,7 @@ export const RESUME_PRESENTATION_KEYS = [
   "pageFormat",
   "pagePadding",
   "lineSpacing",
+  "titleSpacing",
   "sections",
 ] as const satisfies readonly (keyof ResumePresentation)[];
 
@@ -104,6 +108,13 @@ function readLineSpacing(value: unknown): number {
   return DEFAULT_LINE_SPACING;
 }
 
+function readTitleSpacing(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.min(MAX_TITLE_SPACING, Math.max(MIN_TITLE_SPACING, value));
+  }
+  return DEFAULT_TITLE_SPACING;
+}
+
 function readColors(value: unknown): ResumeColors {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...DEFAULT_COLORS };
   const raw = value as Record<string, unknown>;
@@ -153,6 +164,7 @@ export function readResumePresentation(content: unknown): ResumePresentation {
       ? raw.pagePadding
       : DEFAULT_PAGE_PADDING,
     lineSpacing: readLineSpacing(raw.lineSpacing),
+    titleSpacing: readTitleSpacing(raw.titleSpacing),
     sections: readSections(raw.sections),
   };
 }

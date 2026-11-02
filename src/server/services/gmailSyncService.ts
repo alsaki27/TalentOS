@@ -233,52 +233,96 @@ async function storeRawMessage(
     }
   }
 
-  if (row && msg.direction === "outbound") {
-    // An outbound reply in this thread clears "needs_reply" on any prior
-    // unanswered inbound message in the same thread.
-    await execute(
-      `UPDATE email_communications SET needs_reply = false, replied_at = $1, workflow_state = 'resolved', escalation_level = 0
-       WHERE gmail_thread_id = $2 AND direction = 'inbound' AND needs_reply = true AND replied_at IS NULL`,
-      [msg.sentAt, msg.threadId]
-    );
+  if (row && (msg.direction === "outbound" || msg.direction === "inbound")) {
+    const isCandidateMailboxForward = msg.direction === "inbound"
+      ? Boolean((await queryOne<{ matches: boolean }>(
+        `SELECT lower(COALESCE(NULLIF(substring($2::text FROM '<([^>]+)>'), ''), btrim($2::text))) = lower(c.email) AS matches
+           FROM candidates c WHERE c.id = $1`,
+        [candidateId, msg.from],
+      ))?.matches)
+      : false;
 
-    // A qualifying outbound message is the machine-verifiable resolution for
-    // invitation/reply tasks. Manual takeover remains available for cases
-    // where the AE handled the conversation outside Gmail.
-    await execute(
-      `UPDATE action_items ai
-       SET status = 'done', resolved_at = COALESCE(resolved_at, now()),
-           resolution_kind = 'outbound_thread_reply',
-           resolved_by_email_communication_id = $1
-       WHERE ai.status IN ('open', 'in_progress')
-         AND ai.resolution_rule = 'manual_or_thread_reply'
-         AND EXISTS (
-           SELECT 1 FROM email_communications inbound
-           WHERE inbound.id = ai.email_communication_id
-             AND inbound.gmail_thread_id = $2
-             AND inbound.direction = 'inbound'
-         )`,
-      [row.id, msg.threadId]
-    );
+    // The shared mailbox is an observation mailbox. Replies sent from a
+    // candidate's own mailbox arrive as forwarded inbound messages, so they
+    // resolve requests just like outbound messages in the Gmail thread.
+    if (msg.direction === "outbound" || isCandidateMailboxForward) {
+      await execute(
+        `UPDATE email_communications inbound
+            SET needs_reply = false,
+                replied_at = public.email_detected_team_reply_at(inbound.id),
+                manual_replied_at = NULL,
+                response_due_at = NULL,
+                workflow_state = 'resolved',
+                escalation_level = 0
+          WHERE inbound.candidate_id = $1
+            AND inbound.direction = 'inbound'
+            AND inbound.sent_at >= now() - interval '15 days'
+            AND ((inbound.needs_reply = true AND inbound.replied_at IS NULL)
+                 OR inbound.manual_replied_at IS NOT NULL)
+            AND public.email_detected_team_reply_at(inbound.id) IS NOT NULL
+            AND public.email_detected_team_reply_at(inbound.id) <= $2::timestamptz`,
+        [candidateId, msg.sentAt],
+      );
+
+      await execute(
+        `UPDATE action_items ai
+            SET status = 'done', resolved_at = COALESCE(ai.resolved_at, now()),
+                resolution_kind = CASE WHEN reply.direction = 'inbound' THEN 'forwarded_candidate_reply' ELSE 'outbound_thread_reply' END,
+                resolved_by_email_communication_id = reply.id
+           FROM email_communications inbound
+           JOIN LATERAL (
+             SELECT response.id, response.direction
+               FROM email_communications response
+              WHERE response.candidate_id = inbound.candidate_id
+                AND response.sent_at = public.email_detected_team_reply_at(inbound.id)
+              ORDER BY response.id LIMIT 1
+           ) reply ON true
+          WHERE ai.email_communication_id = inbound.id
+            AND ai.type = 'needs_reply'
+            AND ai.status IN ('open', 'in_progress')
+            AND ai.resolution_rule = 'manual_or_thread_reply'
+            AND inbound.sent_at >= now() - interval '15 days'
+            AND inbound.candidate_id = $1`,
+        [candidateId],
+      );
+
+      await execute(
+        `UPDATE notifications n
+            SET type = CASE WHEN n.type IN ('email_reply_waiting', 'email_reply_overdue') THEN 'email_reply_detected' ELSE n.type END,
+                title = CASE WHEN n.type = 'important_email' THEN 'Team replied to candidate email'
+                             ELSE regexp_replace(n.title, '^Reply (waiting|overdue) · ', 'Team replied · ') END,
+                body = CASE WHEN reply.direction = 'inbound'
+                            THEN 'A reply from the candidate mailbox was forwarded to TalentOS. The reply reminder is complete.'
+                            ELSE 'A later sent email was detected in this Gmail thread. The reply reminder is complete.' END,
+                link = '/inbox/reminders?scope=replied&emailId=' || inbound.id::text || '&candidateId=' || inbound.candidate_id::text,
+                read_at = COALESCE(n.read_at, now())
+           FROM email_communications inbound
+           JOIN LATERAL (
+             SELECT response.id, response.direction
+               FROM email_communications response
+              WHERE response.candidate_id = inbound.candidate_id
+                AND response.sent_at = public.email_detected_team_reply_at(inbound.id)
+              ORDER BY response.id LIMIT 1
+           ) reply ON true
+          WHERE n.entity_type = 'email_communication'
+            AND n.entity_id = inbound.id
+            AND n.type IN ('important_email', 'email_reply_waiting', 'email_reply_overdue')
+            AND inbound.sent_at >= now() - interval '15 days'
+            AND inbound.candidate_id = $1`,
+        [candidateId],
+      );
+    }
   }
-
   return row?.id ?? null;
 }
 
-// Exported for src/test/services/gmailSyncService.triageStoredMessage.test.ts,
-// which asserts the status_change_approval proposal insert always uses
-// resolution_rule='manual_only' - the easiest bug to introduce here, since a
-// 'manual_or_thread_reply' proposal would be silently auto-closed by
-// storeRawMessage's thread-reply sweep the moment anyone replied in-thread.
-//
-// policyOverride lets tests and the retriage service (Chunk H) inject the
-// email_triage approval policy deterministically instead of hitting the DB
-// (and the 60s module-scope cache) on every call.
+// Exported for focused triage tests. policyOverride lets tests and retriage
+// callers inject the email-triage status policy without reading it from DB.
 export async function triageStoredMessage(id: string, accessToken: string, policyOverride?: EmailTriagePolicy) {
   const row = await queryOne<{
-    id: string; candidate_id: string | null; subject: string | null; snippet: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
+    id: string; candidate_id: string | null; subject: string | null; snippet: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string; gmail_thread_id: string; sent_at: string;
   }>(
-    "SELECT id, candidate_id, subject, snippet, body_text, from_email, direction, gmail_message_id FROM email_communications WHERE id = $1",
+    "SELECT id, candidate_id, subject, snippet, body_text, from_email, direction, gmail_message_id, gmail_thread_id, sent_at FROM email_communications WHERE id = $1",
     [id]
   );
   if (!row || row.direction !== "inbound") {
@@ -315,7 +359,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     // false) so the row gets stored, then lands here. suppress is a
     // defensive fallback for any future caller of triageStoredMessage that
     // skips that gate. Either way: same zero-AI-cost outcome as a
-    // pre-storage drop, but recoverable via the "Show hidden mail" toggle
+    // pre-storage drop, but the row remains visible in the inbox
     // since the row still exists — and unlike the old prose-only
     // ai_summary, suppression_reason/suppression_rule are the queryable
     // columns the /inbox UI and hidden-mail count already read.
@@ -337,13 +381,12 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   }
 
   const applicationConfirmationSignal = /(application (was )?(received|submitted)|thank you for applying|we received your application|application confirmation|successfully applied)/i.test(subject + "\n" + bodyText);
-  if (applicationConfirmationSignal && (!triage.relevant || !triage.matchedApplicationId)) {
+  if (applicationConfirmationSignal && !["interview_invite", "scheduling", "offer", "recruiter_reply"].includes(triage.category)) {
     triage.relevant = true;
     triage.category = "application_confirmation";
-    triage.needsReply = false;
     triage.summary = triage.matchedApplicationId
-      ? "Application confirmation detected."
-      : "Application confirmation detected, but no matching TalentOS application was found.";
+      ? (triage.needsReply ? "Application confirmation detected; sender requests a reply." : "Application confirmation detected; no reply requested.")
+      : (triage.needsReply ? "Application confirmation requests a reply, but no matching TalentOS application was found." : "Application confirmation detected, but no matching TalentOS application was found.");
     triage.confidence = Math.max(triage.confidence, 0.9);
   }
 
@@ -353,16 +396,28 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   // heuristic, applied on top of the model's own needsReply judgment.
   const needsReply = triage.needsReply && !verdict.forceNeedsReplyFalse;
 
+  // Gmail history/backfill can store a later sent message before an older
+  // inbound message reaches AI triage. Reconcile in chronological order so a
+  // reply is detected even when ingestion order differs from sent order.
+  let repliedAt: string | null = null;
+  if (needsReply) {
+    const detectedReply = await queryOne<{ sent_at: string | null }>(
+      `SELECT public.email_detected_team_reply_at($1::uuid) AS sent_at`, [row.id],
+    );
+    repliedAt = detectedReply?.sent_at || null;
+  }
+  const stillNeedsReply = needsReply && !repliedAt;
+
   await execute(
     `UPDATE email_communications SET
        ai_relevant = $1::boolean, ai_category = $2::text, ai_confidence = $3::numeric, ai_summary = $4::text,
-       ai_matched_application_id = $5::uuid, needs_reply = $6::boolean,
-       response_due_at = CASE WHEN $6 THEN now() + CASE $2 WHEN 'interview_invite' THEN interval '12 hours' WHEN 'scheduling' THEN interval '12 hours' WHEN 'offer' THEN interval '8 hours' WHEN 'recruiter_reply' THEN interval '24 hours' ELSE interval '48 hours' END ELSE NULL END,
-       workflow_state = CASE WHEN $6 THEN 'needs_action' WHEN NOT $1 THEN 'suppressed' ELSE 'observed' END,
+       ai_matched_application_id = $5::uuid, needs_reply = $6::boolean, replied_at = $8::timestamptz,
+       response_due_at = CASE WHEN $6 THEN $9::timestamptz + interval '24 hours' ELSE NULL END,
+       workflow_state = CASE WHEN $6 THEN 'needs_action' WHEN NOT $1 THEN 'suppressed' WHEN $8::timestamptz IS NOT NULL THEN 'resolved' ELSE 'observed' END,
        ai_evidence = jsonb_build_object('category', $2, 'confidence', $3, 'summary', $4, 'matched_application_id', $5),
        triaged_at = now()
        WHERE id = $7::uuid`,
-    [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
+    [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, stillNeedsReply, id, repliedAt, row.sent_at]
   );
 
   if (!triage.relevant) return;
@@ -456,20 +511,20 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
         [row.candidate_id, triage.matchedApplicationId, id, details.scheduledAt ? "Interview detected — confirm attendance" : "Interview email detected — review details", details.scheduledAt || "Interview logistics need AE review.", `email:${id}:interview`]
       );
-      await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + interval '24 hours') WHERE email_communication_id = $1 AND status = 'open'", [id]);
+      await execute("UPDATE action_items SET due_at = COALESCE(due_at, $2::timestamptz + interval '24 hours') WHERE email_communication_id = $1 AND status = 'open'", [id, row.sent_at]);
     } catch (interviewError) {
       console.warn("[Gmail sync] Interview extraction failed:", interviewError);
     }
   }
 
-  if (triage.category === "application_confirmation" && !triage.matchedApplicationId && verdict.senderClass === "human" && taskAllowedByRule) {
+  if (triage.category === "application_confirmation" && stillNeedsReply && !triage.matchedApplicationId && verdict.senderClass === "human" && taskAllowedByRule) {
     await execute(
       `INSERT INTO action_items (candidate_id, email_communication_id, type, title, description, suggested_action, priority, status, resolution_rule, dedupe_key)
        VALUES ($1, $2, 'untracked_application', 'Application found outside TalentOS', $3, 'AE: confirm company and role, then add the application manually.', 'high', 'open', 'manual_only', $4)
        ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
       [row.candidate_id, id, triage.summary, `email:${id}:untracked-application`]
     );
-    await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + interval '48 hours') WHERE email_communication_id = $1 AND type = 'untracked_application'", [id]);
+    await execute("UPDATE action_items SET due_at = COALESCE(due_at, $2::timestamptz + interval '24 hours') WHERE email_communication_id = $1 AND type = 'untracked_application'", [id, row.sent_at]);
     return;
   }
 
@@ -491,20 +546,12 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     // auto-write and human-approval paths from creating a no-op status task.
     stageTarget: stageChangeRequired ? stageTarget : null,
   });
-  const canAutoWrite = decision.action === "auto_write" && (!senderRule || senderRule.can_change_stage);
-
-  // A plausible status-change signal that isn't confident/eligible enough to
-  // auto-write yet becomes a proposal for AE review, instead of silently
-  // doing nothing or falling into the generic needs_reply bucket below.
-  // MUST be resolution_rule='manual_only': storeRawMessage auto-closes any
-  // open item with resolution_rule='manual_or_thread_reply' whose source
-  // email shares a thread with a later outbound message, which would
-  // silently discard a pending decision the moment anyone replied in the
-  // thread - a proposal must never be closeable that way.
-  let proposalCreated = false;
-  if (decision.action === "propose") {
+  const proposalRequested = decision.action === "propose";
+  if (proposalRequested) {
+    // Keep uncertain stage changes in the human approval queue. A reply in
+    // the email thread must never auto-close this manual-only decision.
     const priority = triage.category === "offer" ? "urgent" : (triage.category === "interview_invite" || triage.category === "rejection") ? "high" : "normal";
-    const { rowCount } = await execute(
+    await execute(
       `INSERT INTO action_items
          (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
           resolution_rule, dedupe_key, proposed_status, proposed_from_status, ai_confidence, proposal_source,
@@ -519,8 +566,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
         stageTarget, proposedFromStatus, triage.confidence, policy.policy,
       ],
     );
-    proposalCreated = rowCount > 0;
   }
+  const canAutoWrite = decision.action === "auto_write" && (!senderRule || senderRule.can_change_stage);
 
   if (canAutoWrite) {
     const result = await changeApplicationStatus({
@@ -534,22 +581,11 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
       confidence: triage.confidence,
     });
     if (result.changed) {
-      await execute(
-        `INSERT INTO action_items
-           (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
-            resolution_rule, resolution_kind, dedupe_key,
-            decision, decided_at, proposed_status, ai_confidence)
-         VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'done',
-                 'informational', 'informational', $6,
-                 'auto_approved', now(), $7, $8)
-         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-        [row.candidate_id, triage.matchedApplicationId, id, `Email moved application to "${stageTarget}" (FYI)`, triage.summary, `email:${id}:status-update`, stageTarget, triage.confidence],
-      );
       return;
     }
   }
 
-  if (proposalCreated || !taskAllowedByRule) return;
+  if (proposalRequested || !taskAllowedByRule || !stillNeedsReply) return;
 
   // A sender that structurally can't receive a reply, or a job-board
   // "application invite" alert (the exact shape behind the historical
@@ -561,8 +597,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   // otherwise a no-reply/job-board sender would still generate a
   // "needs_reply / high priority" action item even though the stored
   // column says false, leaving the actual dashboard backlog undefused.
-  const type = needsReply ? "needs_reply" : "status_change_review";
-  const priority = triage.category === "offer" ? "urgent" : needsReply ? "high" : "normal";
+  const type = "needs_reply";
+  const priority = triage.category === "offer" ? "urgent" : "high";
   await execute(
     `INSERT INTO action_items
        (candidate_id, application_id, email_communication_id, type, title, description, suggested_action, priority, status,
@@ -574,20 +610,25 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
       triage.matchedApplicationId,
       id,
       type,
-      needsReply ? "Candidate email needs a reply" : `Review: ${triage.category.replace("_", " ")}`,
+      "Candidate email needs a reply",
       triage.summary,
       triage.suggestedStatus ? `Consider updating application status to "${triage.suggestedStatus}"` : null,
       priority,
       `email:${id}:action`,
     ]
   );
-  await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + CASE WHEN priority = 'high' THEN interval '48 hours' ELSE interval '72 hours' END) WHERE email_communication_id = $1 AND status = 'open'", [id]);
+  await execute("UPDATE action_items SET due_at = COALESCE(due_at, $2::timestamptz + interval '24 hours') WHERE email_communication_id = $1 AND status = 'open'", [id, row.sent_at]);
 }
 
 async function escalateOverdueActionItems() {
   const overdue = await query<{ id: string; candidate_id: string; application_id: string | null; priority: string }>(
     `SELECT id, candidate_id, application_id, priority FROM action_items
      WHERE status IN ('open', 'in_progress') AND due_at IS NOT NULL AND due_at < now()
+       AND (email_communication_id IS NULL OR EXISTS (
+         SELECT 1 FROM email_communications mail
+          WHERE mail.id = action_items.email_communication_id
+            AND mail.sent_at >= now() - interval '7 days'
+       ))
        AND escalated_at IS NULL`
   );
   for (const item of overdue) {
@@ -599,6 +640,10 @@ async function escalateOverdueActionItems() {
        FROM email_communications
       WHERE needs_reply = true AND replied_at IS NULL
         AND response_due_at IS NOT NULL AND response_due_at < now()
+        AND sent_at >= now() - interval '7 days'
+        AND NOT EXISTS (SELECT 1 FROM email_communications outbound
+          WHERE outbound.gmail_thread_id = email_communications.gmail_thread_id
+            AND outbound.direction = 'outbound' AND outbound.sent_at >= email_communications.sent_at)
         AND escalation_level < 2`
   );
   for (const email of overdueEmails) {
@@ -646,7 +691,11 @@ async function enqueueOverdueFollowUps() {
   const overdue = await query<{ id: string; candidate_id: string }>(
     `SELECT id, candidate_id FROM email_communications
      WHERE needs_reply = true AND replied_at IS NULL
-       AND sent_at < now() - interval '${UNREPLIED_FOLLOWUP_HOURS} hours'`
+       AND sent_at < now() - interval '${UNREPLIED_FOLLOWUP_HOURS} hours'
+       AND sent_at >= now() - interval '7 days'
+       AND NOT EXISTS (SELECT 1 FROM email_communications outbound
+         WHERE outbound.gmail_thread_id = email_communications.gmail_thread_id
+           AND outbound.direction = 'outbound' AND outbound.sent_at >= email_communications.sent_at)`
   );
 
   if (overdue.length === 0) return 0;
@@ -686,7 +735,6 @@ async function cleanKnownNonActionableTasks() {
   const result = await execute(
     `UPDATE action_items ai
         SET status = 'dismissed', resolved_at = COALESCE(resolved_at, now()),
-            decision = COALESCE(decision, 'rejected'),
             decision_note = COALESCE(decision_note, 'Automatically dismissed: non-actionable job-board sender')
       FROM email_communications ec
      WHERE ai.email_communication_id = ec.id

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { Globe, Link2, Code2, Mail, Phone, MapPin } from 'lucide-react';
+import { getResumeTitleSpacingStyle, ResumeContactLine, ResumeProjectLinks, ResumeProjectTitle } from '../ResumeTemplateParts';
 
 interface TemplateProps {
   data: ResumeData;
@@ -26,15 +26,10 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
   const getFontSizePx = () => `${((typeof fontSize === 'number' ? fontSize : 10) * 1.333).toFixed(2)}px`;
   const getHeadingSize = () => (typeof fontSize === 'number' && fontSize > 12) ? 'text-base' : 'text-sm';
 
-  const formatUrl = (url: string | undefined) => {
-    if (!url) return '';
-    return url.startsWith('http') ? url : `https://${url}`;
-  };
-
   return (
     <div 
-      className={`w-full h-full`}
-      style={{ fontSize: getFontSizePx(), color: colors.text,
+      className="resume-template w-full h-full"
+      style={{ ...getResumeTitleSpacingStyle(data.titleSpacing), fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Source Sans Pro, sans-serif',
         lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
@@ -54,44 +49,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
               {personalInfo.jobTitle}
             </h2>
           )}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm opacity-90">
-            {personalInfo.email && (
-              <div className="flex items-center gap-1">
-                <Mail className="w-3 h-3" />
-                <span>{personalInfo.email}</span>
-              </div>
-            )}
-            {personalInfo.phone && (
-              <div className="flex items-center gap-1">
-                <Phone className="w-3 h-3" />
-                <span>{personalInfo.phone}</span>
-              </div>
-            )}
-            {personalInfo.location && (
-              <div className="flex items-center gap-1">
-                <MapPin className="w-3 h-3" />
-                <span>{personalInfo.location}</span>
-              </div>
-            )}
-            {personalInfo.website && (
-              <div className="flex items-center gap-1">
-                <Globe className="w-3 h-3" />
-                <a href={personalInfo.website} className="hover:underline text-white">Portfolio</a>
-              </div>
-            )}
-            {personalInfo.linkedin && (
-              <div className="flex items-center gap-1">
-                <Link2 className="w-3 h-3" />
-                <a href={personalInfo.linkedin} className="hover:underline text-white">LinkedIn</a>
-              </div>
-            )}
-            {personalInfo.github && (
-              <div className="flex items-center gap-1">
-                <Code2 className="w-3 h-3" />
-                <a href={personalInfo.github} className="hover:underline text-white">GitHub</a>
-              </div>
-            )}
-          </div>
+          <ResumeContactLine
+            personalInfo={personalInfo}
+            showIcons
+            className="gap-x-4 text-sm text-white opacity-90"
+          />
         </div>
       </div>
 
@@ -251,7 +213,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <div className="space-y-3">
                     {projects.map((project) => (
                       <div key={project.id} className="page-break-inside-avoid">
-                        <h4 className={` font-bold`}>{project.title}</h4>
+                        <ResumeProjectTitle project={project} className="font-bold" />
                         <p className="text-xs mb-2">{project.description}</p>
                         {project.technologies.length > 0 && (
                           <div className="flex flex-wrap gap-1">
@@ -266,6 +228,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                             ))}
                           </div>
                         )}
+                        <ResumeProjectLinks project={project} className="mt-2 text-xs" />
                       </div>
                     ))}
                   </div>

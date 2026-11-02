@@ -1,14 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import ApprovalsPanel from "./components/ApprovalsPanel";
 import { GmailConnectionHeader } from "./components/GmailConnectionHeader";
 import { UnassignedPanel } from "./components/UnassignedPanel";
 import { PriorityBadge } from "./components/PriorityBadge";
 import EmailActionModal from "./components/EmailActionModal";
 
 type Direction = "inbox" | "sent" | "all";
-type PageTab = "inbox" | "approvals" | "unassigned" | "handovers";
+type PageTab = "inbox" | "unassigned" | "handovers";
 
 interface MailThread {
   id: string;
@@ -29,6 +28,11 @@ interface MailThread {
   ai_matched_application_id: string | null;
   needs_reply: boolean;
   replied_at: string | null;
+  manual_replied_at?: string | null;
+  detected_replied_at?: string | null;
+  effective_replied_at?: string | null;
+  forwarded_candidate_reply?: boolean;
+  response_due_at?: string | null;
   gmail_is_unread: boolean;
   gmail_is_important: boolean;
   attachment_metadata: { filename?: string; mimeType?: string; size?: number }[];
@@ -60,6 +64,17 @@ function categoryLabel(category: string | null) {
   return (category || "untriaged").replaceAll("_", " ");
 }
 
+function threadCardAppearance(thread: MailThread) {
+  const ageMs = Date.now() - new Date(thread.sent_at).getTime();
+  const awaitingReply = thread.needs_reply && !thread.effective_replied_at && !thread.detected_replied_at;
+  if (awaitingReply && ageMs >= 24 * 3_600_000 && ageMs <= 168 * 3_600_000) {
+    return { background: "#30181b", border: "1px solid #dc2626" };
+  }
+  if (thread.effective_replied_at || thread.detected_replied_at) return { background: "#12231a", border: "1px solid #166534" };
+  if (awaitingReply) return { background: "#1a1930", border: "1px solid #7c3aed" };
+  return { background: "var(--bg)", border: "1px solid var(--border)" };
+}
+
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<PageTab>("inbox");
   const [counts, setCounts] = useState<InboxCounts | null>(null);
@@ -73,8 +88,8 @@ export default function InboxPage() {
   const [candidatesLoading, setCandidatesLoading] = useState(true);
   const [candidatesRetryKey, setCandidatesRetryKey] = useState(0);
   const [category, setCategory] = useState("");
-  const [needsReply, setNeedsReply] = useState(false);
-  const [showHidden, setShowHidden] = useState(false);
+  const [needsReply, setNeedsReply] = useState(true);
+  const [replyStatus, setReplyStatus] = useState("all");
   const [threads, setThreads] = useState<MailThread[]>([]);
   const [total, setTotal] = useState(0);
   const [categoryCounts, setCategoryCounts] = useState<{ category: string | null; count: number }[]>([]);
@@ -108,7 +123,7 @@ export default function InboxPage() {
     if (candidateId) params.set("candidateId", candidateId);
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
-    if (!showHidden) params.set("relevant", "true");
+    if (replyStatus !== "all") params.set("replyStatus", replyStatus);
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       const data = await response.json();
@@ -123,7 +138,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, search, candidateId, category, needsReply, showHidden, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, replyStatus, activeTab]);
 
   const loadHandoversData = useCallback(async () => {
     if (activeTab !== "handovers") return;
@@ -147,7 +162,7 @@ export default function InboxPage() {
     if (candidateId) params.set("candidateId", candidateId);
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
-    if (!showHidden) params.set("relevant", "true");
+    if (replyStatus !== "all") params.set("replyStatus", replyStatus);
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) return;
@@ -164,7 +179,7 @@ export default function InboxPage() {
       if (Array.isArray(data.categoryCounts)) setCategoryCounts(data.categoryCounts);
       setTotalPages(Number(data.totalPages || 1));
     } catch {}
-  }, [direction, search, candidateId, category, needsReply, showHidden, page, loading, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, replyStatus, page, loading, activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +222,38 @@ export default function InboxPage() {
   }, [loadThreads]);
 
   useEffect(() => { loadHandoversData(); }, [loadHandoversData]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const emailId = url.searchParams.get("emailId");
+    const linkedCandidateId = url.searchParams.get("candidateId");
+    if (linkedCandidateId) setCandidateId(linkedCandidateId);
+    if (!emailId) return;
+    let cancelled = false;
+    void fetch(`/api/gmail-communications/${encodeURIComponent(emailId)}`, { cache: "no-store" }).then(async (res) => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Could not open the linked email.");
+      if (cancelled || !data.message) return;
+      const message = data.message;
+      setActiveTab("inbox");
+      setSelectedThread({
+        ...message,
+        candidate_name: message.candidate_name || "Unassigned",
+        gmail_is_unread: Boolean(message.gmail_is_unread),
+        gmail_is_important: Boolean(message.gmail_is_important),
+        attachment_metadata: message.attachment_metadata || [],
+        suppression_reason: null,
+        suppression_rule: null,
+        open_task_count: (data.actionItems || []).filter((item: any) => ["open", "in_progress"].includes(item.status)).length,
+        message_count: Array.isArray(data.thread) ? data.thread.length : 1,
+      });
+      const cleanQuery = linkedCandidateId ? `?candidateId=${encodeURIComponent(linkedCandidateId)}` : "";
+      window.history.replaceState({}, "", `${url.pathname}${cleanQuery}`);
+    }).catch((cause) => {
+      if (!cancelled) { setMessage(cause instanceof Error ? cause.message : "Could not open the linked email."); setMessageKind("error"); }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -255,6 +302,52 @@ export default function InboxPage() {
       setMessage(error instanceof Error ? error.message : "Gmail sync failed.");
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function markThreadReplied(thread: MailThread) {
+    try {
+      const response = await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "mark_replied" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not mark this conversation replied.");
+      const leavesDefault = direction === "inbox" && needsReply;
+      if (leavesDefault) {
+        setThreads((previous) => previous.filter((item) => item.id !== thread.id));
+        setTotal((previous) => Math.max(0, previous - 1));
+      } else {
+        setThreads((previous) => previous.map((item) => item.id === thread.id ? { ...item, needs_reply: false, manual_replied_at: new Date().toISOString(), effective_replied_at: new Date().toISOString() } : item));
+      }
+      setSelectedThread((current) => current?.id === thread.id ? { ...current, needs_reply: false, manual_replied_at: new Date().toISOString(), effective_replied_at: new Date().toISOString() } : current);
+      if (leavesDefault) void loadThreads(page);
+      void loadCounts();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "Could not mark this conversation replied.");
+      setMessageKind("error");
+    }
+  }
+
+  async function markThreadNoReplyNeeded(thread: MailThread) {
+    try {
+      const response = await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "no_reply_needed" }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not mark this email as no reply needed.");
+      const disappearsFromDefault = direction === "inbox" && needsReply;
+      if (disappearsFromDefault) {
+        setThreads((previous) => previous.filter((item) => item.id !== thread.id));
+        setTotal((previous) => Math.max(0, previous - 1));
+        void loadThreads(page);
+      } else {
+        setThreads((previous) => previous.map((item) => item.id === thread.id ? { ...item, needs_reply: false } : item));
+      }
+      setSelectedThread((current) => current?.id === thread.id ? { ...current, needs_reply: false } : current);
+      void loadCounts();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "Could not mark this email as no reply needed.");
+      setMessageKind("error");
     }
   }
 
@@ -329,57 +422,24 @@ export default function InboxPage() {
   }
 
   return (
-    <div className="page inbox-page" style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 20px 48px" }}>
-      <div style={{ marginBottom: 20 }}>
+    <div className="page inbox-page" style={{ maxWidth: "100%", margin: "0 auto", padding: "20px 20px 40px" }}>
+      <div style={{ marginBottom: 14 }}>
         <div style={{ color: "var(--accent)", fontSize: 12, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase" }}>Communication intelligence</div>
         <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
         <p className="page-kicker" style={{ margin: 0 }}>One shared Gmail inbox, automatically matched to each candidate, with AI findings, application matches, and AE follow-up in one place.</p>
       </div>
 
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 12 }}>
         <GmailConnectionHeader />
       </div>
 
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch", marginBottom: 28 }}>
-        <div style={{ flex: 1, minWidth: 320, background: "var(--surface-2, #1a1a2e)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Filter inbox & handovers</div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>Show mail and handovers for a specific candidate.</div>
-          <select
-            style={{ width: "100%", background: "var(--bg, #111)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 13 }}
-            value={candidateId}
-            onChange={(e) => setCandidateId(e.target.value)}
-          >
-            <option value="">All candidates</option>
-            {[...candidates].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {candidatesLoading && candidates.length === 0 && (
-            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Loading candidates…</div>
-          )}
-          {candidatesError && (
-            <div style={{ fontSize: 12, color: "var(--danger, #dc2626)", marginTop: 4, display: "flex", gap: 8, alignItems: "center" }}>
-              Couldn't load candidates.
-              <button className="btn text sm" onClick={() => setCandidatesRetryKey((k) => k + 1)}>Retry</button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 24, borderBottom: "1px solid var(--border)", marginBottom: 24, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 24, borderBottom: "1px solid var(--border)", marginBottom: 14, flexWrap: "wrap" }}>
         <button
           className={`btn text ${activeTab === "inbox" ? "active" : ""}`}
           style={{ borderBottom: activeTab === "inbox" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
           onClick={() => setActiveTab("inbox")}
         >
-          Inbox {counts?.mail.relevant ? `(${counts.mail.relevant})` : ""}
-        </button>
-        <button
-          className={`btn text ${activeTab === "approvals" ? "active" : ""}`}
-          style={{ borderBottom: activeTab === "approvals" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
-          onClick={() => setActiveTab("approvals")}
-        >
-          Approvals {counts?.approvals.pending ? `(${counts.approvals.pending})` : ""}
+          Inbox {counts?.mail.total ? `(${counts.mail.total})` : ""}
         </button>
         <button
           className={`btn text ${activeTab === "unassigned" ? "active" : ""}`}
@@ -402,12 +462,16 @@ export default function InboxPage() {
       {/* INBOX TAB */}
       {activeTab === "inbox" && (
         <>
-          <div style={{ padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2, #1a1a2e)", borderRadius: 10, border: "1px solid var(--border)" }}>
+          <div className="inbox-filter-box" style={{ padding: "8px 10px", marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2, #1a1a2e)", borderRadius: 10, border: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 2, background: "var(--bg, #111)", borderRadius: 7, padding: 3, border: "1px solid var(--border)" }}>
               {(["inbox", "sent", "all"] as Direction[]).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => setDirection(tab)}
+                  onClick={() => {
+                    setDirection(tab);
+                    if (tab === "inbox") { setNeedsReply(true); setReplyStatus("all"); }
+                    else { setNeedsReply(false); setReplyStatus("all"); }
+                  }}
                   style={{
                     padding: "5px 14px",
                     borderRadius: 5,
@@ -420,7 +484,7 @@ export default function InboxPage() {
                     color: direction === tab ? "#fff" : "var(--muted)",
                   }}
                 >
-                  {tab === "inbox" ? "Inbox" : tab === "sent" ? "Sent" : "All mail"}
+                  {tab === "inbox" ? "Inbox" : tab === "sent" ? "Sent / forwarded" : "All mail"}
                 </button>
               ))}
             </div>
@@ -441,12 +505,39 @@ export default function InboxPage() {
               {syncing ? "Syncing…" : "↻ Sync Gmail"}
             </button>
             <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, body, or Thread ID…" style={{ flex: 1, minWidth: 240 }} />
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }}>
-              <input type="checkbox" checked={needsReply} onChange={(event) => setNeedsReply(event.target.checked)} /> Needs reply
-            </label>
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }} title="Include mail filtered out by the AI">
-              <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Show hidden
-            </label>
+            <select className="input" value={replyStatus} onChange={(event) => { setReplyStatus(event.target.value); if (event.target.value !== "all") setNeedsReply(false); }} aria-label="Filter by reply status" style={{ minWidth: 190 }}>
+              <option value="all">All reply states</option>
+              <option value="needs-reply">Needs reply</option>
+              <option value="waiting-12h">Waiting · 12+ hours</option>
+              <option value="overdue-24h">Overdue · 24+ hours</option>
+              <option value="replied">Team replied</option>
+              <option value="no-reply-needed">No reply needed</option>
+            </select>
+            <select
+              className="input"
+              value={candidateId}
+              onChange={(event) => setCandidateId(event.target.value)}
+              aria-label="Filter inbox and handovers by candidate"
+              title="Filter inbox and handovers by candidate"
+              style={{ minWidth: 210 }}
+            >
+              <option value="">All candidates</option>
+              {[...candidates].sort((a, b) => a.name.localeCompare(b.name)).map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+              ))}
+            </select>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", width: "100%" }}>
+              <label className="filter-bar-check inbox-needs-reply-check">
+                <input type="checkbox" checked={needsReply} onChange={(event) => { setNeedsReply(event.target.checked); if (event.target.checked) setReplyStatus("all"); }} />
+                <span><strong>Needs reply</strong><small>Only unanswered candidate mail</small></span>
+              </label>
+              {candidatesLoading && candidates.length === 0 && <span style={{ fontSize: 12, color: "var(--muted)", alignSelf: "center" }}>Loading candidates…</span>}
+              {candidatesError && <span style={{ fontSize: 12, color: "var(--danger, #dc2626)", display: "inline-flex", gap: 6, alignItems: "center", alignSelf: "center" }}>Couldn&apos;t load candidates.<button className="btn text sm" onClick={() => setCandidatesRetryKey((key) => key + 1)}>Retry</button></span>}
+            </div>
+          </div>
+
+          <div style={{ fontSize: 12, color: "var(--muted)", margin: "-5px 2px 14px" }}>
+            AI-hidden mail stays visible in matching results. Forwarded candidate replies appear under Sent / forwarded.
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
@@ -490,7 +581,7 @@ export default function InboxPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div style={{ padding: "0 4px", display: "flex", justifyContent: "space-between", fontSize: 13, color: "var(--muted)" }}>
               <span>{total.toLocaleString()} conversations</span>
-              <span>{showHidden ? "Showing hidden mail too." : "Hidden mail is not shown."}</span>
+              <span>AI-hidden mail stays included · replied and no-reply-needed threads leave the default reply queue.</span>
             </div>
             {loading ? (
               <div style={{ padding: 40, textAlign: "center" }} className="text-muted">Loading mailbox…</div>
@@ -499,7 +590,7 @@ export default function InboxPage() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {threads.map((thread) => (
-                  <div key={thread.id} onClick={() => setSelectedThread(thread)} style={{ width: "100%", textAlign: "left", padding: "16px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", transition: "all 0.2s" }} className="hover:border-[var(--accent)] hover:shadow-sm">
+                  <div key={thread.id} onClick={() => setSelectedThread(thread)} style={{ width: "100%", textAlign: "left", padding: "14px", ...threadCardAppearance(thread), borderRadius: 8, cursor: "pointer", transition: "all 0.2s" }} className="hover:border-[var(--accent)] hover:shadow-sm">
                     <div className="inbox-thread-row" style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
                       <input
                         type="checkbox"
@@ -519,26 +610,30 @@ export default function InboxPage() {
                             loadCounts();
                           } catch {}
                         }}
-                        title={thread.suppression_reason || thread.ai_relevant === false ? "Hidden — click to show" : "Shown — click to hide"}
+                        aria-label={`AI relevance: ${thread.suppression_reason || thread.ai_relevant === false ? "marked hidden" : "marked relevant"}. Click to change.`}
+                        title={`AI relevance: ${thread.suppression_reason || thread.ai_relevant === false ? "marked hidden" : "marked relevant"} · click to change`}
                         style={{ marginTop: 4, width: 16, height: 16, flexShrink: 0, cursor: "pointer" }}
                       />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                           {thread.gmail_is_unread && <span style={{ width: 8, height: 8, borderRadius: 99, background: "var(--accent)" }} />}
                           <strong style={{ fontSize: 15 }}>{thread.candidate_name}</strong>
-                          <span style={{ fontSize: 13, color: "var(--muted)" }}>{thread.direction === "outbound" ? "Sent" : thread.from_email || "Unknown sender"}</span>
+                          <span style={{ fontSize: 13, color: "var(--muted)" }}>{thread.forwarded_candidate_reply ? "Candidate sent · forwarded" : thread.direction === "outbound" ? "Shared mailbox sent" : thread.from_email || "Unknown sender"}</span>
                           {thread.message_count > 1 && <span className="badge" style={{ background: "var(--bg-inset)" }}>{thread.message_count} msgs</span>}
                         </div>
                         <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{thread.subject || "(no subject)"}</div>
                         <div style={{ fontSize: 13, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{thread.snippet || thread.ai_summary || "No preview available."}</div>
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
                           {thread.ai_category && <span className="badge">{categoryLabel(thread.ai_category)}</span>}
-                          {thread.needs_reply && <PriorityBadge level="high" label="Needs Reply" />}
+                          {thread.forwarded_candidate_reply ? <span className="badge" style={{ background: "#14532d", color: "#bbf7d0", border: "1px solid #16a34a" }}>Forwarded team reply</span> : thread.needs_reply && !thread.effective_replied_at && !thread.detected_replied_at ? (() => {
+                            const age = (Date.now() - new Date(thread.sent_at).getTime()) / 3_600_000;
+                            return age >= 24 && age <= 168 ? <PriorityBadge level="urgent" label="Overdue · 24h+" /> : age > 168 ? <PriorityBadge level="normal" label="Needs reply · older" /> : <span className="badge" style={{ background: age >= 12 ? "#172554" : "#2e1065", color: age >= 12 ? "#bfdbfe" : "#ddd6fe", border: `1px solid ${age >= 12 ? "#2563eb" : "#7c3aed"}` }}>{age >= 12 ? "Waiting · 12h+" : "Needs reply"}</span>;
+                          })() : (thread.effective_replied_at || thread.detected_replied_at) ? <span className="badge" style={{ background: "#dcfce7", color: "#15803d", border: "1px solid #86efac" }}>{thread.manual_replied_at ? "Marked replied" : "Team replied"} · {formatDate(thread.effective_replied_at || thread.detected_replied_at)}</span> : thread.direction === "inbound" ? <span className="badge" style={{ background: "#1e293b", color: "#cbd5e1", border: "1px solid #475569" }}>No reply needed</span> : null}
                           {thread.open_task_count > 0 && <span className="badge">{thread.open_task_count} open tasks</span>}
-                          {thread.suppression_reason && <span className="badge">Hidden by filters</span>}
+                          {(thread.suppression_reason || thread.ai_relevant === false) && <span className="badge" style={{ background: "#292331", color: "#d8b4fe", border: "1px solid #6b21a8" }}>AI marked hidden</span>}
                         </div>
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                      <div className="inbox-thread-actions" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
                         <time className="inbox-thread-time" style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{formatDate(thread.sent_at)}</time>
                         <button
                           type="button"
@@ -548,6 +643,10 @@ export default function InboxPage() {
                         >
                           Show details
                         </button>
+                        {thread.needs_reply && !thread.effective_replied_at && !thread.detected_replied_at && <>
+                          <button type="button" className="btn-primary sm" onClick={(event) => { event.stopPropagation(); void markThreadReplied(thread); }}>Mark replied</button>
+                          <button type="button" className="btn outline sm inbox-no-reply-button" onClick={(event) => { event.stopPropagation(); void markThreadNoReplyNeeded(thread); }}>No reply needed</button>
+                        </>}
                       </div>
                     </div>
                   </div>
@@ -571,11 +670,6 @@ export default function InboxPage() {
         </>
       )}
 
-      {/* APPROVALS TAB */}
-      {activeTab === "approvals" && (
-        <ApprovalsPanel candidateId={candidateId} />
-      )}
-
       {/* UNASSIGNED TAB */}
       {activeTab === "unassigned" && (
         <UnassignedPanel candidates={candidates} onAssigned={() => { loadCounts(); loadThreads(page); }} />
@@ -584,6 +678,15 @@ export default function InboxPage() {
       {/* HANDOVERS TAB */}
       {activeTab === "handovers" && (
         <div>
+          <div className="inbox-filter-box" style={{ padding: "8px 10px", marginBottom: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2, #1a1a2e)", borderRadius: 10, border: "1px solid var(--border)" }}>
+            <strong style={{ fontSize: 12 }}>Filter handovers</strong>
+            <select className="input" value={candidateId} onChange={(event) => setCandidateId(event.target.value)} aria-label="Filter handovers by candidate" style={{ minWidth: 220 }}>
+              <option value="">All candidates</option>
+              {[...candidates].sort((a, b) => a.name.localeCompare(b.name)).map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+              ))}
+            </select>
+          </div>
           {loadingHandovers ? <div className="text-muted">Loading handovers...</div> : handovers.length === 0 ? <div className="text-muted">No handovers assigned to you.</div> : (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               {handovers.map(h => (

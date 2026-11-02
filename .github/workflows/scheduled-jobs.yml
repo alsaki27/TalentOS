@@ -37,6 +37,8 @@ on:
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
     - cron: '0 */3 * * *'  # Job categorization – every 3 hours (see Phase 6 note below)
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
+    - cron: '0 2 * * *'    # Email reply reminders – 08:00 Bangladesh time
+    - cron: '0 14 * * *'   # Email reply reminders – 20:00 Bangladesh time
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
     - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
     - cron: '0 2 * * *'     # Candidate-job matching – 08:00 Asia/Dhaka
@@ -64,6 +66,7 @@ on:
           - retry-failed-since
           - job-agent-poll
           - gmail-sync
+          - email-reminders
           - gmail-watch
           - active-candidate-job-match
           - retriage-email-backlog
@@ -483,6 +486,41 @@ jobs:
           echo "$BODY"
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Gmail sync failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  email-reminders:
+    if: >
+      (github.event_name == 'schedule' &&
+       (github.event.schedule == '0 2 * * *' || github.event.schedule == '0 14 * * *')) ||
+      github.event.inputs.job == 'email-reminders'
+    runs-on: ubuntu-latest
+    name: Candidate email reply reminders
+    timeout-minutes: 10
+    steps:
+      - name: Create staff notifications and send the scheduled digest
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          UTC_DATE=$(date -u +%Y-%m-%d)
+          if [ "$SCHEDULE" = '0 2 * * *' ]; then
+            SLOT="${UTC_DATE}T08:00+06:00"
+          elif [ "$SCHEDULE" = '0 14 * * *' ]; then
+            SLOT="${UTC_DATE}T20:00+06:00"
+          else
+            BDT_DATE=$(TZ=Asia/Dhaka date +%Y-%m-%d)
+            BDT_HOUR=$(TZ=Asia/Dhaka date +%H)
+            if [ "$BDT_HOUR" -lt 14 ]; then SLOT="${BDT_DATE}T08:00+06:00"; else SLOT="${BDT_DATE}T20:00+06:00"; fi
+          fi
+          ENCODED_SLOT=${SLOT//+/%2B}
+          RESPONSE=$(curl -sS -w "\n%{http_code}" --max-time 300 --connect-timeout 30 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ env.TALENTOS_BASE_URL }}/api/cron/email-reminders?slot=${ENCODED_SLOT}")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Email reminder digest failed with HTTP $HTTP_CODE"
             exit 1
           fi
 

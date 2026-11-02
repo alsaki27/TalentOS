@@ -16,6 +16,18 @@ export interface EmailActionModalProps {
 
 type Tab = "details" | "attachments" | "team";
 
+function emailDocument(html: string) {
+  const injected = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank"><style>
+    html,body{width:100%!important;min-width:0!important;min-height:100%!important;margin:0!important;background:#fff!important;color:#202124!important}
+    body{box-sizing:border-box!important;padding:24px clamp(16px,4vw,48px)!important;font:14px/1.65 Arial,Helvetica,sans-serif!important;overflow-wrap:anywhere!important}
+    *,*:before,*:after{box-sizing:border-box} img,video,svg{max-width:100%!important;height:auto!important} table{max-width:100%!important}
+    pre{max-width:100%!important;white-space:pre-wrap!important;overflow-wrap:anywhere!important} a{color:#1a73e8}
+  </style>`;
+  if (/<head\b[^>]*>/i.test(html)) return html.replace(/<head\b[^>]*>/i, (head) => `${head}${injected}`);
+  if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b[^>]*>/i, (root) => `${root}<head>${injected}</head>`);
+  return `<!doctype html><html><head>${injected}</head><body>${html}</body></html>`;
+}
+
 function EmailBody({ bodyHtml, bodyText, loading }: { bodyHtml: string | null | undefined; bodyText: string | null | undefined; loading: boolean }) {
   if (bodyHtml) {
     // Sandboxed, srcDoc-rendered iframe: the standard safe way to show
@@ -28,16 +40,16 @@ function EmailBody({ bodyHtml, bodyText, loading }: { bodyHtml: string | null | 
     return (
       <iframe
         title="Email body"
-        srcDoc={`<base target="_blank">${bodyHtml}`}
-        sandbox="allow-same-origin allow-popups"
-        style={{ width: "100%", flex: 1, minHeight: "50vh", border: "none", background: "#fff", borderRadius: "0 0 6px 6px" }}
+        srcDoc={emailDocument(bodyHtml)}
+        sandbox="allow-popups"
+        style={{ width: "100%", flex: 1, minHeight: "58vh", border: "none", background: "#fff", borderRadius: "0 0 6px 6px" }}
       />
     );
   }
   if (bodyText) {
     return (
       <div style={{
-        padding: 28, color: "#e5e7eb", backgroundColor: "#111",
+        padding: 28, color: "#202124", backgroundColor: "#fff",
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
         fontSize: 15, lineHeight: 1.7, whiteSpace: "pre-wrap", wordWrap: "break-word",
         flex: 1, overflowY: "auto",
@@ -93,6 +105,7 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [savingReplyState, setSavingReplyState] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [detailLoading, setDetailLoading] = useState(true);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -203,6 +216,42 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
     }
   };
 
+  const markReplied = async () => {
+    setSavingReplyState(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "mark_replied" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not mark this email replied.");
+      onUpdated();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not mark this email replied.");
+    } finally {
+      setSavingReplyState(false);
+    }
+  };
+
+  const markNoReplyNeeded = async () => {
+    setSavingReplyState(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "no_reply_needed" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not mark no reply needed.");
+      onUpdated();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not mark no reply needed.");
+    } finally {
+      setSavingReplyState(false);
+    }
+  };
+
   const markUrgent = async () => {
     if (!detail) return;
     const task = detail.actionItems.find((a: any) => a.type === "needs_reply" && a.status !== "done");
@@ -230,6 +279,18 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
   const pendingProposal = detail?.actionItems.find((a: any) => a.type === "status_change_approval" && !a.decision);
   const statusChangeBadge = detail?.actionItems.find((a: any) => a.type === "status_change_approval" && (a.decision === 'approved' || a.decision === 'auto_approved'));
   const hasAttachments = detail?.message?.attachment_metadata?.length > 0;
+  const replyStatus = detail?.message?.direction === "inbound" ? (() => {
+    const message = detail.message;
+    if (message.forwarded_candidate_reply) return { label: "Forwarded team reply detected", detail: "This message arrived from the candidate mailbox and was forwarded into the monitoring inbox.", color: "#15803d", background: "#f0fdf4", border: "#86efac" };
+    if (message.detected_replied_at) return { label: "Team replied", detail: new Date(message.detected_replied_at).toLocaleString(), color: "#15803d", background: "#f0fdf4", border: "#86efac" };
+    if (message.manual_replied_at) return { label: "Marked replied", detail: new Date(message.manual_replied_at).toLocaleString(), color: "#15803d", background: "#f0fdf4", border: "#86efac" };
+    if (!message.needs_reply) return { label: "No reply needed", detail: "This message was marked informational.", color: "#475569", background: "#f8fafc", border: "#cbd5e1" };
+    const ageHours = Math.max(0, (Date.now() - new Date(message.sent_at).getTime()) / 3_600_000);
+    if (ageHours > 168) return { label: "Needs reply · older than 7 days", detail: "Outside the 7-day overdue reminder window.", color: "#475569", background: "#f8fafc", border: "#cbd5e1" };
+    if (ageHours >= 24) return { label: "Overdue · 24+ hours", detail: "No later team reply detected.", color: "#b91c1c", background: "#fff7f7", border: "#f87171" };
+    if (ageHours >= 12) return { label: "Waiting · 12+ hours", detail: "No later team reply detected.", color: "#1d4ed8", background: "#eff6ff", border: "#93c5fd" };
+    return { label: "Needs reply", detail: "No later team reply detected.", color: "#6d28d9", background: "#f5f3ff", border: "#c4b5fd" };
+  })() : null;
 
   if (!mounted) return null;
 
@@ -238,30 +299,22 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
       <div className="modal-content" style={{ width: "98vw", maxWidth: 1680, height: "95vh", maxHeight: "95vh", padding: 0, display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
 
         {/* Header */}
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 9 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <button className="btn text sm" onClick={onClose}>← Back</button>
             <button className="btn text sm" onClick={onClose}>×</button>
           </div>
-          <h2 style={{ fontSize: 20, margin: 0 }}>{thread.subject || "(no subject)"}</h2>
-          <div style={{ fontSize: 13, color: "var(--muted)", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <div><strong>Candidate:</strong> {candidateName} &middot; {thread.candidate_email}</div>
-            <div><strong>From:</strong> {thread.from_email} &middot; {new Date(thread.sent_at).toLocaleString()}</div>
-            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <strong>Gmail Thread ID:</strong> <span style={{ fontFamily: "monospace" }}>{thread.gmail_thread_id}</span>
-                {detail?.message?.candidate_match_method && (
-                  <span style={{ marginLeft: 12 }}><strong>Matched by:</strong> {String(detail.message.candidate_match_method).replaceAll("_", " ")}</span>
-                )}
-              </div>
-              {thread.job_title && (
-                <div>
-                  <strong>Matched Job:</strong> <span style={{ color: "var(--accent)" }}>{thread.job_title}</span>
-                  {thread.company_name && <span> at {thread.company_name}</span>}
-                </div>
-              )}
-            </div>
+          <h2 style={{ fontSize: 21, lineHeight: 1.35, margin: 0, overflowWrap: "anywhere" }}>{thread.subject || "(no subject)"}</h2>
+          <div style={{ fontSize: 13, color: "var(--muted)", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: "6px 18px" }}>
+            <div><strong>From:</strong> {thread.from_email || "Unknown sender"} &middot; {new Date(thread.sent_at).toLocaleString()}</div>
+            <div><strong>Candidate:</strong> {candidateName}{thread.candidate_email ? ` · ${thread.candidate_email}` : ""}</div>
+            <div><strong>Mailbox:</strong> forwarded monitoring view · replies are sent from the candidate mailbox</div>
+            {thread.job_title && <div><strong>Related job:</strong> <span style={{ color: "var(--accent)" }}>{thread.job_title}</span>{thread.company_name && ` at ${thread.company_name}`}</div>}
           </div>
+          <details style={{ fontSize: 11, color: "var(--muted)" }}>
+            <summary style={{ cursor: "pointer" }}>Thread details</summary>
+            <div style={{ marginTop: 6, fontFamily: "monospace", overflowWrap: "anywhere" }}>Gmail thread ID: {thread.gmail_thread_id}{detail?.message?.candidate_match_method ? ` · Matched by: ${String(detail.message.candidate_match_method).replaceAll("_", " ")}` : ""}</div>
+          </details>
         </div>
 
         {/* Tabs */}
@@ -293,6 +346,12 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
           {/* TAB: DETAILS */}
           {activeTab === "details" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+              {replyStatus && (
+                <div role="status" style={{ padding: 14, border: `1px solid ${replyStatus.border}`, borderRadius: 8, background: replyStatus.background, color: replyStatus.color }}>
+                  <strong>{replyStatus.label}</strong><span> · {replyStatus.detail}</span>
+                </div>
+              )}
 
               {detail?.message?.ai_summary && (
                 <div style={{ padding: 16, backgroundColor: "var(--accent-soft)", borderRadius: 6 }}>
@@ -488,17 +547,19 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
         </div>
 
         {/* Footer Actions */}
-        <div style={{ padding: "16px 24px", borderTop: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", backgroundColor: "var(--bg)" }}>
+        <div className="email-action-modal-footer" style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", backgroundColor: "var(--bg)" }}>
           {detail?.gmailUrl && (
-            <Link href={detail.gmailUrl} target="_blank" className="btn outline sm">Open Gmail ↗</Link>
+            <Link href={detail.gmailUrl} target="_blank" className="btn outline sm">View original in Gmail ↗</Link>
           )}
           <button className="btn outline sm" onClick={markNotImportant}>Mark not important</button>
+          {(detail?.message?.direction || thread.direction) === "inbound" && (detail?.message?.needs_reply ?? thread.needs_reply) && !(detail?.message?.detected_replied_at || detail?.message?.manual_replied_at || thread.effective_replied_at || thread.detected_replied_at) && <button className="btn-primary sm" disabled={savingReplyState} onClick={() => void markReplied()}>{savingReplyState ? "Saving…" : "Mark replied"}</button>}
+          {(detail?.message?.direction || thread.direction) === "inbound" && (detail?.message?.needs_reply ?? thread.needs_reply) && !(detail?.message?.detected_replied_at || detail?.message?.replied_at || detail?.message?.manual_replied_at || thread.effective_replied_at || thread.detected_replied_at) ? <button className="btn outline sm" disabled={savingReplyState} onClick={() => void markNoReplyNeeded()}>{savingReplyState ? "Saving…" : "No reply needed"}</button> : null}
 
           {pendingProposal && (
             <button className="btn primary sm" onClick={() => setActiveTab("details")}>View pending approval</button>
           )}
 
-          <button className="btn text sm" style={{ color: "var(--danger)", marginLeft: "auto" }} onClick={markUrgent}>
+          <button className="btn text sm email-modal-urgent-action" style={{ color: "var(--danger)", marginLeft: "auto" }} onClick={markUrgent}>
             Needs urgent reply
           </button>
         </div>

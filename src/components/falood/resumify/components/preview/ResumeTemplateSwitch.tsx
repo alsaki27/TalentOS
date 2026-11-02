@@ -13,26 +13,48 @@ import { BJetProfessionalTemplate } from './templates/BJetProfessionalTemplate';
 // is added or its mapping changes, both surfaces pick it up from here rather
 // than drifting apart behind two copies of the same switch.
 export const ResumeTemplateSwitch: React.FC<{ data: ResumeData }> = ({ data }) => {
+  let template: React.ReactNode;
   switch (data.template) {
     case 'tech-sidebar':
-      return <TechSidebarTemplate data={data} />;
+      template = <TechSidebarTemplate data={data} />;
+      break;
     case 'business-professional':
-      return <BusinessProfessionalTemplate data={data} variant={1} />;
+      template = <BusinessProfessionalTemplate data={data} variant={1} />;
+      break;
     case 'business-professional-2':
-      return <BusinessProfessionalTemplate data={data} variant={2} />;
+      template = <BusinessProfessionalTemplate data={data} variant={2} />;
+      break;
     case 'business-professional-3':
-      return <BusinessProfessionalTemplate data={data} variant={3} />;
+      template = <BusinessProfessionalTemplate data={data} variant={3} />;
+      break;
     case 'business-professional-4':
-      return <BusinessProfessionalTemplate data={data} variant={4} />;
+      template = <BusinessProfessionalTemplate data={data} variant={4} />;
+      break;
     case 'modern-minimal':
-      return <ModernMinimalTemplate data={data} />;
+      template = <ModernMinimalTemplate data={data} />;
+      break;
     case 'elegant-timeline':
-      return <ElegantTimelineTemplate data={data} />;
+      template = <ElegantTimelineTemplate data={data} />;
+      break;
     case 'creative-modern':
-      return <CreativeModernTemplate data={data} />;
+      template = <CreativeModernTemplate data={data} />;
+      break;
     case 'bjet-professional':
-      return <BJetProfessionalTemplate data={data} />;
+      template = <BJetProfessionalTemplate data={data} />;
+      break;
     default:
-      return <TechSidebarTemplate data={data} />;
+      template = <TechSidebarTemplate data={data} />;
   }
+
+  return (
+    <>
+      <style>{`
+        .resume-template h3.mb-2 { margin-bottom: calc(0.5rem + var(--resume-title-spacing, 0rem)) !important; }
+        .resume-template h3.mb-3 { margin-bottom: calc(0.75rem + var(--resume-title-spacing, 0rem)) !important; }
+        .resume-template h3.mb-4 { margin-bottom: calc(1rem + var(--resume-title-spacing, 0rem)) !important; }
+        .resume-template-bjet h2.mb-2 { margin-bottom: calc(0.5rem + var(--resume-title-spacing, 0rem)) !important; }
+      `}</style>
+      {template}
+    </>
+  );
 };

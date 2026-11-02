@@ -28,14 +28,14 @@ export async function GET(req: NextRequest) {
   const pageSize = Math.min(100, Math.max(10, Number.parseInt(url.searchParams.get("pageSize") || "25", 10) || 25));
 
   const count = await queryOne<{ total: string }>(
-    `SELECT COUNT(*)::text AS total FROM email_communications WHERE candidate_id IS NULL AND direction = 'inbound'`,
+    `SELECT COUNT(*)::text AS total FROM email_communications WHERE candidate_id IS NULL AND direction = 'inbound' AND sent_at >= now() - interval '15 days'`,
   );
   const total = Number(count?.total || 0);
 
   const messages = await query<any>(
     `SELECT id, gmail_thread_id, gmail_message_id, from_email, to_emails, subject, snippet, sent_at, attachment_metadata
        FROM email_communications
-      WHERE candidate_id IS NULL AND direction = 'inbound'
+      WHERE candidate_id IS NULL AND direction = 'inbound' AND sent_at >= now() - interval '15 days'
       ORDER BY sent_at DESC, id DESC
       OFFSET $1 LIMIT $2`,
     [(page - 1) * pageSize, pageSize],

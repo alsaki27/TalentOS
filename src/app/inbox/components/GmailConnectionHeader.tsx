@@ -58,7 +58,7 @@ export function GmailConnectionHeader() {
   return (
     <div style={{
       background: "var(--surface-2, #1a1a2e)", border: "1px solid var(--border)", borderRadius: 10,
-      padding: "14px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
+      padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
     }}>
       <div>
         <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Shared application Gmail</div>

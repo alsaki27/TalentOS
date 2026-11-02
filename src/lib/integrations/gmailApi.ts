@@ -289,7 +289,10 @@ export async function getMessage(accessToken: string, messageId: string, ownerEm
     bodyText: extractBodyText(data.payload).slice(0, 20000),
     bodyHtml: extractBodyHtml(data.payload)?.slice(0, 200000) ?? null,
     sentAt: dateHeader ? new Date(dateHeader).toISOString() : new Date(Number(data.internalDate)).toISOString(),
-    direction: ownerEmail && from?.toLowerCase().includes(ownerEmail.toLowerCase()) ? "outbound" : "inbound",
+    // Gmail's SENT label is authoritative for messages sent by the connected
+    // mailbox (including configured send-as aliases). Keep the From fallback
+    // for older/special label responses.
+    direction: (Array.isArray(data.labelIds) && data.labelIds.includes("SENT")) || (ownerEmail && from?.toLowerCase().includes(ownerEmail.toLowerCase())) ? "outbound" : "inbound",
     attachments: extractAttachments(data.payload),
   };
 }

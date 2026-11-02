@@ -97,6 +97,7 @@ export interface ResumeData {
   fontFamily: string;
   pagePadding: number;
   lineSpacing: number;
+  titleSpacing: number;
 }
 
 export type TemplateType = 'tech-sidebar' | 'business-professional' | 'business-professional-2' | 'business-professional-3' | 'business-professional-4' | 'modern-minimal' | 'elegant-timeline' | 'creative-modern' | 'bjet-professional';
@@ -131,6 +132,17 @@ export const DEFAULT_PAGE_PADDING = 0.75;
 // this field starts being read, since ResumeContext's IMPORT_RESUME_DATA
 // stamps this default into any already-saved resume that predates the field.
 export const DEFAULT_LINE_SPACING = 1.625;
+
+// Title spacing is an independent adjustment added to each template's
+// existing heading-to-content gap. Zero preserves every current template.
+export const DEFAULT_TITLE_SPACING = 0;
+export const MIN_TITLE_SPACING = -0.5;
+export const MAX_TITLE_SPACING = 0.75;
+
+export function normalizeTitleSpacing(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_TITLE_SPACING;
+  return Math.min(MAX_TITLE_SPACING, Math.max(MIN_TITLE_SPACING, value));
+}
 
 // Single source of truth for the initial/fallback font size (points), used
 // by ResumeContext's initial state, the old-format-resume conversion in the

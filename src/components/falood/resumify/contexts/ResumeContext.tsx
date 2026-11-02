@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
-import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
+import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_TITLE_SPACING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE, normalizeTitleSpacing } from '@/components/falood/resumify/types/resume';
 
 export interface ResumeVersion {
   id: string;
@@ -35,6 +35,7 @@ type ResumeAction =
   | { type: 'UPDATE_FONT_FAMILY'; payload: ResumeData['fontFamily'] }
   | { type: 'UPDATE_PAGE_PADDING'; payload: ResumeData['pagePadding'] }
   | { type: 'UPDATE_LINE_SPACING'; payload: ResumeData['lineSpacing'] }
+  | { type: 'UPDATE_TITLE_SPACING'; payload: ResumeData['titleSpacing'] }
   | { type: 'SET_EDITING'; payload: boolean }
   | { type: 'SET_SELECTED_SECTION'; payload: string | null }
   | { type: 'RESET_RESUME' }
@@ -75,7 +76,8 @@ const initialResumeData: ResumeData = {
   fontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Inter',
   pagePadding: DEFAULT_PAGE_PADDING,
-  lineSpacing: DEFAULT_LINE_SPACING
+  lineSpacing: DEFAULT_LINE_SPACING,
+  titleSpacing: DEFAULT_TITLE_SPACING,
 };
 
 const initialState: ResumeState = {
@@ -174,6 +176,11 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
         ...state,
         resumeData: { ...state.resumeData, lineSpacing: action.payload }
       };
+    case 'UPDATE_TITLE_SPACING':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, titleSpacing: normalizeTitleSpacing(action.payload) }
+      };
     case 'SET_EDITING':
       return { ...state, isEditing: action.payload };
     case 'SET_SELECTED_SECTION':
@@ -191,6 +198,7 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       if (typeof newData.fontSize !== 'number' || !Number.isFinite(newData.fontSize)) {
         newData.fontSize = DEFAULT_FONT_SIZE;
       }
+      newData.titleSpacing = normalizeTitleSpacing(newData.titleSpacing);
       if (newData.skills?.categorized) {
         newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
           ...cat,
@@ -208,7 +216,8 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
     case 'SET_VERSIONS':
       return { ...state, versions: action.payload };
     case 'RESTORE_VERSION': {
-      const restoredData = action.payload.resumeData;
+      const restoredData = { ...initialResumeData, ...action.payload.resumeData };
+      restoredData.titleSpacing = normalizeTitleSpacing(restoredData.titleSpacing);
       if (restoredData.skills?.categorized) {
         restoredData.skills.categorized = restoredData.skills.categorized.map((cat, idx) => ({
           ...cat,
@@ -244,6 +253,7 @@ interface ResumeContextType {
   updateFontFamily: (fontFamily: ResumeData['fontFamily']) => void;
   updatePagePadding: (pagePadding: ResumeData['pagePadding']) => void;
   updateLineSpacing: (lineSpacing: ResumeData['lineSpacing']) => void;
+  updateTitleSpacing: (titleSpacing: ResumeData['titleSpacing']) => void;
   setEditing: (editing: boolean) => void;
   setSelectedSection: (section: string | null) => void;
   resetResume: () => void;
@@ -321,6 +331,10 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     dispatch({ type: 'UPDATE_LINE_SPACING', payload: lineSpacing });
   }, []);
 
+  const updateTitleSpacing = useCallback((titleSpacing: ResumeData['titleSpacing']) => {
+    dispatch({ type: 'UPDATE_TITLE_SPACING', payload: titleSpacing });
+  }, []);
+
   const setEditing = useCallback((editing: boolean) => {
     dispatch({ type: 'SET_EDITING', payload: editing });
   }, []);
@@ -379,6 +393,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     updateFontFamily,
     updatePagePadding,
     updateLineSpacing,
+    updateTitleSpacing,
     setEditing,
     setSelectedSection,
     resetResume,
@@ -406,6 +421,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     updateFontFamily,
     updatePagePadding,
     updateLineSpacing,
+    updateTitleSpacing,
     setEditing,
     setSelectedSection,
     resetResume,

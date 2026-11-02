@@ -33,7 +33,7 @@ export type GmailSenderClass = "job_board_alert" | "no_reply" | "human";
 export interface GmailFilterVerdict {
   /** Drop before storage entirely - never written to the DB, never billed for AI. */
   suppress: boolean;
-  /** Store the row, but mark it not relevant and skip AI - recoverable via a "show hidden mail" toggle. */
+  /** Store the row as AI-hidden and skip AI; it remains visible in the inbox. */
   storeButHide: boolean;
   reason: GmailSuppressionReason | null;
   senderClass: GmailSenderClass;
@@ -218,7 +218,7 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
 
   // 3. Store-but-hide - broader job-board alert subject heuristics. Same
   //    zero AI cost as suppression, but reversible: the row exists so a
-  //    wrong guess can be found and shown via a "show hidden mail" toggle.
+  //    wrong guess can be found in the inbox and marked relevant by a user.
   if (onJobBoardDomain && JOB_ALERT_SUBJECT.test(subject)) {
     return {
       suppress: false, storeButHide: true, reason: "job_board_alert", senderClass,

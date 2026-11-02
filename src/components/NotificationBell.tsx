@@ -22,6 +22,8 @@ const typeIcons: Record<string, React.ReactNode> = {
   warning: <AlertTriangle className="w-4 h-4 text-warn" />,
   error: <AlertCircle className="w-4 h-4 text-danger" />,
   mention: <AtSign className="w-4 h-4 text-accent" />,
+  email_reply_waiting: <AlertTriangle className="w-4 h-4 text-warn" />,
+  email_reply_overdue: <AlertCircle className="w-4 h-4 text-danger" />,
 };
 
 export default function NotificationBell() {
@@ -161,7 +163,16 @@ export default function NotificationBell() {
                   key={n.id}
                   href={linkFor(n)}
                   className="flex items-start gap-3 px-4 py-3 hover:bg-bg transition-colors border-b border-border last:border-b-0"
-                  onClick={() => setOpen(false)}
+                  onClick={() => {
+                    setOpen(false);
+                    if (!n.read_at) {
+                      void fetch(`/api/notifications/${n.id}/read`, {
+                        method: "POST",
+                        cache: "no-store",
+                        keepalive: true,
+                      });
+                    }
+                  }}
                 >
                   <div className="mt-0.5 shrink-0">{typeIcons[n.type] || typeIcons.info}</div>
                   <div className="flex-1 min-w-0">
