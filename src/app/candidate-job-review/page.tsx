@@ -231,6 +231,9 @@ export default function CandidateJobReviewPage() {
                     {item.ai_status === "scored" && item.ai_tier && <span className={`badge ${TIER_BADGE_CLASS[item.ai_tier]}`} style={{ fontSize: 13, padding: "6px 12px" }}>
                       {TIER_LABEL[item.ai_tier]}{item.ai_score != null ? ` · ${item.ai_score}` : ""}
                     </span>}
+                    {item.ai_status === "scored" && !item.ai_tier && <span className="badge badge-warn" style={{ fontSize: 12.5 }}>
+                      AI reviewed{item.ai_score != null ? ` · ${item.ai_score}` : ""}
+                    </span>}
                     {item.ai_status === "failed" && <span className="badge badge-warn" style={{ fontSize: 12.5 }} title={item.ai_failure_reason ?? undefined}>
                       AI check unavailable
                     </span>}

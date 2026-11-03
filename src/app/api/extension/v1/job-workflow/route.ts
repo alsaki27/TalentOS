@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
-import { applicationAutomation } from "@/lib/applicationAutomation";
+import { assessmentForHumanReview } from "@/lib/candidateReviewAssessment";
 import { checkIdempotencyKey, checkRequiredHeaders, authenticateExtension, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
-import { createApplications } from "@/server/repositories/applicationsRepository";
 import { createJob } from "@/server/repositories/jobsRepository";
-import { query, queryOne, execute } from "@/server/db/neon";
-import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
-import { getSourceOfTruth, parseSourceOfTruth } from "@/server/services/sourceOfTruthService";
-import { callWithUsageTracking } from "@/lib/ai/routing";
+import { query, queryOne } from "@/server/db/neon";
 import { getExtensionCandidateResumeOptions, listExtensionCandidates, validateExtensionResumeMatch } from "@/server/services/extensionJobMatchService";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
+import { scoreStage1, scoreStage2, type ScoringCandidate, type ScoringJob, type ScoringResume } from "@/server/services/candidateJobScoring";
 
 import { cleanCapturedCompany, resolveJobCaptureTarget } from "@/server/services/jobCaptureStatusService";
 
@@ -42,6 +38,9 @@ type CaptureBody = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// The extension checks this contract before submitting. Older deployed
+// endpoints created applications directly and must not be treated as gated.
+const REVIEW_CONTRACT = { assignmentMode: "human_review", reviewQueueUrl: "/candidate-job-review" } as const;
 
 export const GET = withExtensionCors(async (request) => {
   const headerError = checkRequiredHeaders(request);
@@ -70,7 +69,7 @@ export const GET = withExtensionCors(async (request) => {
     if (candidateId) {
       if (!UUID_RE.test(candidateId)) return extensionError("validation_error", "A valid candidateId is required.", 400);
       const candidate = await getExtensionCandidateResumeOptions(job.id, candidateId);
-      return NextResponse.json({ candidate, jobId: job.id, jobStatus });
+      return NextResponse.json({ candidate, jobId: job.id, jobStatus, ...REVIEW_CONTRACT });
     }
 
     const [candidates, owners] = await Promise.all([
@@ -85,6 +84,7 @@ export const GET = withExtensionCors(async (request) => {
     ]);
     return NextResponse.json({
       candidates,
+      ...REVIEW_CONTRACT,
       jobId: job.id, jobStatus,
       owners: owners.map((owner) => ({ userId: owner.user_id, name: owner.display_name || owner.email, role: owner.role })),
       assignedBy: keyOwner.display_name || keyOwner.email || "Team member",
@@ -166,14 +166,11 @@ export const POST = withExtensionCors(async (request) => {
     }
     const assignmentNote = typeof body.assignmentNote === "string" ? body.assignmentNote.trim() : "";
     if (assignmentNote.length > 2000) return extensionError("validation_error", "Assignment note must be 2,000 characters or fewer.", 400);
-    const automated = applicationAutomation({
-      status: assignmentStatus,
-      explicitFollowUp: false,
-      explicitNextAction: false,
-      // The extension sends the date field like TalentOS's job assignment
-      // form, so an empty date remains an explicit "no due date" choice.
-      explicitAssignmentDue: true,
-    });
+    // applicationAutomation()'s follow_up_at/next_action/assignment_due_at
+    // computation now happens at approval time, in
+    // candidateJobReviewQueueService.ts's approveReviewItem() - that's when
+    // the application actually comes into being, not when this pair is
+    // queued for review.
 
     const results: Array<Record<string, unknown>> = [];
     const seenCandidates = new Set<string>();
@@ -186,21 +183,39 @@ export const POST = withExtensionCors(async (request) => {
       }
       seenCandidates.add(selection.candidateId);
       try {
-        const existing = await queryOne<{ id: string; candidate_name: string | null }>(
-          `SELECT a.id, c.name AS candidate_name
-             FROM applications a
-             LEFT JOIN candidates c ON c.id = a.candidate_id
-            WHERE a.job_id = $1 AND a.candidate_id = $2
-            LIMIT 1`,
-          [job.id, selection.candidateId],
-        );
-        if (existing) {
+        // Global dedup ("a job is excluded for everyone the moment anyone
+        // has applied to it"): check both a real application and an
+        // already-pending/approved review-queue row for this job, not just
+        // this specific candidate - the capture/pick/log steps stay exactly
+        // as they are for the operator; what happens after they click is
+        // what changed.
+        const [existingApplication, existingQueueItem] = await Promise.all([
+          queryOne<{ id: string; candidate_name: string | null }>(
+            `SELECT a.id, c.name AS candidate_name FROM applications a LEFT JOIN candidates c ON c.id = a.candidate_id
+              WHERE a.job_id = $1 LIMIT 1`,
+            [job.id],
+          ),
+          queryOne<{ id: string }>(
+            `SELECT id FROM candidate_job_review_queue WHERE job_id = $1 AND status IN ('pending','approved') LIMIT 1`,
+            [job.id],
+          ),
+        ]);
+        if (existingApplication) {
           results.push({
             candidateId: selection.candidateId,
-            candidateName: existing.candidate_name,
-            applicationId: existing.id,
+            candidateName: existingApplication.candidate_name,
+            applicationId: existingApplication.id,
             status: "already_logged",
-            message: "This candidate is already logged to this job. No duplicate application was created.",
+            message: "This job already has an application (for this or another candidate). No duplicate was created.",
+          });
+          continue;
+        }
+        if (existingQueueItem) {
+          results.push({
+            candidateId: selection.candidateId,
+            reviewQueueId: existingQueueItem.id,
+            status: "already_pending_review",
+            message: "This job already has a pending or approved review-queue item for this or another candidate.",
           });
           continue;
         }
@@ -212,58 +227,96 @@ export const POST = withExtensionCors(async (request) => {
           : resume.scoreType === "local_resume_relevance"
             ? `Local resume relevance estimate: ${resume.score ?? 0} points; this is not an approved match score.`
             : "No approved profile score was available.";
-        const [application] = await createApplications([{
-          candidate_id: selection.candidateId,
-          job_id: job.id,
-          // Keep the application status semantics used by the existing
-          // matcher, then set the canonical AE stage below. createApplications
-          // maps "assigned" to ready_for_review for legacy callers, so the
-          // explicit stage update is required before the ticket is visible.
-          status: assignmentStatus,
-          source_type: "base_resume",
-          base_resume_id: resume.baseResumeId,
-          assigned_by_user_id: auth.key.owner_user_id,
-          assigned_by: keyOwner.display_name || keyOwner.email || "Team member",
-          assigned_to_user_id: applicationOwner.user_id,
-          assigned_to: applicationOwner.display_name || applicationOwner.email || "Team member",
-          // The database column is DATE; keep the date-only value used by the
-          // TalentOS application form instead of serializing a timestamp.
-          assignment_due_at: parsedDueDate ? dueDate : null,
-          assignment_note: [
-            assignmentNote,
-            `Logged by TalentOS Job Capture. Base resume: ${resume.baseResumeName}. ${resumeScoreSummary}`,
-          ].filter(Boolean).join("\n\n"),
-          follow_up_at: automated.follow_up_at ?? null,
-          next_action: automated.next_action ?? null,
-          follow_up_source: automated.follow_up_source ?? null,
-          follow_up_created_at: automated.follow_up_created_at ?? null,
-          priority: "normal",
-          review_status: "not_required",
-          notes: `${resumeScoreSummary} ${resume.reason}`,
-          created_by: auth.key.owner_user_id,
-        }]);
 
-        await execute(
-          `UPDATE applications
-              SET ae_stage = 'in_ai_pipeline', application_stage = 'in_ai_pipeline',
-                  ae_stage_updated_at = NOW(), ae_stage_updated_by_user_id = $2,
-          ae_stage_updated_by_name = $3, resume_generation_status = 'queued',
-                  resume_generation_error = NULL
-            WHERE id = $1`,
-          [application.id, auth.key.owner_user_id, keyOwner.display_name || keyOwner.email || "Team member"],
+        // The capture/pick-candidate/pick-resume/click-to-log steps stay
+        // exactly as they were - the only change is that this pair now goes
+        // through the same ATS/AI scoring Scheduled Logging uses, then
+        // waits for admin/manager approval instead of going straight to the
+        // pipeline. An operator already chose this pair, so - unlike
+        // Scheduled Logging's own automated pairs - nothing here is ever
+        // silently excluded by a low score, a hard gate, or an AI "reject"
+        // tier; it always reaches the queue, annotated with whatever
+        // scoring info is available, for the reviewer to weigh.
+        const [fullCandidate, fullResume] = await Promise.all([
+          queryOne<any>(
+            `SELECT c.id, c.name, c.work_authorization, c.visa_status, c.preferred_locations,
+                    COALESCE(r.priority, 'default') AS priority,
+                    COALESCE(r.preferences, '{}'::jsonb) AS preferences,
+                    COALESCE(r.custom_requirements, '') AS custom_requirements
+               FROM candidates c LEFT JOIN scheduled_candidate_logging_candidate_rules r ON r.candidate_id = c.id
+              WHERE c.id = $1`,
+            [selection.candidateId],
+          ),
+          queryOne<ScoringResume>(
+            "SELECT id, candidate_id, name, target_industry, target_roles, content, status FROM base_resumes WHERE id = $1",
+            [resume.baseResumeId],
+          ),
+        ]);
+        const scoringCandidate: ScoringCandidate = fullCandidate;
+        const scoringJob: ScoringJob = {
+          job_id: job.id, title: job.title, company: job.company, location: job.location,
+          seniority_level: job.seniority_level ?? null, freshnessReferenceDate: job.posted_at ?? job.created_at ?? null,
+          requires_citizenship: eligibility.requiresCitizenship, citizenship_countries: eligibility.citizenshipCountries,
+          export_control_restricted: eligibility.exportControlRestricted, eligibility_restriction_evidence: eligibility.evidence,
+        };
+        const description = String(job.description_text ?? job.raw_description ?? "").slice(0, 20_000);
+
+        let atsScore: number | null = null;
+        let hardGates: string[] = [];
+        let aiStatus: "scored" | "failed" = "failed";
+        let aiTier: string | null = null;
+        let aiRecommendation: string | null = null;
+        let aiScore: number | null = null;
+        let aiReason: string | null = null;
+        let aiFailureReason: string | null = null;
+        if (fullCandidate && fullResume) {
+          const stage1 = scoreStage1(scoringCandidate, [fullResume], description, scoringJob, 365);
+          atsScore = stage1.bestScore;
+          hardGates = stage1.hardGates;
+          if (description.length >= 250) {
+            const stage2Config = await queryOne<{ custom_prompt: string; ai_match_threshold: number }>("SELECT custom_prompt, ai_match_threshold FROM scheduled_candidate_logging_config WHERE id = true");
+            const stage2 = await scoreStage2({
+              customPrompt: stage2Config?.custom_prompt ?? "", job: scoringJob, candidate: scoringCandidate,
+              resume: fullResume, description, deterministicScore: atsScore, crossCheckFloor: stage2Config?.ai_match_threshold, runId: null,
+            });
+            if (stage2.status === "scored") {
+              const review = assessmentForHumanReview(stage2);
+              aiStatus = "scored"; aiTier = review.aiTier; aiScore = stage2.score; aiReason = review.aiReason;
+              aiRecommendation = stage2.tier;
+              hardGates = [...hardGates, ...review.hardGates];
+            } else {
+              aiFailureReason = stage2.failureReason;
+            }
+          } else {
+            aiFailureReason = "Job description too short to run the AI eligibility check; ATS score only.";
+          }
+        } else {
+          aiFailureReason = "Candidate or resume record could not be loaded for scoring; queued with no score.";
+        }
+
+        const queueRow = await queryOne<{ id: string }>(
+          `INSERT INTO candidate_job_review_queue
+             (source, candidate_id, job_id, base_resume_id, alternate_resumes, ats_score,
+              ai_status, ai_tier, ai_score, ai_reason, ai_failure_reason, hard_gates,
+              priority, assigned_by_user_id, assigned_to_user_id, assignment_note, assignment_due_at, status)
+           VALUES ('extension', $1, $2, $3, '[]'::jsonb, $4, $5, $6, $7, $8, $9, $10::jsonb, 'default', $11, $12, $13, $14, 'pending')
+           ON CONFLICT (candidate_id, job_id) DO NOTHING
+           RETURNING id`,
+          [selection.candidateId, job.id, resume.baseResumeId, atsScore, aiStatus, aiTier, aiScore, aiReason, aiFailureReason,
+            JSON.stringify(hardGates), auth.key.owner_user_id, applicationOwner.user_id,
+            [assignmentNote, `Logged by TalentOS Job Capture. Base resume: ${resume.baseResumeName}. ${resumeScoreSummary}`].filter(Boolean).join("\n\n"),
+            parsedDueDate ? dueDate : null],
         );
+        if (!queueRow) {
+          results.push({ candidateId: selection.candidateId, status: "already_pending_review", message: "This candidate already has a pending or resolved review item for this job." });
+          continue;
+        }
 
-        await execute(
-          `INSERT INTO application_events (application_id, from_status, to_status, note, created_by)
-           VALUES ($1, NULL, $4, $2, $3)`,
-          [application.id, `Logged through the team extension; base resume ${resume.baseResumeName}; ${resumeScoreSummary}`, auth.key.owner_user_id, assignmentStatus],
-        ).catch((error) => console.error("[extension-job-workflow] Application event history write failed", error));
         await recordExtensionActivity({
           actorUserId: auth.key.owner_user_id,
           extensionKeyId: auth.key.id,
           eventType: "candidate_logged",
           jobId: job.id,
-          applicationId: application.id,
           candidateId: selection.candidateId,
           baseResumeId: resume.baseResumeId,
           matchScore: hasApprovedMatchScore ? resume.score : null,
@@ -280,70 +333,28 @@ export const POST = withExtensionCors(async (request) => {
             scoreType: resume.scoreType,
             localResumeRelevancePoints: resume.scoreType === "local_resume_relevance" ? resume.score : null,
             recommended: resume.recommended,
+            reviewQueueId: queueRow.id,
+            atsScore, aiStatus, aiTier, aiRecommendation,
           },
         }).catch((error) => console.error("[extension-job-workflow] Candidate activity tracking write failed", error));
 
-        // Workflow creation performs database setup only; the existing TalentOS
-        // dispatcher consumes the queued run and invokes the AI pipeline. Run
-        // setup in waitUntil and expose an honest `starting` state immediately.
-        const workflowSetup = triggerAiWorkflowForApplication(application.id, auth.key.owner_user_id, resume.baseResumeId)
-          .then(async (result) => {
-            if (result.started) {
-              await execute(
-                "UPDATE applications SET resume_generation_status = 'queued', resume_generation_error = NULL WHERE id = $1",
-                [application.id],
-              );
-              return;
-            }
-            const reason = result.reason.slice(0, 1000);
-            await execute(
-              "UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $2 WHERE id = $1 AND resume_generation_status IN ('not_started', 'queued')",
-              [application.id, reason],
-            );
-            console.warn(`[extension-job-workflow] Resume workflow did not start for ${application.id}: ${reason}`);
-          })
-          .catch(async (error) => {
-            const reason = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
-            await execute(
-              "UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $2 WHERE id = $1 AND resume_generation_status IN ('not_started', 'queued')",
-              [application.id, reason],
-            ).catch((updateError) => console.error("[extension-job-workflow] Could not persist workflow setup failure", updateError));
-            console.error(`[extension-job-workflow] Resume workflow setup failed for ${application.id}`, error);
-          });
-        backgroundDispatch(workflowSetup);
-        // Match TalentOS's normal application-creation flow: parse Source of
-        // Truth only if the candidate has never had it parsed. This avoids
-        // duplicate AI usage for candidates with an existing audit while
-        // keeping the resume pipeline's factual source current.
-        const sourceOfTruthSetup = (async () => {
-          const sourceOfTruth = await getSourceOfTruth(selection.candidateId);
-          if (!sourceOfTruth || !sourceOfTruth.lastParsedAt) {
-            await callWithUsageTracking(
-              "candidate_source_of_truth",
-              { userId: auth.key.owner_user_id!, applicationId: application.id },
-              (provider) => parseSourceOfTruth(selection.candidateId, undefined, provider),
-            );
-          }
-        })().catch((error) => console.error(`[extension-job-workflow] Source-of-Truth setup failed for ${application.id}`, error));
-        backgroundDispatch(sourceOfTruthSetup);
         results.push({
           candidateId: selection.candidateId,
           candidateName: candidate.candidateName,
-          applicationId: application.id,
+          reviewQueueId: queueRow.id,
           baseResumeId: resume.baseResumeId,
           baseResumeName: resume.baseResumeName,
-          matchScore: hasApprovedMatchScore ? resume.score : null,
-          resumeScoreType: resume.scoreType,
-          localResumeRelevancePoints: resume.scoreType === "local_resume_relevance" ? resume.score : null,
-          status: "logged",
-          resumeWorkflow: "starting",
+          atsScore, aiStatus, aiTier, aiScore, aiRecommendation,
+          status: "submitted_for_review",
+          applicationCreated: false,
+          workflowStarted: false,
         });
       } catch (error) {
         results.push({ candidateId: selection.candidateId, status: "failed", error: error instanceof Error ? error.message : String(error) });
       }
     }
 
-    return NextResponse.json({ jobId: job.id, results, completed: results.filter((x) => x.status === "logged").length, failed: results.filter((x) => x.status === "failed").length });
+    return NextResponse.json({ ...REVIEW_CONTRACT, jobId: job.id, results, completed: results.filter((x) => x.status === "submitted_for_review").length, failed: results.filter((x) => x.status === "failed").length });
   }
 
   if (action !== "capture") return extensionError("validation_error", "action must be capture or assign.", 400);

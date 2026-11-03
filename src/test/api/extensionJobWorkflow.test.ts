@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  authenticate: vi.fn(), createApplications: vi.fn(), createJob: vi.fn(), execute: vi.fn(),
-  query: vi.fn(), queryOne: vi.fn(), backgroundDispatch: vi.fn(), triggerWorkflow: vi.fn(),
+  authenticate: vi.fn(), createJob: vi.fn(), execute: vi.fn(),
+  query: vi.fn(), queryOne: vi.fn(),
   listCandidates: vi.fn(), getResumeOptions: vi.fn(), validateMatch: vi.fn(), recordActivity: vi.fn(),
-  getSourceOfTruth: vi.fn(), parseSourceOfTruth: vi.fn(), callWithUsageTracking: vi.fn(),
+  callWithUsageTracking: vi.fn(),
+  createApplications: vi.fn(), triggerWorkflow: vi.fn(),
 }));
 
 vi.mock("@/lib/extensionAuth", async (importOriginal) => {
@@ -18,13 +19,19 @@ vi.mock("@/lib/extensionAuth", async (importOriginal) => {
     extensionError: (code: string, message: string, status: number) => Response.json({ error: { code, message } }, { status }),
   };
 });
-vi.mock("@/server/repositories/applicationsRepository", () => ({ createApplications: mocks.createApplications }));
 vi.mock("@/server/repositories/jobsRepository", () => ({ createJob: mocks.createJob }));
-vi.mock("@/server/db/neon", () => ({ query: mocks.query, queryOne: mocks.queryOne, execute: mocks.execute }));
-vi.mock("@/server/lib/waitUntil", () => ({ backgroundDispatch: mocks.backgroundDispatch }));
+vi.mock("@/server/repositories/applicationsRepository", () => ({ createApplications: mocks.createApplications }));
 vi.mock("@/server/services/applicationAiWorkflowService", () => ({ triggerAiWorkflowForApplication: mocks.triggerWorkflow }));
-vi.mock("@/server/services/sourceOfTruthService", () => ({ getSourceOfTruth: mocks.getSourceOfTruth, parseSourceOfTruth: mocks.parseSourceOfTruth }));
-vi.mock("@/lib/ai/routing", () => ({ callWithUsageTracking: mocks.callWithUsageTracking }));
+vi.mock("@/server/db/neon", () => ({ query: mocks.query, queryOne: mocks.queryOne, execute: mocks.execute }));
+vi.mock("@/lib/ai/routing", () => ({
+  callWithUsageTracking: mocks.callWithUsageTracking,
+  // scoreStage2's catch block checks `error instanceof AiRouteCallError` -
+  // without a real (stub) class here, that check throws on any rejection.
+  AiRouteCallError: class AiRouteCallError extends Error {
+    provider?: string; model?: string;
+    constructor(message: string, provider?: string, model?: string) { super(message); this.provider = provider; this.model = model; }
+  },
+}));
 vi.mock("@/server/services/extensionJobMatchService", () => ({
   listExtensionCandidates: mocks.listCandidates,
   getExtensionCandidateResumeOptions: mocks.getResumeOptions,
@@ -34,6 +41,7 @@ vi.mock("@/server/services/extensionActivityService", () => ({ recordExtensionAc
 
 import { NextRequest } from "next/server";
 import { GET, OPTIONS, POST } from "@/app/api/extension/v1/job-workflow/route";
+import * as scoring from "@/server/services/candidateJobScoring";
 
 const jobId = "11111111-1111-4111-8111-111111111111";
 const candidateId = "22222222-2222-4222-8222-222222222222";
@@ -57,24 +65,46 @@ function makeGetRequest(query = "") {
 
 import { POST as captureOnly } from "@/app/api/extension/v1/capture-job/route";
 
+const LONG_DESCRIPTION = "GIS analyst role with detailed responsibilities. ".repeat(10);
+
+function defaultQueryOneImpl(sql: string, params: unknown[] = []) {
+  if (sql.includes("FROM profiles")) {
+    const id = params[0];
+    if (id === ownerId) return { user_id: ownerId, display_name: "Assigned AE", email: "ae@example.com" };
+    return { user_id: actorId, display_name: "Test Manager", email: "manager@example.com" };
+  }
+  if (sql.includes("FROM jobs")) return { id: jobId, title: "GIS Analyst", company: "Northwind", location: null, seniority_level: null, description_text: LONG_DESCRIPTION, raw_description: null, eligibility_restriction_evidence: null, posted_at: null, created_at: "2026-10-01T00:00:00.000Z" };
+  // Global dedup checks - no existing application, no existing queue item.
+  if (sql.includes("FROM applications a")) return null;
+  if (sql.includes("FROM candidate_job_review_queue WHERE job_id")) return null;
+  // candidateJobReviewQueueService-style candidate/resume lookups for scoring.
+  if (sql.includes("FROM candidates c LEFT JOIN scheduled_candidate_logging_candidate_rules")) {
+    return { id: candidateId, name: "A. Candidate", work_authorization: null, visa_status: null, preferred_locations: null, priority: "default", preferences: {}, custom_requirements: "" };
+  }
+  if (sql.includes("FROM base_resumes WHERE id")) {
+    return { id: resumeId, candidate_id: candidateId, name: "GIS Resume", target_industry: "GIS", target_roles: ["GIS analyst"], content: "GIS analyst with detailed responsibilities.", status: "approved" };
+  }
+  if (sql.includes("FROM scheduled_candidate_logging_config")) return { custom_prompt: "" };
+  if (sql.includes("INSERT INTO candidate_job_review_queue")) return { id: "queue-1" };
+  return null;
+}
+
 describe("team extension job workflow", () => {
+  // Regression guard for every capture/assign path: only the separately
+  // authorized Review Queue approval route may create or start an application.
+  afterEach(() => {
+    expect(mocks.createApplications).not.toHaveBeenCalled();
+    expect(mocks.triggerWorkflow).not.toHaveBeenCalled();
+    const pipelineWrites = mocks.execute.mock.calls.filter(([sql]) => /(?:INSERT INTO|UPDATE)\s+applications\b|INSERT INTO\s+application_events\b/i.test(sql));
+    expect(pipelineWrites).toEqual([]);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.authenticate.mockResolvedValue({ key: { id: "key-1", owner_user_id: actorId, scopes: ["extension:job:capture", "extension:application:assign"] } });
-    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
-      if (sql.includes("FROM profiles")) {
-        const id = params[0];
-        if (id === ownerId) return { user_id: ownerId, display_name: "Assigned AE", email: "ae@example.com" };
-        return { user_id: actorId, display_name: "Test Manager", email: "manager@example.com" };
-      }
-      if (sql.includes("FROM jobs")) return { id: jobId, title: "GIS Analyst", description_text: "GIS analyst role with detailed responsibilities", raw_description: null, eligibility_restriction_evidence: null };
-      if (sql.includes("FROM applications")) return null;
-      return null;
-    });
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => defaultQueryOneImpl(sql, params));
     mocks.query.mockResolvedValue([{ user_id: ownerId, display_name: "Assigned AE", email: "ae@example.com", role: "application_engineer" }]);
     mocks.execute.mockResolvedValue({ rowCount: 1 });
     mocks.createJob.mockResolvedValue({ status: "created", job: { id: jobId, title: "GIS Analyst", company: "Northwind" } });
-    mocks.createApplications.mockResolvedValue([{ id: "app-1", candidate_id: candidateId, job_id: jobId }]);
     mocks.recordActivity.mockResolvedValue(undefined);
     mocks.listCandidates.mockResolvedValue([{ candidateId, candidateName: "A. Candidate", pipelineStage: "applying" }]);
     mocks.getResumeOptions.mockResolvedValue({ candidateId, candidateName: "A. Candidate", pipelineStage: "applying", resumeOptions: [], bestResumeId: resumeId });
@@ -82,8 +112,12 @@ describe("team extension job workflow", () => {
       candidate: { candidateId, candidateName: "A. Candidate" },
       resume: { baseResumeId: resumeId, baseResumeName: "GIS Resume", score: 91, scoreType: "approved_profile", tier: "A", recommended: true, profileStatus: "approved", reason: "Strong fit" },
     });
-    mocks.triggerWorkflow.mockResolvedValue({ started: true, workflowId: "wf-1" });
-    mocks.getSourceOfTruth.mockResolvedValue({ lastParsedAt: "2026-10-18T00:00:00.000Z" });
+    // scoreStage2 destructures { result, providerName, model, inputTokens, outputTokens, latencyMs }
+    // from callWithUsageTracking's return - this is Stage 2's successful path.
+    mocks.callWithUsageTracking.mockResolvedValue({
+      result: { tier: "strong", score: 88, reason: "Good fit.", hardGates: [] },
+      providerName: "opencode", model: "glm-5.3-flash", inputTokens: 100, outputTokens: 50, latencyMs: 500,
+    });
   });
 
   it("answers the candidate workflow preflight with the extension CORS headers", async () => {
@@ -111,6 +145,7 @@ describe("team extension job workflow", () => {
     const response = await GET(makeGetRequest() as never);
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
+      assignmentMode: "human_review", reviewQueueUrl: "/candidate-job-review",
       candidates: [{ candidateId, candidateName: "A. Candidate" }],
       owners: [{ userId: ownerId, name: "Assigned AE" }],
       assignedBy: "Test Manager",
@@ -152,7 +187,7 @@ describe("team extension job workflow", () => {
     expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "job_duplicate", jobId }));
   });
 
-  it("persists status, owner, due date, and note while starting the existing resume workflow", async () => {
+  it("scores the pair (ATS + AI) and queues it for review instead of creating an application directly", async () => {
     const response = await POST(makeRequest({
       action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }],
       assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30",
@@ -160,41 +195,94 @@ describe("team extension job workflow", () => {
     }, "assign-request") as never);
 
     expect(response.status).toBe(200);
-    expect(mocks.createApplications).toHaveBeenCalledWith([expect.objectContaining({
-      candidate_id: candidateId,
-      job_id: jobId,
-      status: "in_progress",
-      base_resume_id: resumeId,
-      assigned_by_user_id: actorId,
-      assigned_to_user_id: ownerId,
-      assigned_to: "Assigned AE",
-      assignment_due_at: "2026-10-30",
-      next_action: "Finish application submission.",
-      follow_up_source: "auto_status_rule",
-      assignment_note: expect.stringContaining("Use the GIS resume and contact the candidate."),
-    })]);
-    expect(mocks.execute).toHaveBeenCalledWith(expect.stringContaining("application_stage = 'in_ai_pipeline'"), ["app-1", actorId, "Test Manager"]);
-    expect(mocks.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO application_events"), [
-      "app-1", expect.any(String), actorId, "in_progress",
-    ]);
+    // The capture/pick/log steps are unchanged - the only behavior change is
+    // what happens after: a scored queue row, not a direct application.
+    expect(mocks.queryOne).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO candidate_job_review_queue"),
+      expect.arrayContaining([candidateId, jobId, resumeId]),
+    );
+    expect(mocks.callWithUsageTracking).toHaveBeenCalled();
     expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({
-      eventType: "candidate_logged", applicationId: "app-1", baseResumeId: resumeId, matchScore: 91,
-      metadata: expect.objectContaining({ assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30" }),
+      eventType: "candidate_logged", candidateId, baseResumeId: resumeId, matchScore: 91,
+      metadata: expect.objectContaining({ assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30", aiStatus: "scored", aiTier: "strong" }),
     }));
-    expect(mocks.backgroundDispatch).toHaveBeenCalled();
-    expect((await response.json()).results[0]).toMatchObject({ status: "logged", resumeWorkflow: "starting" });
+    const result = (await response.json()).results[0];
+    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "scored", aiTier: "strong", reviewQueueId: "queue-1", applicationCreated: false, workflowStarted: false });
+    expect(result.atsScore).toEqual(expect.any(Number));
   });
 
-  it("returns an explicit already-logged result without creating a duplicate application", async () => {
+  it("queues the pair ATS-only when the AI eligibility check fails, instead of blocking it", async () => {
+    mocks.callWithUsageTracking.mockRejectedValue(new Error("Shared OpenCode pool exhausted."));
+    const response = await POST(makeRequest({
+      action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }],
+    }, "assign-ai-fails") as never);
+
+    expect(response.status).toBe(200);
+    expect(mocks.queryOne).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO candidate_job_review_queue"),
+      expect.arrayContaining(["failed"]),
+    );
+    const result = (await response.json()).results[0];
+    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "failed" });
+  });
+
+  it.each([0, 12, 29, 30])("always queues an extension submission with ATS %s for human review", async atsScore => {
+    const score = vi.spyOn(scoring, "scoreStage1").mockReturnValueOnce({
+      bestResume: { id: resumeId, candidate_id: candidateId, name: "Selected resume", content: "Resume", status: "draft", target_industry: null, target_roles: null },
+      bestScore: atsScore, hardGates: [], rankedResumes: [],
+    });
+    try {
+      const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
+      expect((await response.json()).results[0]).toMatchObject({ atsScore, status: "submitted_for_review", applicationCreated: false, workflowStarted: false });
+      expect(mocks.queryOne).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.arrayContaining([atsScore, "scored"]));
+    } finally { score.mockRestore(); }
+  });
+
+  it("queues an AI-rejected extension pairing without violating the review tier constraint", async () => {
+    mocks.callWithUsageTracking.mockResolvedValue({ result: { tier: "reject", score: 0, reason: "Different profession", hardGates: ["Required license not evidenced"] },
+      providerName: "opencode", model: "glm-5.3-flash", inputTokens: 100, outputTokens: 50, latencyMs: 500 });
+    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
+    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiStatus: "scored", aiTier: null, aiRecommendation: "reject", aiScore: 0 });
+    const insert = mocks.queryOne.mock.calls.find(([sql]) => sql.includes("INSERT INTO candidate_job_review_queue"));
+    expect(insert?.[1][5]).toBeNull();
+    expect(insert?.[1][7]).toContain("not recommended");
+    expect(JSON.parse(insert?.[1][9])).toContain("Required license not evidenced");
+  });
+
+  it("fails closed when the review queue cannot be written, without falling back to the pipeline", async () => {
     mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
-      if (sql.includes("FROM profiles")) {
-        const id = params[0];
-        if (id === ownerId) return { user_id: ownerId, display_name: "Assigned AE", email: "ae@example.com" };
-        return { user_id: actorId, display_name: "Test Manager", email: "manager@example.com" };
-      }
-      if (sql.includes("FROM jobs")) return { id: jobId, title: "GIS Analyst", description_text: "GIS analyst role", raw_description: null };
-      if (sql.includes("FROM applications")) return { id: "existing-app", candidate_name: "A. Candidate" };
-      return null;
+      if (sql.includes("INSERT INTO candidate_job_review_queue")) throw new Error("Review queue temporarily unavailable");
+      return defaultQueryOneImpl(sql, params);
+    });
+    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
+    expect(await response.json()).toMatchObject({ assignmentMode: "human_review", completed: 0, failed: 1,
+      results: [{ status: "failed", error: "Review queue temporarily unavailable" }] });
+  });
+
+  it("queues short descriptions without an AI call or a direct workflow", async () => {
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      const row = defaultQueryOneImpl(sql, params);
+      return sql.includes("FROM jobs") ? { ...row, description_text: "GIS role" } : row;
+    });
+    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
+    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiStatus: "failed", workflowStarted: false });
+    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
+  });
+
+  it("preserves AI eligibility warnings for human review even for a stretch match", async () => {
+    mocks.callWithUsageTracking.mockResolvedValue({ result: { tier: "stretch", score: 25, reason: "Domain gap", hardGates: ["Required clearance is not evidenced"] },
+      providerName: "opencode", model: "glm-5.3-flash", inputTokens: 100, outputTokens: 50, latencyMs: 500 });
+    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }], assignmentStatus: "in_progress" }));
+    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiTier: "stretch", workflowStarted: false });
+    const insert = mocks.queryOne.mock.calls.find(([sql]) => sql.includes("INSERT INTO candidate_job_review_queue"));
+    expect(insert?.[0]).toContain("'pending'");
+    expect(JSON.parse(insert?.[1][9])).toContain("Required clearance is not evidenced");
+  });
+
+  it("returns an explicit already-logged result without creating a duplicate when the job already has an application for any candidate", async () => {
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("FROM applications a")) return { id: "existing-app", candidate_name: "Someone Else" };
+      return defaultQueryOneImpl(sql, params);
     });
 
     const response = await POST(makeRequest({
@@ -203,27 +291,37 @@ describe("team extension job workflow", () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).results[0]).toMatchObject({
-      candidateId, candidateName: "A. Candidate", applicationId: "existing-app", status: "already_logged",
-      message: expect.stringContaining("No duplicate application was created"),
+      candidateId, applicationId: "existing-app", status: "already_logged",
+      message: expect.stringContaining("No duplicate"),
     });
-    expect(mocks.createApplications).not.toHaveBeenCalled();
-    expect(mocks.triggerWorkflow).not.toHaveBeenCalled();
+    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
+  });
+
+  it("returns already-pending-review when another candidate already has a pending/approved item for this job", async () => {
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("FROM candidate_job_review_queue WHERE job_id")) return { id: "queue-existing" };
+      return defaultQueryOneImpl(sql, params);
+    });
+
+    const response = await POST(makeRequest({
+      action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }],
+    }, "pending-review-assign") as never);
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).results[0]).toMatchObject({ candidateId, status: "already_pending_review" });
+    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
   });
 
   it("requires an explicit confirmation for stored clearance flags before logging", async () => {
     mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
-      if (sql.includes("FROM profiles")) {
-        const id = params[0];
-        if (id === ownerId) return { user_id: ownerId, display_name: "Assigned AE", email: "ae@example.com" };
-        return { user_id: actorId, display_name: "Test Manager", email: "manager@example.com" };
-      }
       if (sql.includes("FROM jobs")) return {
-        id: jobId, title: "Defense GIS Analyst", description_text: "A detailed GIS role description.", raw_description: null,
+        id: jobId, title: "Defense GIS Analyst", company: "Northwind", location: null, seniority_level: null,
+        description_text: LONG_DESCRIPTION, raw_description: null,
         eligibility_restricted: true, requires_citizenship: false, citizenship_countries: null,
         export_control_restricted: true, eligibility_restriction_evidence: "Active security clearance required.",
+        posted_at: null, created_at: "2026-10-01T00:00:00.000Z",
       };
-      if (sql.includes("FROM applications")) return null;
-      return null;
+      return defaultQueryOneImpl(sql, params);
     });
 
     const unconfirmed = await POST(makeRequest({
@@ -231,20 +329,18 @@ describe("team extension job workflow", () => {
     }, "restricted-no-confirmation") as never);
     expect(unconfirmed.status).toBe(409);
     expect((await unconfirmed.json()).error.code).toBe("eligibility_ack_required");
-    expect(mocks.createApplications).not.toHaveBeenCalled();
 
     const confirmed = await POST(makeRequest({
       action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }], acknowledgeEligibility: true,
     }, "restricted-confirmed") as never);
     expect(confirmed.status).toBe(200);
-    expect(mocks.createApplications).toHaveBeenCalledTimes(1);
     expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({
       eventType: "candidate_logged",
       metadata: expect.objectContaining({ eligibilityAcknowledged: true }),
     }));
   });
 
-  it("keeps local relevance estimates out of the approved 0-100 match-score field", async () => {
+  it("still queues the pair for review when the local resume relevance estimate is low, rather than excluding it", async () => {
     mocks.validateMatch.mockResolvedValue({
       candidate: { candidateId, candidateName: "A. Candidate" },
       resume: { baseResumeId: resumeId, baseResumeName: "Draft GIS Resume", score: 12, scoreType: "local_resume_relevance", tier: null, recommended: false, profileStatus: "not_approved", reason: "Local match estimate" },
@@ -256,19 +352,17 @@ describe("team extension job workflow", () => {
       eventType: "candidate_logged", matchScore: null,
       metadata: expect.objectContaining({ scoreType: "local_resume_relevance", localResumeRelevancePoints: 12 }),
     }));
-    expect((await response.json()).results[0]).toMatchObject({
-      status: "logged", matchScore: null, resumeScoreType: "local_resume_relevance", localResumeRelevancePoints: 12,
-    });
+    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review" });
   });
+
   function mockHiddenCopy() {
     const previous = mocks.queryOne.getMockImplementation()!;
     const canonicalId = "00cfcd73-a337-4fdd-bc4b-777ac893adab";
-    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
-      if (sql.includes("FROM jobs")) return params[0] === jobId
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => sql.includes("FROM jobs")
+      ? (params[0] === jobId
         ? { id: jobId, is_active: false, content_duplicate_of: canonicalId }
-        : { id: canonicalId, is_active: true, title: "GIS Analyst", company: "Northwind", description_text: "Detailed GIS analyst responsibilities" };
-      return previous(sql, params);
-    });
+        : { id: canonicalId, is_active: true, title: "GIS Analyst", company: "Northwind", location: null, seniority_level: null, description_text: LONG_DESCRIPTION, raw_description: null, posted_at: null, created_at: "2026-10-01T00:00:00.000Z" })
+      : previous(sql, params));
     return canonicalId;
   }
 
@@ -292,7 +386,10 @@ describe("team extension job workflow", () => {
     const canonicalId = mockHiddenCopy();
     const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
     expect(response.status).toBe(200);
-    expect(mocks.createApplications).toHaveBeenCalledWith([expect.objectContaining({ job_id: canonicalId })]);
+    expect(mocks.queryOne).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO candidate_job_review_queue"),
+      expect.arrayContaining([candidateId, canonicalId]),
+    );
   });
 
   it("reports a stored inactive job separately from a missing job", async () => {

@@ -101,6 +101,13 @@ describe("scoreStage1 (lane-breadth)", () => {
 });
 
 describe("reconcileTier", () => {
+  test("uses the configured cross-check floor rather than a fixed 40", () => {
+    expect(reconcileTier("strong", 35, 30)).toBe("strong");
+    expect(reconcileTier("strong", 29, 30)).toBe("adjacent");
+    expect(reconcileTier("strong", 30, 30)).toBe("strong");
+    expect(reconcileTier("strong", 74, 75)).toBe("adjacent");
+    expect(reconcileTier("strong", 75, 75)).toBe("strong");
+  });
   test("downgrades an AI-claimed strong tier when the ATS floor score is very low", () => {
     expect(reconcileTier("strong", 10)).toBe("adjacent");
   });

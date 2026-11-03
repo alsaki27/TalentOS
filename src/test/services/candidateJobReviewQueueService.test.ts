@@ -148,7 +148,7 @@ describe("candidateJobReviewQueueService", () => {
   });
 
   describe("retryAiScoring", () => {
-    it("re-scores Stage 2 and updates the row on success", async () => {
+    it.each(["adjacent", "reject"] as const)("re-scores Stage 2 as %s and keeps the item for human review", async tier => {
       mocks.queryOne.mockImplementation(async (sql: string) => {
         if (sql.includes("FROM candidate_job_review_queue WHERE id")) return pendingRow({ ai_status: "failed", ai_tier: null });
         if (sql.includes("FROM jobs WHERE id")) return { job_id: jobId, title: "Engineer", company: "Acme", location: null, seniority_level: null, description_text: "A reasonably detailed job description for scoring purposes here.".repeat(3), raw_description: null, requires_citizenship: false, citizenship_countries: null, export_control_restricted: false, eligibility_restriction_evidence: null };
@@ -157,7 +157,7 @@ describe("candidateJobReviewQueueService", () => {
         return null;
       });
       mocks.callWithUsageTracking.mockResolvedValue({
-        result: { tier: "adjacent", score: 72, reason: "Decent fit.", hardGates: [] },
+        result: { tier, score: 72, reason: "Decent fit.", hardGates: [] },
         providerName: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5, latencyMs: 100,
       });
 
@@ -165,8 +165,12 @@ describe("candidateJobReviewQueueService", () => {
 
       expect(mocks.execute).toHaveBeenCalledWith(
         expect.stringContaining("ai_status = 'scored'"),
-        [queueId, "adjacent", 72, "Decent fit.", JSON.stringify([])],
+        tier === "reject"
+          ? [queueId, null, 72, "AI assessment: not recommended. Decent fit.", JSON.stringify(["AI did not recommend this pairing; a human reviewer must decide."])]
+          : [queueId, "adjacent", 72, "Decent fit.", JSON.stringify([])],
       );
+      expect(mocks.createApplications).not.toHaveBeenCalled();
+      expect(mocks.triggerAiWorkflowForApplication).not.toHaveBeenCalled();
     });
 
     it("records the failure reason and re-throws when the retry also fails", async () => {

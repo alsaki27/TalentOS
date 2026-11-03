@@ -28,7 +28,7 @@ const baseItem = {
 };
 const items = [
   { ...baseItem, id: "strong" },
-  { ...baseItem, id: "adjacent", source: "extension", ai_tier: "adjacent" },
+  { ...baseItem, id: "extension-low-score", source: "extension", ats_score: 0, ai_tier: null, ai_score: 0, ai_reason: "AI assessment: not recommended. Different profession; queued for a human decision." },
   { ...baseItem, id: "failed", ai_status: "failed", ai_tier: null, ai_reason: null, ai_failure_reason: "Provider temporarily unavailable: " + longToken },
   { ...baseItem, id: "unscored", ai_status: "pending", ai_tier: null, ai_reason: null },
   { ...baseItem, id: "approved", status: "approved", application_id: "application-fixture" },
@@ -76,6 +76,7 @@ try {
   });
   await page.goto("https://talentos.test/candidate-job-review");
   await page.locator("section.card").first().waitFor();
+  await page.getByText("AI reviewed · 0", { exact: true }).waitFor();
   const firstCard = page.locator("section.card").first();
   await firstCard.getByRole("button", { name: "1 other resume scored" }).click();
   assert.equal(await firstCard.getByRole("button", { expanded: true }).count(), 1);

@@ -187,4 +187,19 @@ describe("runScheduledCandidateLogging", () => {
     expect(result).toEqual({ skipped: true, reason: "Feature is disabled." });
     expect(mocks.scoreStage1).not.toHaveBeenCalled();
   });
+
+  it("still filters a scheduled pairing below 30 without an AI call or review item", async () => {
+    wireQueryOne({ config: baseConfig({ match_threshold: 30 }) });
+    mocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return [job()];
+      if (sql.includes("FROM candidates c")) return [candidateRow(candidateAId)];
+      if (sql.includes("FROM base_resumes WHERE candidate_id")) return [resumeRow(resumeAId, candidateAId)];
+      return [];
+    });
+    mocks.scoreStage1.mockReturnValue({ bestResume: resumeRow(resumeAId, candidateAId), bestScore: 29, hardGates: [], rankedResumes: [] });
+    const result = await runScheduledCandidateLogging({ triggerType: "manual" });
+    expect(result).toMatchObject({ aiCalls: 0, queuedForReview: 0, skippedCount: 1 });
+    expect(mocks.scoreStage2).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.anything());
+  });
 });

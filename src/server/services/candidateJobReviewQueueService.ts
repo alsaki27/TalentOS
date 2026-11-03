@@ -11,6 +11,7 @@ import { query, queryOne, execute } from "@/server/db/neon";
 import { createApplications } from "@/server/repositories/applicationsRepository";
 import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
 import { applicationAutomation } from "@/lib/applicationAutomation";
+import { assessmentForHumanReview } from "@/lib/candidateReviewAssessment";
 import { scoreStage2, type ScoringJob, type ScoringCandidate, type ScoringResume } from "@/server/services/candidateJobScoring";
 
 export interface ReviewQueueRow {
@@ -169,7 +170,7 @@ export async function bulkApproveByTier(tiers: string[], actorUserId: string): P
 // Lets an admin/manager re-run just Stage 2 for one item that's sitting
 // ai_status='failed' (or 'pending') - the AI-failure-resilience requirement:
 // a pair is never stuck just because the shared pool had a bad moment.
-export async function retryAiScoring(id: string, customPrompt: string): Promise<void> {
+export async function retryAiScoring(id: string, customPrompt: string, crossCheckFloor?: number): Promise<void> {
   const row = await requirePendingOrApproved(id);
   if (row.status !== "pending") throw new Error("Only a pending item can be re-scored.");
   if (!row.base_resume_id) throw new Error("No base resume is attached to this item.");
@@ -205,7 +206,7 @@ export async function retryAiScoring(id: string, customPrompt: string): Promise<
 
   const outcome = await scoreStage2({
     customPrompt, job: scoringJob, candidate: scoringCandidate, resume,
-    description, deterministicScore: row.ats_score ?? 0, runId: null,
+    description, deterministicScore: row.ats_score ?? 0, crossCheckFloor, runId: null,
   });
 
   if (outcome.status === "failed") {
@@ -215,11 +216,12 @@ export async function retryAiScoring(id: string, customPrompt: string): Promise<
     );
     throw new Error(outcome.failureReason);
   }
+  const review = assessmentForHumanReview(outcome);
   await execute(
     `UPDATE candidate_job_review_queue
         SET ai_status = 'scored', ai_tier = $2, ai_score = $3, ai_reason = $4,
             hard_gates = $5::jsonb, ai_failure_reason = NULL, updated_at = NOW()
       WHERE id = $1`,
-    [id, outcome.tier, outcome.score, outcome.reason, JSON.stringify([...row.hard_gates, ...outcome.hardGates])],
+    [id, review.aiTier, outcome.score, review.aiReason, JSON.stringify([...new Set([...row.hard_gates, ...review.hardGates])])],
   );
 }

@@ -235,8 +235,8 @@ export function parseEligibilityResponse(raw: string): { tier: AiTier; score: nu
 // A low ATS floor score with an AI-claimed "strong" tier is an inconsistent
 // signal (see the plan's design principle: tier reflects both scores, not AI
 // judgment alone) - downgrade one notch rather than trust the AI blindly.
-export function reconcileTier(tier: AiTier, deterministicScore: number): AiTier {
-  if (tier === "strong" && deterministicScore < 40) return "adjacent";
+export function reconcileTier(tier: AiTier, deterministicScore: number, crossCheckFloor = 40): AiTier {
+  if (tier === "strong" && deterministicScore < crossCheckFloor) return "adjacent";
   return tier;
 }
 
@@ -263,6 +263,7 @@ export async function scoreStage2(params: {
   resume: ScoringResume;
   description: string;
   deterministicScore: number;
+  crossCheckFloor?: number;
   runId?: string | null;
 }): Promise<Stage2Outcome> {
   const { customPrompt, job, candidate, resume, description, deterministicScore, runId } = params;
@@ -324,7 +325,7 @@ export async function scoreStage2(params: {
     }
     return {
       status: "scored",
-      tier: reconcileTier(result.tier, deterministicScore),
+      tier: reconcileTier(result.tier, deterministicScore, params.crossCheckFloor),
       score: result.score, reason: result.reason, hardGates: result.hardGates,
       inputTokens: inputTokens ?? 0, outputTokens: outputTokens ?? 0,
       provider: providerName, model: model ?? null,
