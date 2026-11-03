@@ -12,6 +12,8 @@ import { query, queryOne, execute } from "@/server/db/neon";
 import { findJobById } from "@/server/repositories/jobsRepository";
 import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
 
+import { resolveJobCaptureTarget } from "@/server/services/jobCaptureStatusService";
+
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const jobSql = `
@@ -33,8 +35,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const job = await queryOne<Record<string, any>>(jobSql, [params.id]);
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+    const { jobStatus } = await resolveJobCaptureTarget(params.id);
     return NextResponse.json({
       ...job,
+      jobStatus,
       applicants: (job.applications ?? []).map((a: any) => ({
         application_id: a.id,
         candidate_id: a.candidates?.id,

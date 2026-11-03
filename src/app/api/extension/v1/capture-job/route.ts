@@ -8,6 +8,8 @@ import { createJob } from "@/server/repositories/jobsRepository";
 import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
+import { cleanCapturedCompany, resolveJobCaptureTarget } from "@/server/services/jobCaptureStatusService";
+
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
     const headerError = checkRequiredHeaders(req);
@@ -33,6 +35,8 @@ export async function POST(request: NextRequest) {
         return extensionError("validation_error", "title, applyUrl, and jdText are required.", 400);
       }
 
+      const employer = cleanCapturedCompany(company, sourceUrl || applyUrl, signals);
+      if (typeof company === "string" && company.trim() && !employer) return extensionError("invalid_employer", "Review the employer name. A navigation label or job board name cannot be saved as the company.", 422);
       const eligibility = detectJobEligibilityRestrictions(String(jdText));
       if (eligibility.eligibilityRestricted && acknowledgeEligibility !== true) {
         return NextResponse.json({
@@ -61,7 +65,7 @@ export async function POST(request: NextRequest) {
       const outcome = await createJob(
         {
           title,
-          company: company ?? null,
+          company: employer,
           location: location ?? null,
           description_text: jdText,
           apply_url: applyUrl,
@@ -80,36 +84,21 @@ export async function POST(request: NextRequest) {
         }
       );
 
-      if (outcome.status === "duplicate") {
-        if (auth.key.owner_user_id) {
-          await recordExtensionActivity({
-            actorUserId: auth.key.owner_user_id,
-            extensionKeyId: auth.key.id,
-            eventType: "job_duplicate",
-            jobId: outcome.existing.id,
-            idempotencyKey: req.headers.get("idempotency-key"),
-            metadata: { title, company: company ?? null, eligibilityAcknowledged: eligibility.eligibilityRestricted },
-          });
-        }
-        return NextResponse.json({
-          jobId: outcome.existing.id,
-          duplicate: true,
-          existingJob: { title: outcome.existing.title, company: outcome.existing.company, createdAt: outcome.existing.created_at },
-        });
-      }
-
+      const captured = outcome.status === "duplicate" ? outcome.existing : outcome.job;
+      const { job: resolved, jobStatus } = await resolveJobCaptureTarget(captured.id);
+      const job = resolved ?? captured;
+      const duplicate = outcome.status === "duplicate" || jobStatus.redirected;
       if (auth.key.owner_user_id) {
         await recordExtensionActivity({
-          actorUserId: auth.key.owner_user_id,
-          extensionKeyId: auth.key.id,
-          eventType: "job_added",
-          jobId: outcome.job.id,
+          actorUserId: auth.key.owner_user_id, extensionKeyId: auth.key.id,
+          eventType: duplicate ? "job_duplicate" : "job_added", jobId: job.id,
           idempotencyKey: req.headers.get("idempotency-key"),
-          metadata: { title, company: company ?? null, eligibilityAcknowledged: eligibility.eligibilityRestricted },
+          metadata: { title, company: employer, eligibilityAcknowledged: eligibility.eligibilityRestricted },
         });
       }
-
-      return NextResponse.json({ jobId: outcome.job.id, duplicate: false, eligibility }, { status: 201 });
+      return NextResponse.json({ jobId: job.id, duplicate, jobStatus, eligibility,
+        existingJob: duplicate ? { title: job.title, company: job.company } : undefined,
+      }, { status: duplicate ? 200 : 201 });
     } catch (err) {
       return extensionError("internal_error", String(err), 500);
     }

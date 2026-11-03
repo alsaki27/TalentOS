@@ -101,4 +101,28 @@ describe("job editing permissions", () => {
     expect(response.status).toBe(403);
     expect(mocks.execute).not.toHaveBeenCalled();
   });
+  it("reports the active original separately from the hidden copy's stored inactive flag", async () => {
+    const canonicalId = "00cfcd73-a337-4fdd-bc4b-777ac893adab";
+    const previous = mocks.queryOne.getMockImplementation()!;
+    mocks.queryOne.mockImplementation(async (sql: string, values: unknown[] = []) => {
+      if (sql.includes("FROM jobs")) return values[0] === jobId
+        ? { ...stored, is_active: false, content_duplicate_of: canonicalId }
+        : { id: canonicalId, title: "Original posting", company: "Original company", is_active: true };
+      return previous(sql, values);
+    });
+    const response = await GET(new NextRequest(`https://talentos.test/api/jobs/${jobId}`), params);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      id: jobId, is_active: false, content_duplicate_of: canonicalId,
+      jobStatus: { state: "active", requestedJobId: jobId, canonicalJobId: canonicalId, redirected: true, sourceAvailability: "unverified" },
+    });
+  });
+
+  it("does not claim an inactive source posting is closed or reactivate its stored record", async () => {
+    stored.is_active = false;
+    const response = await GET(new NextRequest(`https://talentos.test/api/jobs/${jobId}`), params);
+    expect(await response.json()).toMatchObject({ is_active: false, jobStatus: { state: "inactive", redirected: false, sourceAvailability: "unverified" } });
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+
 });

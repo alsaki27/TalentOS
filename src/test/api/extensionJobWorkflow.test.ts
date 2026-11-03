@@ -55,6 +55,8 @@ function makeGetRequest(query = "") {
   });
 }
 
+import { POST as captureOnly } from "@/app/api/extension/v1/capture-job/route";
+
 describe("team extension job workflow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -258,4 +260,55 @@ describe("team extension job workflow", () => {
       status: "logged", matchScore: null, resumeScoreType: "local_resume_relevance", localResumeRelevancePoints: 12,
     });
   });
+  function mockHiddenCopy() {
+    const previous = mocks.queryOne.getMockImplementation()!;
+    const canonicalId = "00cfcd73-a337-4fdd-bc4b-777ac893adab";
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes("FROM jobs")) return params[0] === jobId
+        ? { id: jobId, is_active: false, content_duplicate_of: canonicalId }
+        : { id: canonicalId, is_active: true, title: "GIS Analyst", company: "Northwind", description_text: "Detailed GIS analyst responsibilities" };
+      return previous(sql, params);
+    });
+    return canonicalId;
+  }
+
+  it("loads candidates against the active original when the requested ID is a hidden copy", async () => {
+    const canonicalId = mockHiddenCopy();
+    const response = await GET(makeGetRequest());
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ jobId: canonicalId, jobStatus: { state: "active", redirected: true } });
+    expect(mocks.listCandidates).toHaveBeenCalledWith(canonicalId);
+  });
+
+  it.each([["workflow", POST], ["capture-only", captureOnly]])("returns the active original after %s capture creates a hidden duplicate", async (_name, handler) => {
+    const canonicalId = mockHiddenCopy();
+    const response = await handler(makeRequest({ title: "GIS Analyst", company: "Northwind", applyUrl: "https://jobs.test/job/1", jdText: "A job description with GIS responsibilities." }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ jobId: canonicalId, duplicate: true, jobStatus: { state: "active" } });
+    expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({ jobId: canonicalId, eventType: "job_duplicate" }));
+  });
+
+  it("uses the original job when assigning a candidate from a hidden-copy link", async () => {
+    const canonicalId = mockHiddenCopy();
+    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
+    expect(response.status).toBe(200);
+    expect(mocks.createApplications).toHaveBeenCalledWith([expect.objectContaining({ job_id: canonicalId })]);
+  });
+
+  it("reports a stored inactive job separately from a missing job", async () => {
+    const previous = mocks.queryOne.getMockImplementation()!;
+    mocks.queryOne.mockImplementation(async (sql: string, params: unknown[] = []) => sql.includes("FROM jobs") ? { id: jobId, is_active: false } : previous(sql, params));
+    const response = await GET(makeGetRequest());
+    expect(response.status).toBe(409);
+    expect((await response.json()).error.code).toBe("job_inactive");
+    expect(mocks.listCandidates).not.toHaveBeenCalled();
+  });
+
+  it.each([["workflow", POST], ["capture-only", captureOnly]])("refuses to store Home as the employer through %s capture", async (_name, handler) => {
+    const response = await handler(makeRequest({ title: "Analyst", company: "Home", applyUrl: "https://indeed.com/viewjob?jk=abc", jdText: "Detailed analyst responsibilities" }));
+    expect(response.status).toBe(422);
+    expect((await response.json()).error.code).toBe("invalid_employer");
+    expect(mocks.createJob).not.toHaveBeenCalled();
+  });
+
 });

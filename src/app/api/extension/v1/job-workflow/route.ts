@@ -12,6 +12,8 @@ import { callWithUsageTracking } from "@/lib/ai/routing";
 import { getExtensionCandidateResumeOptions, listExtensionCandidates, validateExtensionResumeMatch } from "@/server/services/extensionJobMatchService";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
+import { cleanCapturedCompany, resolveJobCaptureTarget } from "@/server/services/jobCaptureStatusService";
+
 type CaptureBody = {
   action?: "capture" | "assign";
   title?: string;
@@ -59,21 +61,20 @@ export const GET = withExtensionCors(async (request) => {
 
   const jobId = request.nextUrl.searchParams.get("jobId") || "";
   if (!UUID_RE.test(jobId)) return extensionError("validation_error", "A valid jobId is required.", 400);
-  const job = await queryOne<{ id: string }>(
-    "SELECT id FROM jobs WHERE id = $1 AND COALESCE(is_active, true) = true", [jobId],
-  );
-  if (!job) return extensionError("job_not_found", "The selected job is missing or inactive.", 404);
+  const { job, jobStatus } = await resolveJobCaptureTarget(jobId);
+  if (!job) return extensionError("job_not_found", "This job record was not found in TalentOS.", 404);
+  if (job.is_active === false) return extensionError("job_inactive", "This job is inactive in TalentOS. Its source posting availability has not been verified.", 409, jobStatus);
 
   try {
     const candidateId = request.nextUrl.searchParams.get("candidateId") || "";
     if (candidateId) {
       if (!UUID_RE.test(candidateId)) return extensionError("validation_error", "A valid candidateId is required.", 400);
-      const candidate = await getExtensionCandidateResumeOptions(jobId, candidateId);
-      return NextResponse.json({ candidate });
+      const candidate = await getExtensionCandidateResumeOptions(job.id, candidateId);
+      return NextResponse.json({ candidate, jobId: job.id, jobStatus });
     }
 
     const [candidates, owners] = await Promise.all([
-      listExtensionCandidates(jobId),
+      listExtensionCandidates(job.id),
       query<{ user_id: string; display_name: string | null; email: string; role: string }>(
         `SELECT user_id, display_name, email, role
            FROM profiles
@@ -84,6 +85,7 @@ export const GET = withExtensionCors(async (request) => {
     ]);
     return NextResponse.json({
       candidates,
+      jobId: job.id, jobStatus,
       owners: owners.map((owner) => ({ userId: owner.user_id, name: owner.display_name || owner.email, role: owner.role })),
       assignedBy: keyOwner.display_name || keyOwner.email || "Team member",
       defaultOwnerUserId: keyOwner.user_id,
@@ -122,18 +124,10 @@ export const POST = withExtensionCors(async (request) => {
     if (!body.jobId || !UUID_RE.test(body.jobId) || !Array.isArray(body.selections) || body.selections.length === 0 || body.selections.length > 20) {
       return extensionError("validation_error", "jobId and 1-20 candidate/resume selections are required.", 400);
     }
-    const job = await queryOne<{
-      id: string; title: string; description_text: string | null; raw_description: string | null;
-      eligibility_restricted: boolean | null; requires_citizenship: boolean | null;
-      citizenship_countries: string[] | null; export_control_restricted: boolean | null;
-      eligibility_restriction_evidence: string | null;
-    }>(
-      `SELECT id, title, description_text, raw_description, eligibility_restricted,
-              requires_citizenship, citizenship_countries, export_control_restricted,
-              eligibility_restriction_evidence
-         FROM jobs WHERE id = $1 AND COALESCE(is_active, true) = true`, [body.jobId],
-    );
-    if (!job) return extensionError("job_not_found", "The selected job is missing or inactive.", 404);
+    const { job, jobStatus } = await resolveJobCaptureTarget(body.jobId);
+    if (!job) return extensionError("job_not_found", "This job record was not found in TalentOS.", 404);
+    if (job.is_active === false) return extensionError("job_inactive", "This job is inactive in TalentOS. Its source posting availability has not been verified.", 409, jobStatus);
+    body.jobId = job.id;
     const detectedEligibility = detectJobEligibilityRestrictions([
       job.description_text, job.raw_description, job.eligibility_restriction_evidence,
     ].filter(Boolean).join("\n"));
@@ -356,6 +350,8 @@ export const POST = withExtensionCors(async (request) => {
   if (!body.title?.trim() || !body.applyUrl?.trim() || !body.jdText?.trim()) {
     return extensionError("validation_error", "title, applyUrl, and jdText are required.", 400);
   }
+  const company = cleanCapturedCompany(body.company, body.sourceUrl || body.applyUrl, body.signals);
+  if (body.company?.trim() && !company) return extensionError("invalid_employer", "Review the employer name. A navigation label or job board name cannot be saved as the company.", 422);
   const eligibility = detectJobEligibilityRestrictions(body.jdText);
   if (eligibility.eligibilityRestricted && body.acknowledgeEligibility !== true) {
     return NextResponse.json({ error: { code: "eligibility_ack_required", message: "This posting contains citizenship, clearance, or export-control restrictions. Review and confirm before adding it or logging candidates.", details: eligibility } }, { status: 409 });
@@ -368,7 +364,7 @@ export const POST = withExtensionCors(async (request) => {
   try {
     const outcome = await createJob({
       title: body.title.trim(),
-      company: body.company ?? null,
+      company,
       location: body.location ?? null,
       description_text: body.jdText,
       apply_url: body.applyUrl.trim(),
@@ -384,11 +380,15 @@ export const POST = withExtensionCors(async (request) => {
       signals: Array.isArray(body.signals) ? body.signals.filter((x): x is string => typeof x === "string") : null,
       isRemote: typeof body.isRemote === "boolean" ? body.isRemote : null,
     });
-    const job = outcome.status === "duplicate" ? outcome.existing : outcome.job;
+    const captured = outcome.status === "duplicate" ? outcome.existing : outcome.job;
+    const { job: resolved, jobStatus } = await resolveJobCaptureTarget(captured.id);
+    const job = resolved ?? captured;
+    const duplicate = outcome.status === "duplicate" || jobStatus.redirected;
+
     await recordExtensionActivity({
       actorUserId: auth.key.owner_user_id,
       extensionKeyId: auth.key.id,
-      eventType: outcome.status === "duplicate" ? "job_duplicate" : "job_added",
+      eventType: duplicate ? "job_duplicate" : "job_added",
       jobId: job.id,
       idempotencyKey,
       metadata: { title: body.title, company: body.company ?? null, eligibilityAcknowledged: eligibility.eligibilityRestricted },
@@ -396,13 +396,14 @@ export const POST = withExtensionCors(async (request) => {
 
     return NextResponse.json({
       jobId: job.id,
-      duplicate: outcome.status === "duplicate",
+      duplicate,
+      jobStatus,
       job: { title: job.title, company: job.company },
       eligibility,
       candidateMatching: body.matchCandidates
         ? { status: "ready", message: "Choose an active candidate to see scored base resumes and select an owner." }
         : undefined,
-    }, { status: outcome.status === "duplicate" ? 200 : 201 });
+    }, { status: duplicate ? 200 : 201 });
   } catch (error) {
     return extensionError("internal_error", error instanceof Error ? error.message : String(error), 500);
   }

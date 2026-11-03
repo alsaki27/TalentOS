@@ -28,6 +28,8 @@ interface JobDetail {
   source_url: string | null;
   notes: string | null;
   is_active: boolean;
+  content_duplicate_of?: string | null;
+  jobStatus?: { state: string; canonicalJobId: string | null; redirected: boolean };
   seniority_level: string | null;
   employment_type: string | null;
   applicants_count: number | null;
@@ -226,7 +228,7 @@ export default function JobDetailPage() {
                    {job.work_mode}
                  </span>
                )}
-               {job.is_active ? <span className="badge badge-success" style={{ background: "var(--success)", color: "white", padding: "2px 8px" }}>Active</span> : <span className="badge badge-danger">Inactive</span>}
+               {job.content_duplicate_of && !job.is_active ? <span className="badge badge-warning">Duplicate copy</span> : job.is_active ? <span className="badge badge-success" style={{ background: "var(--success)", color: "white", padding: "2px 8px" }}>Active in TalentOS</span> : <span className="badge badge-danger">Inactive in TalentOS</span>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 12 }}>
@@ -242,6 +244,14 @@ export default function JobDetailPage() {
         </div>
       </div>
 
+      {job.content_duplicate_of && !job.is_active && (
+        <div className="card" style={{ padding: 16, marginBottom: 20 }}>
+          This copy was hidden during duplicate detection. This does not mean the source posting closed.
+          {job.jobStatus?.redirected && job.jobStatus.canonicalJobId && (
+            <> <Link href={`/jobs/${job.jobStatus.canonicalJobId}`}>Open the {job.jobStatus.state === "active" ? "active " : ""}TalentOS job record</Link>.</>
+          )}
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
         <MetricCard icon="💼" label="Employment Type" value={job.employment_type} />
         <MetricCard icon="📈" label="Experience Required" value={job.seniority_level || extractExperience(fullText)} />
