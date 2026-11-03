@@ -34,6 +34,7 @@ export interface CurrentUserContext {
 
 export const ASSIGNMENT_MANAGER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
 export const APPLICATION_WORKER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
+export const JOB_EDITOR_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
 export const MASTER_DATA_MANAGER_ROLES: UserRole[] = ["admin", "manager"];
 export const DESTRUCTIVE_MANAGER_ROLES: UserRole[] = ["admin", "manager"];
 export const FALOOD_REVIEWER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];

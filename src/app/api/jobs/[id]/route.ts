@@ -4,7 +4,7 @@
 // DELETE -> remove a job (cascades to its applications)
 
 import { NextRequest, NextResponse } from "next/server";
-import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { DESTRUCTIVE_MANAGER_ROLES, JOB_EDITOR_ROLES, requireCurrentUser } from "@/lib/auth";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
@@ -49,7 +49,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(JOB_EDITOR_ROLES);
   if (response) return response;
 
   const body = await req.json();
