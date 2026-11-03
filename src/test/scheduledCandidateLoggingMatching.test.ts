@@ -131,27 +131,40 @@ describe("checkStructuredEligibility", () => {
 
 describe("parseEligibilityResponse", () => {
   test("parses valid JSON", () => {
-    const result = parseEligibilityResponse(JSON.stringify({ score: 92, reason: "Strong fit", hard_gates: [] }));
-    expect(result).toEqual({ score: 92, reason: "Strong fit", hardGates: [] });
+    const result = parseEligibilityResponse(JSON.stringify({ tier: "strong", score: 92, reason: "Strong fit", hard_gates: [] }));
+    expect(result).toEqual({ tier: "strong", score: 92, reason: "Strong fit", hardGates: [] });
   });
 
   test("parses markdown-fenced JSON", () => {
-    const result = parseEligibilityResponse("```json\n" + JSON.stringify({ score: 70, reason: "ok", hard_gates: ["x"] }) + "\n```");
+    const result = parseEligibilityResponse("```json\n" + JSON.stringify({ tier: "adjacent", score: 70, reason: "ok", hard_gates: ["x"] }) + "\n```");
+    expect(result.tier).toBe("adjacent");
     expect(result.score).toBe(70);
     expect(result.hardGates).toEqual(["x"]);
+  });
+
+  test("tier is lowercased and trimmed", () => {
+    const result = parseEligibilityResponse(JSON.stringify({ tier: "STRETCH", score: 55, reason: "x", hard_gates: [] }));
+    expect(result.tier).toBe("stretch");
   });
 
   test("unparsable JSON throws an invalid-model-output message", () => {
     expect(() => parseEligibilityResponse("not json")).toThrow(/invalid model output/);
   });
 
+  test("missing/invalid tier throws an invalid-model-output message", () => {
+    expect(() => parseEligibilityResponse(JSON.stringify({ score: 92, reason: "x", hard_gates: [] })))
+      .toThrow(/invalid model output/);
+    expect(() => parseEligibilityResponse(JSON.stringify({ tier: "maybe", score: 92, reason: "x", hard_gates: [] })))
+      .toThrow(/invalid model output/);
+  });
+
   test("out-of-range score throws an invalid-model-output message", () => {
-    expect(() => parseEligibilityResponse(JSON.stringify({ score: 150, reason: "x", hard_gates: [] })))
+    expect(() => parseEligibilityResponse(JSON.stringify({ tier: "strong", score: 150, reason: "x", hard_gates: [] })))
       .toThrow(/invalid model output/);
   });
 
   test("missing reason defaults to a fallback string", () => {
-    const result = parseEligibilityResponse(JSON.stringify({ score: 50, hard_gates: [] }));
+    const result = parseEligibilityResponse(JSON.stringify({ tier: "reject", score: 50, hard_gates: [] }));
     expect(result.reason).toBe("No explanation returned.");
   });
 });

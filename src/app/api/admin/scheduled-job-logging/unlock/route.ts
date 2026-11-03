@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 import {
   createScheduledLoggingSession,
@@ -13,7 +13,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
   try {
     const body = await request.json();
