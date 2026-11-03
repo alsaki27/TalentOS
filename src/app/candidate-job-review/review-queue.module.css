@@ -1,0 +1,299 @@
+.page {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.pageHeader {
+  align-items: flex-start;
+  line-height: 1.6;
+}
+
+.stats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  margin: 16px 0;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 460px);
+  min-width: 0;
+}
+
+.filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+}
+
+.bulkActions,
+.jobLinks,
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bulkActions {
+  margin-left: auto;
+}
+
+.bulkActions button {
+  min-height: 44px;
+}
+
+.bulkLabel {
+  font-size: 12px;
+}
+
+.cards {
+  display: grid;
+  /* A long warning must wrap inside its track instead of widening the page. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.card {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  max-width: 100%;
+  padding: clamp(16px, 2vw, 24px);
+  background: var(--surface);
+  border-color: var(--border);
+  /* Dense, scrolling review cards do not need expensive glass layers. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.cardHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
+.identity {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.metadata,
+.resumeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.metadata > span,
+.resumeRow > span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.resumeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--accent);
+  font-size: 13px;
+  text-align: left;
+}
+
+.alternates {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.scores {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.reason,
+.reviewNote {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.warnings {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.warning svg {
+  margin-top: 2px;
+  color: var(--danger);
+}
+
+.warning span,
+.message span {
+  min-width: 0;
+}
+
+.cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.actions {
+  margin-left: auto;
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  text-decoration: none;
+  white-space: normal;
+}
+
+.action svg,
+.warning svg,
+.resumeToggle svg,
+.message svg {
+  flex-shrink: 0;
+}
+
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.notice {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .bulkActions {
+    margin-left: 0;
+  }
+
+  .cardFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .cardHeader {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scores {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .title {
+    font-size: 16px;
+  }
+
+  .bulkActions {
+    width: 100%;
+  }
+
+  .bulkLabel {
+    flex-basis: 100%;
+  }
+
+  .bulkActions button {
+    flex: 1;
+  }
+}
+
+@media (max-width: 480px) {
+  .filters,
+  .actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+}

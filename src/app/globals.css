@@ -728,6 +728,14 @@ body::before {
   padding: 28px 24px 60px;
 }
 
+/* Review cards need a wider desktop canvas, with phone-sized gutters. */
+.page:has(.candidate-job-review-page) {
+  width: 100%;
+  max-width: 1600px;
+  padding-left: clamp(16px, 2.5vw, 40px);
+  padding-right: clamp(16px, 2.5vw, 40px);
+}
+
 /* Application Queue's table needs ~2000px+ to lay out its 13 columns
    (candidate/job/status/AI pipeline/stage/owner/due + 4 ID columns +
    actions) without an internal horizontal scrollbar on top of the page's

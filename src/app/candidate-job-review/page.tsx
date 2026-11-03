@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, ExternalLink, CheckCircle2, XCircle, Inbox, AlertCircle, RotateCw, ChevronDown, ChevronUp } from "lucide-react";
+import { Loader2, ExternalLink, CheckCircle2, XCircle, Inbox, AlertCircle, AlertTriangle, RotateCw, ChevronDown, ChevronUp } from "lucide-react";
+import styles from "./review-queue.module.css";
 
 interface AlternateResume { resumeId: string; resumeName: string | null; score: number }
 interface ReviewItem {
@@ -137,37 +138,39 @@ export default function CandidateJobReviewPage() {
   const pendingByTier = { strong: 0, adjacent: 0, stretch: 0 };
   for (const item of items) if (item.status === "pending" && item.ai_tier) (pendingByTier as any)[item.ai_tier]++;
 
-  return <div className="page">
-    <div className="page-header">
+  return <div className={`candidate-job-review-page ${styles.page}`}>
+    <div className={`page-header ${styles.pageHeader}`}>
       <div>
         <h1>Review Queue</h1>
         <p className="page-kicker">Scheduled-logging matches and extension-captured candidates wait here for admin/manager approval before a real application is created and the AI resume workflow starts.</p>
       </div>
     </div>
 
-    <div className="stats-strip" style={{ gridTemplateColumns: "repeat(4, minmax(140px, 1fr))" }}>
+    <div className={`stats-strip ${styles.stats}`}>
       {TABS.map((tab) =>
-        <button key={tab.value} className={`stat-button ${status === tab.value ? "active" : ""}`} onClick={() => setStatus(tab.value)}>
+        <button key={tab.value} className={`stat-button ${status === tab.value ? "active" : ""}`} aria-pressed={status === tab.value} onClick={() => setStatus(tab.value)}>
           <span className="stat-label">{tab.label}</span>
           <span className="stat-value">{tab.value === "all" ? totalCount : counts[tab.value]}</span>
         </button>)}
     </div>
 
-    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", margin: "14px 0" }}>
-      <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as any)} style={{ width: "auto" }}>
-        <option value="all">All sources</option>
-        <option value="scheduled_logging">Scheduled logging</option>
-        <option value="extension">Extension</option>
-      </select>
-      <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value as any)} style={{ width: "auto" }}>
-        <option value="all">All tiers</option>
-        <option value="strong">Strong</option>
-        <option value="adjacent">Adjacent</option>
-        <option value="stretch">Stretch</option>
-        <option value="unscored">AI unavailable (ATS only)</option>
-      </select>
-      {status === "pending" && <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
-        <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>Bulk approve:</span>
+    <div className={styles.toolbar}>
+      <div className={styles.filters}>
+        <select aria-label="Filter by source" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as any)}>
+          <option value="all">All sources</option>
+          <option value="scheduled_logging">Scheduled logging</option>
+          <option value="extension">Extension</option>
+        </select>
+        <select aria-label="Filter by AI tier" value={tierFilter} onChange={(e) => setTierFilter(e.target.value as any)}>
+          <option value="all">All tiers</option>
+          <option value="strong">Strong</option>
+          <option value="adjacent">Adjacent</option>
+          <option value="stretch">Stretch</option>
+          <option value="unscored">AI unavailable (ATS only)</option>
+        </select>
+      </div>
+      {status === "pending" && <div className={styles.bulkActions}>
+        <span className={`muted ${styles.bulkLabel}`}>Bulk approve:</span>
         <button className="btn-secondary" disabled={bulkBusy || !pendingByTier.strong} onClick={() => void bulkApprove(["strong"])}>
           Strong{pendingByTier.strong ? ` (${pendingByTier.strong})` : ""}
         </button>
@@ -177,11 +180,11 @@ export default function CandidateJobReviewPage() {
       </div>}
     </div>
 
-    {error && <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, borderColor: "var(--danger)", color: "var(--danger)", marginBottom: 16, fontSize: 13.5 }}>
-      <AlertCircle size={16} style={{ flexShrink: 0 }} /> {error}
+    {error && <div role="alert" className={`card ${styles.message} ${styles.error}`}>
+      <AlertCircle size={16} /> <span>{error}</span>
     </div>}
-    {notice && <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, borderColor: "var(--accent)", color: "var(--accent)", marginBottom: 16, fontSize: 13.5 }}>
-      <CheckCircle2 size={16} style={{ flexShrink: 0 }} /> {notice}
+    {notice && <div role="status" className={`card ${styles.message} ${styles.notice}`}>
+      <CheckCircle2 size={16} /> <span>{notice}</span>
     </div>}
 
     {loading
@@ -197,35 +200,33 @@ export default function CandidateJobReviewPage() {
               {status === "pending" ? "Nothing is waiting on review right now." : "Nothing to show for this filter yet."}
             </p>
           </div>
-        : <div style={{ display: "grid", gap: 14 }}>
+        : <div className={styles.cards}>
             {visibleItems.map((item) => {
               const isExpanded = expanded.has(item.id);
               const alternates = (item.alternate_resumes || []).filter((r) => r.resumeId !== item.base_resume_id);
-              return <section className="card" key={item.id} style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 16 }}>
+              return <section className={`card ${styles.card}`} key={item.id} aria-labelledby={`review-title-${item.id}`}>
+                <div className={styles.cardHeader}>
+                  <div className={styles.identity}>
+                    <h2 id={`review-title-${item.id}`} className={styles.title}>
                       {item.candidate_name} <span className="muted" style={{ fontWeight: 500 }}>→</span> {item.job_title}
-                    </div>
-                    <div className="muted" style={{ fontSize: 13, marginTop: 4, display: "flex", flexWrap: "wrap", gap: "2px 8px" }}>
+                    </h2>
+                    <div className={`muted ${styles.metadata}`}>
                       <span>{item.company || "Unknown company"}</span>
-                      <span aria-hidden="true">·</span>
                       <span className="badge">{SOURCE_LABEL[item.source]}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>Queued {formatDate(item.created_at)}</span>
-                      {item.assigned_to_name && <><span aria-hidden="true">·</span><span>Owner: {item.assigned_to_name}</span></>}
+                      <span>Queued <time dateTime={item.created_at}>{formatDate(item.created_at)}</time></span>
+                      {item.assigned_to_name && <span>Owner: {item.assigned_to_name}</span>}
                     </div>
-                    <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
-                      Resume: {item.base_resume_name || "Unavailable"}
-                      {alternates.length > 0 && <button style={{ marginLeft: 8, fontSize: 12, background: "none", border: 0, color: "var(--accent)", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 2, padding: 0 }} onClick={() => toggleExpanded(item.id)}>
-                        {alternates.length} other resume{alternates.length === 1 ? "" : "s"} scored {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    <div className={`muted ${styles.resumeRow}`}>
+                      <span>Resume: {item.base_resume_name || "Unavailable"}</span>
+                      {alternates.length > 0 && <button className={styles.resumeToggle} aria-expanded={isExpanded} aria-controls={`review-resumes-${item.id}`} onClick={() => toggleExpanded(item.id)}>
+                        {alternates.length} other resume{alternates.length === 1 ? "" : "s"} scored {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                       </button>}
                     </div>
-                    {isExpanded && alternates.length > 0 && <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 12.5 }} className="muted">
+                    {isExpanded && alternates.length > 0 && <ul id={`review-resumes-${item.id}`} className={`muted ${styles.alternates}`}>
                       {alternates.map((alt) => <li key={alt.resumeId}>{alt.resumeName || "Untitled resume"} — {alt.score}/100</li>)}
                     </ul>}
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
+                  <div className={styles.scores}>
                     <span className="badge" style={{ fontSize: 12.5 }}>ATS {item.ats_score ?? "—"}</span>
                     {item.ai_status === "scored" && item.ai_tier && <span className={`badge ${TIER_BADGE_CLASS[item.ai_tier]}`} style={{ fontSize: 13, padding: "6px 12px" }}>
                       {TIER_LABEL[item.ai_tier]}{item.ai_score != null ? ` · ${item.ai_score}` : ""}
@@ -237,32 +238,34 @@ export default function CandidateJobReviewPage() {
                   </div>
                 </div>
 
-                {item.ai_reason && <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>{item.ai_reason}</p>}
-                {!item.ai_reason && item.ai_status === "failed" && <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                {item.ai_reason && <p className={styles.reason}>{item.ai_reason}</p>}
+                {!item.ai_reason && item.ai_status === "failed" && <p className={`muted ${styles.reason}`}>
                   AI eligibility check could not complete: {item.ai_failure_reason || "unknown error"}. Showing the ATS score only — approve on that basis, or retry the AI check below.
                 </p>}
 
-                {item.hard_gates?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                  {item.hard_gates.map((gate, i) => <span key={i} className="badge badge-danger" style={{ fontSize: 12 }}>⚠ {gate}</span>)}
-                </div>}
+                {item.hard_gates?.length > 0 && <ul className={styles.warnings} aria-label="Eligibility warnings">
+                  {item.hard_gates.map((gate, i) => <li key={i} className={styles.warning}><AlertTriangle size={16} aria-hidden="true" /><span>{gate}</span></li>)}
+                </ul>}
 
-                {item.status === "rejected" && item.review_note && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>
+                {item.status === "rejected" && item.review_note && <p className={`muted ${styles.reviewNote}`}>
                   Rejected by {item.reviewed_by_name || "a reviewer"}{item.reviewed_at ? ` on ${formatDate(item.reviewed_at)}` : ""}: {item.review_note}
                 </p>}
 
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", paddingTop: 12, marginTop: 2, borderTop: "1px solid var(--border)" }}>
-                  {item.apply_url && <a className="btn-secondary" href={item.apply_url} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <ExternalLink size={14} /> Open job
-                  </a>}
-                  {item.application_id && <Link className="btn-primary" href="/application-queue">View application</Link>}
-                  {item.status === "pending" && <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
-                    {item.ai_status === "failed" && <button className="btn-secondary" disabled={busy === item.id} onClick={() => void retryAi(item.id)} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <div className={styles.cardFooter}>
+                  <div className={styles.jobLinks}>
+                    {item.apply_url && <a className={`btn-secondary ${styles.action}`} href={item.apply_url} target="_blank" rel="noreferrer">
+                      <ExternalLink size={14} /> Open job
+                    </a>}
+                    {item.application_id && <Link className={`btn-primary ${styles.action}`} href="/application-queue">View application</Link>}
+                  </div>
+                  {item.status === "pending" && <div className={styles.actions}>
+                    {item.ai_status === "failed" && <button className={`btn-secondary ${styles.action}`} disabled={busy === item.id} onClick={() => void retryAi(item.id)}>
                       {busy === item.id ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />} Retry AI check
                     </button>}
-                    <button className="btn-secondary" disabled={busy === item.id} onClick={() => void decide(item.id, "reject")} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <button className={`btn-secondary ${styles.action}`} disabled={busy === item.id} onClick={() => void decide(item.id, "reject")}>
                       <XCircle size={14} /> Reject
                     </button>
-                    <button className="btn-primary" disabled={busy === item.id} onClick={() => void decide(item.id, "approve")} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <button className={`btn-primary ${styles.action}`} disabled={busy === item.id} onClick={() => void decide(item.id, "approve")}>
                       {busy === item.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Approve & start AI workflow
                     </button>
                   </div>}
