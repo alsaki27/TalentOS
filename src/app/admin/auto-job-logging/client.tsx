@@ -187,13 +187,14 @@ export default function AutoJobLoggingPage() {
     }
   }, [hasUnsavedChanges]);
 
+  const hasPageData = Boolean(pageData);
   useEffect(() => {
-    if (!pageData) return;
+    if (!hasPageData) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refreshPageInBackground();
     }, 30_000);
     return () => window.clearInterval(timer);
-  }, [Boolean(pageData), refreshPageInBackground]);
+  }, [hasPageData, refreshPageInBackground]);
 
   const visibleCandidates = useMemo(() => {
     const candidates = pageData?.candidates ?? [];
@@ -329,7 +330,7 @@ export default function AutoJobLoggingPage() {
   };
 
   const runNow = async () => {
-    const confirmed = window.confirm("Run a batch now? This may create standard TalentOS application records and start their existing resume workflow.");
+    const confirmed = window.confirm("Run a batch now? Matches will be scored and queued for human review. Applications and resume workflows start only after approval in the Review Queue.");
     if (!confirmed) return;
     setBusy(true); setPageError(""); setNotice(""); setRunResult(null);
     try {
@@ -381,7 +382,7 @@ export default function AutoJobLoggingPage() {
         <div>
           <p className={styles.eyebrow}>AUTOMATED SOURCING · ADMIN ONLY</p>
           <h1>Scheduled candidate logging</h1>
-          <p className={styles.subhead}>Review scheduled-source jobs, match draft or approved base resumes, then create normal TalentOS applications.</p>
+          <p className={styles.subhead}>Review scheduled-source jobs, match draft or approved base resumes, then queue matches for human approval.</p>
         </div>
         <div className={styles.headerActions}>
           <button className={styles.secondaryButton} onClick={() => setShowPasswordChange(true)}><KeyRound size={16} /> Change passphrase</button>
@@ -401,7 +402,7 @@ export default function AutoJobLoggingPage() {
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Clock3 size={18} /></span><div><small>Target schedule</small><strong>Daily · 5:00 AM BDT</strong><p>GitHub Actions · 23:00 UTC</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><BriefcaseBusiness size={18} /></span><div><small>Scheduled jobs waiting</small><strong>{pendingJobs}</strong><p>{pageData.scheduledSources.length} source group{pageData.scheduledSources.length === 1 ? "" : "s"}</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Users size={18} /></span><div><small>Active applying candidates</small><strong>{configuredCount} / {applyingCandidateCount}</strong><p>Only active candidates in the applying stage</p></div></article>
-        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>Stage 1 {config.match_threshold}% · Stage 2 {config.ai_match_threshold}%</p></div></article>
+        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>ATS floor {config.match_threshold}% · AI tier cross-check {config.ai_match_threshold}%</p></div></article>
       </section>
 
       {runResult && <section className={styles.runResult} aria-live="polite"><div><strong>Latest run · {runResult.status ?? (runResult.skipped ? "skipped" : "complete")}</strong><p>{runResult.reason ?? `${runResult.jobsSeen ?? 0} jobs checked · ${runResult.candidatePairsScored ?? 0} sent to Stage 2 AI · ${runResult.queuedForReview ?? 0} queued for review · ${runResult.failedCount ?? 0} failed`}</p></div><span>{runResult.aiCalls ?? 0} separate AI calls</span></section>}

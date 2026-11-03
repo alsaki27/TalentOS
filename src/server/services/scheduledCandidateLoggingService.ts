@@ -22,6 +22,7 @@ interface LoggingConfig {
   // Stage-1 noise floor (0-100, default 30) - not a fit-quality pass bar.
   // See migration 132.
   match_threshold: number;
+  ai_match_threshold: number;
   jobs_per_run: number;
   ai_calls_per_run: number;
   // Max items queued for human review per run (migration 132 repurposed
@@ -199,6 +200,7 @@ export async function runScheduledCandidateLogging(options: {
      RETURNING *`,
     [runKey, options.triggerType, JSON.stringify({
       threshold: config.match_threshold,
+      aiTierCrossCheckFloor: config.ai_match_threshold,
       jobsPerRun: config.jobs_per_run,
       aiCallsPerRun: config.ai_calls_per_run, maxQueuedPerRun: config.max_applications_per_run,
       jobFreshnessDays: config.job_freshness_days,
@@ -220,8 +222,16 @@ export async function runScheduledCandidateLogging(options: {
   let queuedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
+  let jobsSeen = 0;
   let pending = false;
   let currentEventId: string | null = null;
+  const persistProgress = () => query(
+    `UPDATE scheduled_candidate_logging_runs SET jobs_seen = $2, candidate_pairs_scored = $3,
+        applications_created = $4, skipped_count = $5, failed_count = $6,
+        ai_calls = $7, input_tokens = $8, output_tokens = $9
+      WHERE id = $1 AND status = 'running'`,
+    [run.id, jobsSeen, pairCount, queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens],
+  );
   try {
     const jobs = await query<IngestedJob>(
       `SELECT e.id AS event_id, e.job_id, e.source, e.ingested_at,
@@ -251,10 +261,12 @@ export async function runScheduledCandidateLogging(options: {
         [job.event_id],
       );
       if (!claimed) continue;
+      jobsSeen++;
       currentEventId = job.event_id;
       if (!job.is_active) {
         await query("UPDATE scheduled_job_ingestion_events SET processing_status = 'complete', updated_at = NOW(), last_error = 'Job is inactive' WHERE id = $1", [job.event_id]);
         skippedCount++;
+        await persistProgress();
         currentEventId = null;
         continue;
       }
@@ -323,7 +335,7 @@ export async function runScheduledCandidateLogging(options: {
         pairCount++;
         const stage2 = await scoreStage2({
           customPrompt: config.custom_prompt, job: scoringJob, candidate, resume: stage1.bestResume,
-          description, deterministicScore: stage1.bestScore, runId: run.id,
+          description, deterministicScore: stage1.bestScore, crossCheckFloor: config.ai_match_threshold, runId: run.id,
         });
 
         if (stage2.status === "failed") {
@@ -378,6 +390,9 @@ export async function runScheduledCandidateLogging(options: {
       } else {
         await query("UPDATE scheduled_job_ingestion_events SET processing_status = 'complete', updated_at = NOW(), last_error = NULL WHERE id = $1", [job.event_id]);
       }
+      // The Activity page polls while this request is still running. Persist
+      // completed-job counters so a slow AI batch does not appear idle.
+      await persistProgress();
       currentEventId = null;
     }
 
@@ -387,9 +402,9 @@ export async function runScheduledCandidateLogging(options: {
           candidate_pairs_scored = $4, applications_created = $5, skipped_count = $6,
           failed_count = $7, ai_calls = $8, input_tokens = $9, output_tokens = $10,
           finished_at = NOW() WHERE id = $1`,
-      [run.id, status, jobs.length, pairCount, queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens],
+      [run.id, status, jobsSeen, pairCount, queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens],
     );
-    return { runId: run.id, status, jobsSeen: jobs.length, candidatePairsScored: pairCount,
+    return { runId: run.id, status, jobsSeen, candidatePairsScored: pairCount,
       queuedForReview: queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens, pending };
   } catch (error) {
     if (currentEventId) {

@@ -188,18 +188,52 @@ describe("runScheduledCandidateLogging", () => {
     expect(mocks.scoreStage1).not.toHaveBeenCalled();
   });
 
-  it("still filters a scheduled pairing below 30 without an AI call or review item", async () => {
-    wireQueryOne({ config: baseConfig({ match_threshold: 30 }) });
+  function wireSingleCandidate(config = baseConfig(), jobs = [job()]) {
+    wireQueryOne({ config });
     mocks.query.mockImplementation(async (sql: string) => {
-      if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return [job()];
+      if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return jobs;
       if (sql.includes("FROM candidates c")) return [candidateRow(candidateAId)];
-      if (sql.includes("FROM base_resumes WHERE candidate_id")) return [resumeRow(resumeAId, candidateAId)];
+      if (sql.includes("FROM base_resumes WHERE candidate_id")) return [resumeRow(resumeAId, candidateAId, { status: "draft" })];
       return [];
     });
+    mocks.scoreStage1.mockReturnValue({ bestResume: resumeRow(resumeAId, candidateAId), bestScore: 30, hardGates: [], rankedResumes: [] });
+    mocks.scoreStage2.mockResolvedValue({ status: "scored", tier: "strong", score: 80, reason: "Fit", hardGates: [],
+      provider: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5 });
+  }
+
+  it("spends no AI tokens on a pair below the saved Stage 1 floor", async () => {
+    wireSingleCandidate();
     mocks.scoreStage1.mockReturnValue({ bestResume: resumeRow(resumeAId, candidateAId), bestScore: 29, hardGates: [], rankedResumes: [] });
     const result = await runScheduledCandidateLogging({ triggerType: "manual" });
     expect(result).toMatchObject({ aiCalls: 0, queuedForReview: 0, skippedCount: 1 });
     expect(mocks.scoreStage2).not.toHaveBeenCalled();
-    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.anything());
+  });
+
+  it("admits the exact ATS boundary, draft resumes, and the saved AI cross-check floor", async () => {
+    wireSingleCandidate(baseConfig({ ai_match_threshold: 30 }));
+    const result = await runScheduledCandidateLogging({ triggerType: "manual" });
+    expect(result).toMatchObject({ aiCalls: 1, queuedForReview: 1 });
+    expect(mocks.scoreStage2).toHaveBeenCalledWith(expect.objectContaining({ deterministicScore: 30, crossCheckFloor: 30 }));
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("status IN ('draft', 'approved')"), expect.any(Array));
+    const progress = mocks.query.mock.calls.find(([sql]) => sql.includes("WHERE id = $1 AND status = 'running'"));
+    expect(progress?.[1]).toEqual([runId, 1, 1, 1, 0, 0, 1, 10, 5]);
+  });
+
+  it.each(["ai_calls_per_run", "max_applications_per_run"])("obeys %s without spending AI on deferred jobs", async cap => {
+    wireSingleCandidate(baseConfig({ [cap]: 1 }), [job(), job({ event_id: "second-event", job_id: "second-job" })]);
+    const result = await runScheduledCandidateLogging({ triggerType: "manual" });
+    expect(result).toMatchObject({ status: "partial", aiCalls: 1, queuedForReview: 1, pending: true });
+    expect(mocks.scoreStage2).toHaveBeenCalledTimes(1);
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status = 'pending'"), ["second-event"]);
+  });
+
+  it("does not score a job claimed by another batch", async () => {
+    wireSingleCandidate();
+    const previous = mocks.queryOne.getMockImplementation()!;
+    mocks.queryOne.mockImplementation((sql: string, params: unknown[]) => sql.includes("UPDATE scheduled_job_ingestion_events") ? null : previous(sql, params));
+    const result = await runScheduledCandidateLogging({ triggerType: "manual" });
+    expect(result.jobsSeen).toBe(0);
+    expect(mocks.scoreStage1).not.toHaveBeenCalled();
+    expect(mocks.scoreStage2).not.toHaveBeenCalled();
   });
 });
