@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
 import { hasScheduledLoggingSession } from "@/server/security/scheduledCandidateLoggingAuth";
 import { runScheduledCandidateLogging } from "@/server/services/scheduledCandidateLoggingService";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 export async function POST(_request: NextRequest) {
-  const auth = await requireCurrentUser(["admin"]);
+  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (auth.response) return auth.response;
   if (!(await hasScheduledLoggingSession(auth.context.profile.user_id))) {
     return NextResponse.json({ error: "Unlock the scheduled logging page first." }, { status: 423 });

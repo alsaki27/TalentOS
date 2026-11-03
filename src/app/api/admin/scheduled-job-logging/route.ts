@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth";
+import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 import { encryptSecret, fingerprintKey } from "@/server/security/secretCrypto";
 import { hasScheduledLoggingSession } from "@/server/security/scheduledCandidateLoggingAuth";
@@ -12,7 +12,7 @@ const VALID_PROVIDERS = new Set([
 ]);
 
 async function requireUnlockedAdmin() {
-  const auth = await requireCurrentUser(["admin"]);
+  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (auth.response) return { response: auth.response, userId: null };
   if (!(await hasScheduledLoggingSession(auth.context.profile.user_id))) {
     return { response: NextResponse.json({ error: "Unlock the scheduled logging page first." }, { status: 423 }), userId: null };
@@ -21,7 +21,7 @@ async function requireUnlockedAdmin() {
 }
 
 export async function GET() {
-  const auth = await requireCurrentUser(["admin"]);
+  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (auth.response) return auth.response;
   try {
     const config = await queryOne<any>(

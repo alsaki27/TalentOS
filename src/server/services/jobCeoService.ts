@@ -374,7 +374,15 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0, skipped: 0 };
   const runMetadata = await findRunById(runId);
-  const isScheduledRun = ["scheduled", "schedule"].includes(String(runMetadata?.trigger_type ?? "").toLowerCase());
+  // The real, live Job CEO automation never actually sets trigger_type to
+  // "scheduled"/"schedule" (that was a naming assumption from when this gate
+  // was written, not what the ingest route emits) - it uses "cron",
+  // "recovery_retry", "job_agent_nightly", or "job_agent_import". This list
+  // is every automated-discovery trigger type; only "manual" (an admin
+  // forcing a one-off run) is excluded, matching this gate's own stated
+  // purpose below.
+  const AUTOMATED_TRIGGER_TYPES = ["cron", "recovery_retry", "job_agent_nightly", "job_agent_import", "scheduled", "schedule"];
+  const isScheduledRun = AUTOMATED_TRIGGER_TYPES.includes(String(runMetadata?.trigger_type ?? "").toLowerCase());
 
   // The Matchmaker agent is also the manual control for candidate assignment.
   // When it is disabled in the AI Control Centre, keep ingesting/logging jobs but

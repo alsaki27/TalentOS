@@ -209,6 +209,7 @@
 .decisionStatus { padding: 6px 8px; border: 1px solid #34415b; border-radius: 8px; color: #c4cde0; background: #171f31; text-align: center; text-transform: capitalize; font-size: 10px; font-weight: 750; }
 .status_application_created { border-color: #286148; color: #92e8b9; background: #13271f; }
 .status_matched { border-color: #286148; color: #9be5c1; background: #13271f; }
+.status_pending_review { border-color: #384472; color: #c0c4ff; background: #171f31; }
 .status_below_threshold, .status_ineligible, .status_existing_application { border-color: #65502c; color: #e9cb8e; background: #272316; }
 .status_ai_failed, .status_description_unavailable { border-color: #693c4b; color: #f2a1a8; background: #291c27; }
 .decisionReason { grid-column: 1 / -1; margin: -3px 0 0; color: #93a2be; font-size: 11px; line-height: 1.45; }

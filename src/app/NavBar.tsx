@@ -17,6 +17,7 @@ interface Notifications {
   queue: { overdue: number; pendingReview: number; urgent: number };
   followUps: { due: number };
   inbox?: { pendingApprovals: number; needsReply: number };
+  candidateJobReview?: { pending: number };
 }
 
 function SkarionLogo({ size = 22 }: { size?: number }) {
@@ -95,6 +96,10 @@ export default function NavBar() {
   const canCo      = ["admin", "manager"].includes(role);
   const isAdmin    = role === "admin";
   const canSources = ["admin", "manager"].includes(role);
+  // Scheduled Candidate Logging and the Review Queue are both admin/manager
+  // only (narrower than canSources/canCo, which happen to be the same
+  // check today - named separately since they gate a different feature).
+  const canReviewJobs = ["admin", "manager"].includes(role);
 
   const rawName   = me?.profile.display_name || me?.profile.email || "User";
   const firstName = rawName.includes(" ") ? rawName.split(" ")[0] : rawName;
@@ -143,11 +148,15 @@ export default function NavBar() {
       href: "/application-queue", label: "App Queue", show: true, bc: "badge-danger",
       badge: notifications ? notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent : 0,
     },
-    { href: "/follow-ups", label: "Follow-ups", show: true, badge: notifications?.followUps.due ?? 0, bc: "badge-warn" },
+    {
+      href: "/candidate-job-review", label: "Review Queue", show: canReviewJobs, bc: "badge-accent",
+      badge: notifications?.candidateJobReview?.pending ?? 0,
+    },
     { href: "/inbox",      label: "Inbox",      show: true, badge: notifications?.inbox?.pendingApprovals ?? 0, bc: "badge-accent" },
   ].filter(l => l.show);
 
   const more = [
+    { href: "/follow-ups",            label: "Follow-ups",            show: true },
     { href: "/communications/inbox",  label: "Communications",        show: true },
     { href: "/analytics",             label: "Analytics",             show: true },
     { href: "/chat",                  label: "Assistant",             show: true },
@@ -164,7 +173,7 @@ export default function NavBar() {
     { href: "/admin/ai",              label: "AI Control Center",     show: isAdmin },
     { href: "/admin/extension-keys",  label: "Extension API Keys",    show: isAdmin },
     { href: "/admin/extension-reports", label: "Team Activity Reports", show: isAdmin },
-    { href: "/admin/auto-job-logging", label: "Scheduled Candidate Logging", show: isAdmin },
+    { href: "/admin/auto-job-logging", label: "Scheduled Candidate Logging", show: canReviewJobs },
     { href: "/ats-score",             label: "ATS Score Analysis",    show: true },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team",                  label: "Team",                  show: isAdmin },

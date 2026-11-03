@@ -60,6 +60,16 @@ export async function GET(req: NextRequest) {
        WHERE ai.status IN ('open', 'in_progress')`
     );
 
+    // Feeds the NavBar's Review Queue badge - admin/manager only, matching
+    // that page's own access (application_engineers never see this count).
+    let reviewQueuePending = 0;
+    if (context.profile.role === "admin" || context.profile.role === "manager") {
+      const reviewRow = await queryOne<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM candidate_job_review_queue WHERE status = 'pending'",
+      ).catch(() => null);
+      reviewQueuePending = reviewRow?.count ?? 0;
+    }
+
     return NextResponse.json({
       queue: {
         total: visibleQueue.length,
@@ -73,6 +83,9 @@ export async function GET(req: NextRequest) {
       inbox: {
         pendingApprovals: inboxRow?.pending_approvals ?? 0,
         needsReply: inboxRow?.needs_reply ?? 0,
+      },
+      candidateJobReview: {
+        pending: reviewQueuePending,
       },
     });
   }
