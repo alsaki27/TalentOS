@@ -557,7 +557,7 @@ export default function AutoJobLoggingPage() {
       </section>
 
       <section className={styles.panel}>
-        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>Stage 1 is a low keyword/ATS noise floor, not a fit-quality gate; Stage 2 is the AI Strong/Adjacent/Stretch tiering that runs for Stage-1 passers. A "pending review" pair is sitting in the <Link href="/candidate-job-review">Review Queue</Link> awaiting admin/manager approval — nothing here creates a real application automatically.</p></div></div><strong className={styles.countTag}>{visibleDecisions.length} {selectedRunId ? "for this run" : "recent"}</strong></div>
+        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>Stage 1 is a low keyword/ATS noise floor, not a fit-quality gate; Stage 2 is the AI Strong/Adjacent/Stretch tiering that runs for Stage-1 passers. A "pending review" pair is sitting in the <Link href="/candidate-job-review">Review Queue</Link> awaiting approval by an Application Engineer, manager or admin — nothing here creates a real application automatically.</p></div></div><strong className={styles.countTag}>{visibleDecisions.length} {selectedRunId ? "for this run" : "recent"}</strong></div>
         {selectedRun && <div className={styles.filterBanner}>
           <span>Showing decisions from the <strong>{selectedRun.trigger_type.replaceAll("_", " ")} · {selectedRun.status}</strong> run started {displayDate(selectedRun.started_at)}.</span>
           <button type="button" onClick={() => setSelectedRunId(null)}>Show all recent decisions</button>

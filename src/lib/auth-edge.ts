@@ -8,6 +8,9 @@ export type UserRole = "admin" | "manager" | "application_engineer";
 export type LegacyUserRole = UserRole | "recruiter" | "reviewer";
 
 export const ALL_USER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
+// Review decisions are shared by staff; this does not grant access to
+// scheduled-logging configuration or other master-data management.
+export const CANDIDATE_JOB_REVIEW_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
 
 function isUserRole(role: string): role is UserRole {
   return ALL_USER_ROLES.includes(role as UserRole);

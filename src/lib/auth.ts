@@ -7,6 +7,7 @@ import type { UserRole } from "@/lib/auth-edge";
 
 export {
   ALL_USER_ROLES,
+  CANDIDATE_JOB_REVIEW_ROLES,
   canAccessPath,
   getDefaultRouteForRole,
   getRoleLabel,

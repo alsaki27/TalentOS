@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
+import { requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { approveReviewItem } from "@/server/services/candidateJobReviewQueueService";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(_request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const auth = await requireCurrentUser(CANDIDATE_JOB_REVIEW_ROLES);
   if (auth.response) return auth.response;
   try {
     const result = await approveReviewItem(params.id, auth.context.profile.user_id);

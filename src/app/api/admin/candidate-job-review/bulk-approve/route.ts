@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
+import { requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { bulkApproveByTier } from "@/server/services/candidateJobReviewQueueService";
 import {parseCandidateReviewFilters} from "@/lib/candidateReviewFilters";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 const VALID_TIERS = ["strong", "adjacent", "stretch"];
 
 export async function POST(request: NextRequest) {
-  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const auth = await requireCurrentUser(CANDIDATE_JOB_REVIEW_ROLES);
   if (auth.response) return auth.response;
   try {
     const body = await request.json().catch(() => ({}));

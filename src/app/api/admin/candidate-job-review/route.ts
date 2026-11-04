@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
+import { requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { query } from "@/server/db/neon";
 import { parseCandidateReviewFilters, candidateReviewFilterSql } from "@/lib/candidateReviewFilters";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const auth = await requireCurrentUser(CANDIDATE_JOB_REVIEW_ROLES);
   if (auth.response) return auth.response;
 
   let filters;
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
         ORDER BY c.name,c.id`, [["applying","not_started","paused"]]),
       query<{id:string; name:string; role:string}>(`SELECT p.user_id AS id,COALESCE(NULLIF(BTRIM(p.display_name),''),'Unnamed staff') AS name,p.role
         FROM profiles p WHERE p.is_active = true AND p.role = ANY($1::text[])
-        ORDER BY name,id`, [MASTER_DATA_MANAGER_ROLES]),
+        ORDER BY name,id`, [CANDIDATE_JOB_REVIEW_ROLES]),
     ]);
     const countsByStatus = { pending: 0, approved: 0, rejected: 0 };
     for (const row of counts) if (row.status in countsByStatus) (countsByStatus as any)[row.status] = row.count;

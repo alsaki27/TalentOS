@@ -3,7 +3,7 @@
 // POST -> create a notification (internal use)
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUserContext, requireCurrentUser } from "@/lib/auth";
+import { getCurrentUserContext, requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -60,10 +60,10 @@ export async function GET(req: NextRequest) {
        WHERE ai.status IN ('open', 'in_progress')`
     );
 
-    // Feeds the NavBar's Review Queue badge - admin/manager only, matching
-    // that page's own access (application_engineers never see this count).
+    // Match Review Queue access; AE application/follow-up counts above
+    // retain their existing owner scope.
     let reviewQueuePending = 0;
-    if (context.profile.role === "admin" || context.profile.role === "manager") {
+    if (CANDIDATE_JOB_REVIEW_ROLES.includes(context.profile.role)) {
       const reviewRow = await queryOne<{ count: number }>(
         "SELECT COUNT(*)::int AS count FROM candidate_job_review_queue WHERE status = 'pending'",
       ).catch(() => null);

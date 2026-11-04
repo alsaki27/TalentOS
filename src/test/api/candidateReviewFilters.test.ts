@@ -1,7 +1,7 @@
 import {beforeEach,describe,expect,it,vi} from "vitest";
 import {NextRequest,NextResponse} from "next/server";
 const mocks=vi.hoisted(()=>({auth:vi.fn(),query:vi.fn(),bulk:vi.fn()}));
-vi.mock("@/lib/auth",()=>({requireCurrentUser:mocks.auth,MASTER_DATA_MANAGER_ROLES:["admin","manager"]}));
+vi.mock("@/lib/auth",()=>({requireCurrentUser:mocks.auth,CANDIDATE_JOB_REVIEW_ROLES:["admin","manager","application_engineer"]}));
 vi.mock("@/server/db/neon",()=>({query:mocks.query}));
 vi.mock("@/server/services/candidateJobReviewQueueService",()=>({bulkApproveByTier:mocks.bulk}));
 import {GET} from "@/app/api/admin/candidate-job-review/route";
@@ -31,9 +31,9 @@ describe("Review Queue filtered API and bulk approval",()=>{
     expect(items[0].indexOf("q.candidate_id =")).toBeLessThan(items[0].indexOf("LIMIT"));
     expect(data.filterOptions).toEqual({candidates:[{id:candidate,name:"Candidate",pipeline_stage:"applying"}],staff:[{id:staff,name:"Owner",role:"admin"}]});
   });
-  it("loads the full candidate and active manager rosters independently of matching review items",async()=>{
+  it("loads full candidate and active reviewer rosters independently of matching review items",async()=>{
     const candidates=["applying","not_started","paused"].map((pipeline_stage,i)=>({id:`candidate-${i}`,name:`Candidate ${i}`,pipeline_stage}));
-    const staffOptions=[{id:"admin-without-reviews",name:"Administrator",role:"admin"},{id:"manager-without-reviews",name:"Manager",role:"manager"}];
+    const staffOptions=[{id:"admin-without-reviews",name:"Administrator",role:"admin"},{id:"manager-without-reviews",name:"Manager",role:"manager"},{id:"ae-without-reviews",name:"Application Engineer",role:"application_engineer"}];
     mocks.query.mockImplementation(async text=>text.includes("FROM candidates c WHERE")?candidates
       :text.includes("FROM profiles p WHERE")?staffOptions:[]);
     const response=await GET(request({candidate_id:candidate,staff_id:staff,source:"extension",tier:"strong"}));
@@ -43,7 +43,7 @@ describe("Review Queue filtered API and bulk approval",()=>{
     const candidateOptions=mocks.query.mock.calls.find(([text])=>text.includes("FROM candidates c WHERE"))!;
     const ownerOptions=mocks.query.mock.calls.find(([text])=>text.includes("FROM profiles p WHERE"))!;
     expect(candidateOptions[1]).toEqual([["applying","not_started","paused"]]);
-    expect(ownerOptions[1]).toEqual([["admin","manager"]]);
+    expect(ownerOptions[1]).toEqual([["admin","manager","application_engineer"]]);
     expect(candidateOptions[0]).not.toContain("candidate_job_review_queue");
     expect(ownerOptions[0]).not.toContain("candidate_job_review_queue");
     expect(ownerOptions[0]).toContain("p.is_active = true");

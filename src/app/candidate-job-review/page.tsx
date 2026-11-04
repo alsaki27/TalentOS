@@ -58,7 +58,7 @@ export default function CandidateJobReviewPage() {
   const [pagination, setPagination] = useState({page:1,pageSize:50,total:0});
   const [filterOptions, setFilterOptions] = useState<{
     candidates:{id:string;name:string;pipeline_stage?:CandidatePipelineStage}[];
-    staff:{id:string;name:string;role?:"admin"|"manager"}[];
+    staff:{id:string;name:string;role?:"admin"|"manager"|"application_engineer"}[];
   }>({candidates:[],staff:[]});
   const [pendingTiers,setPendingTiers] = useState<{strong:number;adjacent:number;stretch:number}|null>(null);
   const [timezone,setTimezone] = useState("");
@@ -194,7 +194,7 @@ export default function CandidateJobReviewPage() {
     <div className={`page-header ${styles.pageHeader}`}>
       <div>
         <h1>Review Queue</h1>
-        <p className="page-kicker">Scheduled-logging matches and extension-captured candidates wait here for admin/manager approval before a real application is created and the AI resume workflow starts.</p>
+        <p className="page-kicker">Scheduled-logging matches and extension-captured candidates wait here for approval by an Application Engineer, manager or admin before a real application is created and the AI resume workflow starts.</p>
       </div>
     </div>
 
@@ -217,7 +217,7 @@ export default function CandidateJobReviewPage() {
         <label>Staff owner<select aria-label="Filter by staff owner" value={staffFilter} onChange={event=>{setStaffFilter(event.target.value);setPage(1);}}>
           <option value="">All staff</option><option value="unassigned">Unassigned</option>
           {filterOptions.staff.map(staff=><option key={staff.id} value={staff.id}>
-            {staff.name}{staff.role ? ` — ${staff.role === "admin" ? "Admin" : "Manager"}` : ""}
+            {staff.name}{staff.role ? ` — ${staff.role === "admin" ? "Admin" : staff.role === "manager" ? "Manager" : "Application Engineer"}` : ""}
           </option>)}
         </select></label>
         <label>Source<select aria-label="Filter by source" value={sourceFilter} onChange={event=>{setSourceFilter(event.target.value as any);setPage(1);}}>

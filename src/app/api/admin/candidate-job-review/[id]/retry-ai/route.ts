@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
+import { requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
 import { retryAiScoring } from "@/server/services/candidateJobReviewQueueService";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(_request: NextRequest, { params }: { params: { id: string } }) {
-  const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const auth = await requireCurrentUser(CANDIDATE_JOB_REVIEW_ROLES);
   if (auth.response) return auth.response;
   try {
     const config = await queryOne<{ custom_prompt: string; ai_match_threshold: number }>(

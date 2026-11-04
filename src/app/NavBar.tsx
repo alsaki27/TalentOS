@@ -9,6 +9,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ThemeToggle from "../components/ThemeToggle";
 import NotificationBell from "../components/NotificationBell";
+import { CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth-edge";
 
 interface MeResponse {
   profile: { display_name: string; email: string | null; role: string };
@@ -96,10 +97,8 @@ export default function NavBar() {
   const canCo      = ["admin", "manager"].includes(role);
   const isAdmin    = role === "admin";
   const canSources = ["admin", "manager"].includes(role);
-  // Scheduled Candidate Logging and the Review Queue are both admin/manager
-  // only (narrower than canSources/canCo, which happen to be the same
-  // check today - named separately since they gate a different feature).
-  const canReviewJobs = ["admin", "manager"].includes(role);
+  const canReviewJobs = CANDIDATE_JOB_REVIEW_ROLES.some(allowedRole => allowedRole === role);
+  const canManageScheduledLogging = ["admin", "manager"].includes(role);
 
   const rawName   = me?.profile.display_name || me?.profile.email || "User";
   const firstName = rawName.includes(" ") ? rawName.split(" ")[0] : rawName;
@@ -173,7 +172,7 @@ export default function NavBar() {
     { href: "/admin/ai",              label: "AI Control Center",     show: isAdmin },
     { href: "/admin/extension-keys",  label: "Extension API Keys",    show: isAdmin },
     { href: "/admin/extension-reports", label: "Team Activity Reports", show: isAdmin },
-    { href: "/admin/auto-job-logging", label: "Scheduled Candidate Logging", show: canReviewJobs },
+    { href: "/admin/auto-job-logging", label: "Scheduled Candidate Logging", show: canManageScheduledLogging },
     { href: "/ats-score",             label: "ATS Score Analysis",    show: true },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team",                  label: "Team",                  show: isAdmin },
