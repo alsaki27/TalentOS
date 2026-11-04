@@ -12,7 +12,8 @@ describe("Review Queue filtered API and bulk approval",()=>{
   beforeEach(()=>{
     vi.clearAllMocks();mocks.auth.mockResolvedValue({context:{profile:{user_id:staff}},response:null});
     mocks.query.mockImplementation(async text=>text.includes("GROUP BY q.status")?[{status:"pending",count:126,strong_count:100,adjacent_count:25,stretch_count:1},{status:"approved",count:2}]
-      :text.includes("SELECT DISTINCT c.id")?[{id:candidate,name:"Candidate"}]:text.includes("SELECT DISTINCT p.user_id")?[{id:staff,name:"Owner"}]:[{id:"item"}]);
+      :text.includes("FROM candidates c WHERE")?[{id:candidate,name:"Candidate",pipeline_stage:"applying"}]
+      :text.includes("FROM profiles p WHERE")?[{id:staff,name:"Owner",role:"admin"}]:[{id:"item"}]);
     mocks.bulk.mockResolvedValue({approved:1,failed:[]});
   });
   it.each([401,403])("enforces staff access (%s) before reading options or results",async status=>{
@@ -28,7 +29,24 @@ describe("Review Queue filtered API and bulk approval",()=>{
     expect(counts[1]).toEqual([candidate,staff,"extension","strong","2026-11-04T00:00:00.000Z","2026-11-04T03:00:00.000Z"]);
     expect(items[1]).toEqual([["pending"],...counts[1],50,50]);
     expect(items[0].indexOf("q.candidate_id =")).toBeLessThan(items[0].indexOf("LIMIT"));
-    expect(data.filterOptions).toEqual({candidates:[{id:candidate,name:"Candidate"}],staff:[{id:staff,name:"Owner"}]});
+    expect(data.filterOptions).toEqual({candidates:[{id:candidate,name:"Candidate",pipeline_stage:"applying"}],staff:[{id:staff,name:"Owner",role:"admin"}]});
+  });
+  it("loads the full candidate and active manager rosters independently of matching review items",async()=>{
+    const candidates=["applying","not_started","paused"].map((pipeline_stage,i)=>({id:`candidate-${i}`,name:`Candidate ${i}`,pipeline_stage}));
+    const staffOptions=[{id:"admin-without-reviews",name:"Administrator",role:"admin"},{id:"manager-without-reviews",name:"Manager",role:"manager"}];
+    mocks.query.mockImplementation(async text=>text.includes("FROM candidates c WHERE")?candidates
+      :text.includes("FROM profiles p WHERE")?staffOptions:[]);
+    const response=await GET(request({candidate_id:candidate,staff_id:staff,source:"extension",tier:"strong"}));
+    const data=await response.json();
+    expect(response.status).toBe(200);expect(data.items).toEqual([]);
+    expect(data.filterOptions).toEqual({candidates,staff:staffOptions});
+    const candidateOptions=mocks.query.mock.calls.find(([text])=>text.includes("FROM candidates c WHERE"))!;
+    const ownerOptions=mocks.query.mock.calls.find(([text])=>text.includes("FROM profiles p WHERE"))!;
+    expect(candidateOptions[1]).toEqual([["applying","not_started","paused"]]);
+    expect(ownerOptions[1]).toEqual([["admin","manager"]]);
+    expect(candidateOptions[0]).not.toContain("candidate_job_review_queue");
+    expect(ownerOptions[0]).not.toContain("candidate_job_review_queue");
+    expect(ownerOptions[0]).toContain("p.is_active = true");
   });
   it("clamps an out-of-range page after approvals reduce the result count",async()=>{
     const data=await(await GET(request({page:"1000"}))).json();expect(data.pagination.page).toBe(3);

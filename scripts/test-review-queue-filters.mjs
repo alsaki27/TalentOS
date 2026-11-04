@@ -6,6 +6,12 @@ import postcss from "postcss";
 import tailwindcss from "tailwindcss";
 const a="11111111-1111-4111-8111-111111111111",b="22222222-2222-4222-8222-222222222222";
 const ownerA="33333333-3333-4333-8333-333333333333",ownerB="44444444-4444-4444-8444-444444444444";
+const notStarted="55555555-5555-4555-8555-555555555555",paused="66666666-6666-4666-8666-666666666666";
+const adminWithoutReviews="77777777-7777-4777-8777-777777777777",managerWithoutReviews="88888888-8888-4888-8888-888888888888";
+const filterOptions={candidates:[{id:a,name:"Candidate Alpha",pipeline_stage:"applying"},{id:b,name:"Candidate Beta",pipeline_stage:"applying"},
+  {id:notStarted,name:"Candidate New",pipeline_stage:"not_started"},{id:paused,name:"Candidate Paused",pipeline_stage:"paused"}],
+  staff:[{id:ownerA,name:"Staff Alpha",role:"admin"},{id:ownerB,name:"Staff Beta",role:"manager"},
+    {id:adminWithoutReviews,name:"New Admin",role:"admin"},{id:managerWithoutReviews,name:"New Manager",role:"manager"}]};
 const base={candidate_id:a,candidate_name:"Candidate Alpha",assigned_to_user_id:ownerA,assigned_to_name:"Staff Alpha",
   source:"scheduled_logging",status:"pending",ai_status:"scored",ai_tier:"strong",ats_score:80,ai_score:85,
   job_id:"job",job_title:"Design Engineer",company:"Fixture Company",base_resume_id:"resume",base_resume_name:"Draft resume",
@@ -55,12 +61,32 @@ try {
       const matched=filtered.filter(item=>p.get("status")==="all"||item.status===(p.get("status")||"pending"));
       const currentPage=Math.min(Number(p.get("page")||1),Math.max(1,Math.ceil(matched.length/50)));
       return route.fulfill({json:{items:matched.slice((currentPage-1)*50,currentPage*50),counts,pendingTiers,
-        pagination:{page:currentPage,pageSize:50,total:matched.length},filterOptions:{candidates:[{id:a,name:"Candidate Alpha"},{id:b,name:"Candidate Beta"}],staff:[{id:ownerA,name:"Staff Alpha"},{id:ownerB,name:"Staff Beta"}]}}});
+        pagination:{page:currentPage,pageSize:50,total:matched.length},filterOptions}});
     }
     if(url.pathname.startsWith("/api/"))throw new Error("Unexpected mutation in filter fixture");
     return route.fulfill({contentType:"text/html",body:'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/fixture.css"></head><body><main class="page"><div id="root"></div></main><script src="/fixture.js"></script></body></html>'});
   });
   await page.goto("https://talentos.test/candidate-job-review");
+  await page.getByText("Page 1 of 2",{exact:true}).waitFor();
+  const candidatePicker=page.getByLabel("Filter by candidate"),ownerPicker=page.getByLabel("Filter by staff owner");
+  assert.deepEqual(await candidatePicker.locator("option").allTextContents(),["All candidates","Candidate Alpha — Actively Applying","Candidate Beta — Actively Applying","Candidate New — Not Started","Candidate Paused — Paused"]);
+  assert.ok((await ownerPicker.locator("option").allTextContents()).includes("New Admin — Admin"));
+  assert.ok((await ownerPicker.locator("option").allTextContents()).includes("New Manager — Manager"));
+  for(const id of [notStarted,paused]) {
+    await candidatePicker.selectOption(id);
+    await page.getByText("Nothing in this view",{exact:true}).waitFor();
+    assert.equal(await candidatePicker.inputValue(),id);
+    assert.equal(await candidatePicker.locator("option").count(),5,"empty results must not erase the roster");
+  }
+  await page.getByRole("button",{name:"Clear filters",exact:true}).click();
+  await page.getByText("Page 1 of 2",{exact:true}).waitFor();
+  for(const id of [adminWithoutReviews,managerWithoutReviews]) {
+    await ownerPicker.selectOption(id);
+    await page.getByText("Nothing in this view",{exact:true}).waitFor();
+    assert.equal(await ownerPicker.inputValue(),id);
+    assert.equal(await ownerPicker.locator("option").count(),6);
+  }
+  await page.getByRole("button",{name:"Clear filters",exact:true}).click();
   await page.getByText("Page 1 of 2",{exact:true}).waitFor();
   await page.getByRole("button",{name:"Next",exact:true}).click();
   await page.getByText("Page 2 of 2",{exact:true}).waitFor();

@@ -22,8 +22,14 @@ export async function GET(request: NextRequest) {
         COUNT(*) FILTER(WHERE q.ai_tier='adjacent')::int AS adjacent_count,
         COUNT(*) FILTER(WHERE q.ai_tier='stretch')::int AS stretch_count
         FROM candidate_job_review_queue q WHERE ${scope.where} GROUP BY q.status`, scope.values),
-      query<{id:string; name:string}>(`SELECT DISTINCT c.id,c.name FROM candidate_job_review_queue q JOIN candidates c ON c.id=q.candidate_id ORDER BY c.name,c.id`),
-      query<{id:string; name:string}>(`SELECT DISTINCT p.user_id AS id,COALESCE(p.display_name,'Unnamed staff') AS name FROM candidate_job_review_queue q JOIN profiles p ON p.user_id=q.assigned_to_user_id ORDER BY name,id`),
+      // Picker rosters are independent of queue contents and current filters.
+      // Include paused/not-started candidates without enabling their automation.
+      query<{id:string; name:string; pipeline_stage:string}>(`SELECT c.id,c.name,COALESCE(c.pipeline_stage,'not_started') AS pipeline_stage
+        FROM candidates c WHERE COALESCE(c.pipeline_stage,'not_started') = ANY($1::text[])
+        ORDER BY c.name,c.id`, [["applying","not_started","paused"]]),
+      query<{id:string; name:string; role:string}>(`SELECT p.user_id AS id,COALESCE(NULLIF(BTRIM(p.display_name),''),'Unnamed staff') AS name,p.role
+        FROM profiles p WHERE p.is_active = true AND p.role = ANY($1::text[])
+        ORDER BY name,id`, [MASTER_DATA_MANAGER_ROLES]),
     ]);
     const countsByStatus = { pending: 0, approved: 0, rejected: 0 };
     for (const row of counts) if (row.status in countsByStatus) (countsByStatus as any)[row.status] = row.count;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, ExternalLink, CheckCircle2, XCircle, Inbox, AlertCircle, AlertTriangle, RotateCw, ChevronDown, ChevronUp } from "lucide-react";
 import { parseCandidateReviewFilters } from "@/lib/candidateReviewFilters";
+import { CANDIDATE_PIPELINE_STAGES, type CandidatePipelineStage } from "@/lib/candidatePipeline";
 import styles from "./review-queue.module.css";
 
 interface AlternateResume { resumeId: string; resumeName: string | null; score: number }
@@ -55,7 +56,10 @@ export default function CandidateJobReviewPage() {
   const [endTime, setEndTime] = useState("");
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({page:1,pageSize:50,total:0});
-  const [filterOptions, setFilterOptions] = useState<{candidates:{id:string;name:string}[];staff:{id:string;name:string}[]}>({candidates:[],staff:[]});
+  const [filterOptions, setFilterOptions] = useState<{
+    candidates:{id:string;name:string;pipeline_stage?:CandidatePipelineStage}[];
+    staff:{id:string;name:string;role?:"admin"|"manager"}[];
+  }>({candidates:[],staff:[]});
   const [pendingTiers,setPendingTiers] = useState<{strong:number;adjacent:number;stretch:number}|null>(null);
   const [timezone,setTimezone] = useState("");
   const loadSequence=useRef(0);
@@ -206,11 +210,15 @@ export default function CandidateJobReviewPage() {
       <div className={styles.filters}>
         <label>Candidate<select aria-label="Filter by candidate" value={candidateFilter} onChange={event=>{setCandidateFilter(event.target.value);setPage(1);}}>
           <option value="">All candidates</option>
-          {filterOptions.candidates.map(candidate=><option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+          {filterOptions.candidates.map(candidate=><option key={candidate.id} value={candidate.id}>
+            {candidate.name}{candidate.pipeline_stage ? ` — ${CANDIDATE_PIPELINE_STAGES[candidate.pipeline_stage]}` : ""}
+          </option>)}
         </select></label>
         <label>Staff owner<select aria-label="Filter by staff owner" value={staffFilter} onChange={event=>{setStaffFilter(event.target.value);setPage(1);}}>
           <option value="">All staff</option><option value="unassigned">Unassigned</option>
-          {filterOptions.staff.map(staff=><option key={staff.id} value={staff.id}>{staff.name}</option>)}
+          {filterOptions.staff.map(staff=><option key={staff.id} value={staff.id}>
+            {staff.name}{staff.role ? ` — ${staff.role === "admin" ? "Admin" : "Manager"}` : ""}
+          </option>)}
         </select></label>
         <label>Source<select aria-label="Filter by source" value={sourceFilter} onChange={event=>{setSourceFilter(event.target.value as any);setPage(1);}}>
           <option value="all">All sources</option><option value="scheduled_logging">Scheduled logging</option><option value="extension">Extension</option>
