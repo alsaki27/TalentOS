@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   listCandidates: vi.fn(), getResumeOptions: vi.fn(), validateMatch: vi.fn(), recordActivity: vi.fn(),
   callWithUsageTracking: vi.fn(),
   createApplications: vi.fn(), triggerWorkflow: vi.fn(),
+  processAi:vi.fn(),backgroundDispatch:vi.fn(),
 }));
 
 vi.mock("@/lib/extensionAuth", async (importOriginal) => {
@@ -38,6 +39,8 @@ vi.mock("@/server/services/extensionJobMatchService", () => ({
   validateExtensionResumeMatch: mocks.validateMatch,
 }));
 vi.mock("@/server/services/extensionActivityService", () => ({ recordExtensionActivity: mocks.recordActivity }));
+vi.mock("@/server/services/candidateReviewAiService",()=>({processPendingReviewAi:mocks.processAi}));
+vi.mock("@/server/lib/waitUntil",()=>({backgroundDispatch:mocks.backgroundDispatch}));
 
 import { NextRequest } from "next/server";
 import { GET, OPTIONS, POST } from "@/app/api/extension/v1/job-workflow/route";
@@ -106,6 +109,9 @@ describe("team extension job workflow", () => {
     mocks.execute.mockResolvedValue({ rowCount: 1 });
     mocks.createJob.mockResolvedValue({ status: "created", job: { id: jobId, title: "GIS Analyst", company: "Northwind" } });
     mocks.recordActivity.mockResolvedValue(undefined);
+    // A never-finishing AI wake proves assignment does not await scoring.
+    mocks.processAi.mockImplementation(()=>new Promise(()=>{}));
+    mocks.backgroundDispatch.mockImplementation(promise=>{void promise.catch(()=>{});});
     mocks.listCandidates.mockResolvedValue([{ candidateId, candidateName: "A. Candidate", pipelineStage: "applying" }]);
     mocks.getResumeOptions.mockResolvedValue({ candidateId, candidateName: "A. Candidate", pipelineStage: "applying", resumeOptions: [], bestResumeId: resumeId });
     mocks.validateMatch.mockResolvedValue({
@@ -187,7 +193,7 @@ describe("team extension job workflow", () => {
     expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({ eventType: "job_duplicate", jobId }));
   });
 
-  it("scores the pair (ATS + AI) and queues it for review instead of creating an application directly", async () => {
+  it("saves ATS and returns the pending review even while background AI never finishes", async () => {
     const response = await POST(makeRequest({
       action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }],
       assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30",
@@ -201,18 +207,20 @@ describe("team extension job workflow", () => {
       expect.stringContaining("INSERT INTO candidate_job_review_queue"),
       expect.arrayContaining([candidateId, jobId, resumeId]),
     );
-    expect(mocks.callWithUsageTracking).toHaveBeenCalled();
+    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
+    expect(mocks.processAi).toHaveBeenCalledWith({ids:["queue-1"]});
+    expect(mocks.queryOne.mock.invocationCallOrder.at(-1)).toBeLessThan(mocks.processAi.mock.invocationCallOrder[0]);
     expect(mocks.recordActivity).toHaveBeenCalledWith(expect.objectContaining({
       eventType: "candidate_logged", candidateId, baseResumeId: resumeId, matchScore: 91,
-      metadata: expect.objectContaining({ assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30", aiStatus: "scored", aiTier: "strong" }),
+      metadata: expect.objectContaining({ assignmentStatus: "in_progress", assignedToUserId: ownerId, assignmentDueAt: "2026-10-30", aiStatus: "pending", aiTier: null }),
     }));
     const result = (await response.json()).results[0];
-    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "scored", aiTier: "strong", reviewQueueId: "queue-1", applicationCreated: false, workflowStarted: false });
+    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "pending", aiTier: null, reviewQueueId: "queue-1", applicationCreated: false, workflowStarted: false });
     expect(result.atsScore).toEqual(expect.any(Number));
   });
 
-  it("queues the pair ATS-only when the AI eligibility check fails, instead of blocking it", async () => {
-    mocks.callWithUsageTracking.mockRejectedValue(new Error("Shared OpenCode pool exhausted."));
+  it("retains the saved review if the background wake fails, allowing cron recovery", async () => {
+    mocks.processAi.mockRejectedValue(new Error("Worker interrupted"));
     const response = await POST(makeRequest({
       action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }],
     }, "assign-ai-fails") as never);
@@ -220,10 +228,10 @@ describe("team extension job workflow", () => {
     expect(response.status).toBe(200);
     expect(mocks.queryOne).toHaveBeenCalledWith(
       expect.stringContaining("INSERT INTO candidate_job_review_queue"),
-      expect.arrayContaining(["failed"]),
+      expect.arrayContaining(["pending"]),
     );
     const result = (await response.json()).results[0];
-    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "failed" });
+    expect(result).toMatchObject({ status: "submitted_for_review", aiStatus: "pending" });
   });
 
   it.each([0, 12, 29, 30])("always queues an extension submission with ATS %s for human review", async atsScore => {
@@ -234,19 +242,19 @@ describe("team extension job workflow", () => {
     try {
       const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
       expect((await response.json()).results[0]).toMatchObject({ atsScore, status: "submitted_for_review", applicationCreated: false, workflowStarted: false });
-      expect(mocks.queryOne).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.arrayContaining([atsScore, "scored"]));
+      expect(mocks.queryOne).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.arrayContaining([atsScore, "pending"]));
     } finally { score.mockRestore(); }
   });
 
-  it("queues an AI-rejected extension pairing without violating the review tier constraint", async () => {
+  it("does not consult an AI recommendation before saving an operator-selected pairing", async () => {
     mocks.callWithUsageTracking.mockResolvedValue({ result: { tier: "reject", score: 0, reason: "Different profession", hardGates: ["Required license not evidenced"] },
       providerName: "opencode", model: "glm-5.3-flash", inputTokens: 100, outputTokens: 50, latencyMs: 500 });
     const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }] }));
-    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiStatus: "scored", aiTier: null, aiRecommendation: "reject", aiScore: 0 });
+    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiStatus: "pending", aiTier: null, aiRecommendation: null, aiScore: null });
+    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
     const insert = mocks.queryOne.mock.calls.find(([sql]) => sql.includes("INSERT INTO candidate_job_review_queue"));
     expect(insert?.[1][5]).toBeNull();
-    expect(insert?.[1][7]).toContain("not recommended");
-    expect(JSON.parse(insert?.[1][9])).toContain("Required license not evidenced");
+    expect(insert?.[1][7]).toBeNull();
   });
 
   it("fails closed when the review queue cannot be written, without falling back to the pipeline", async () => {
@@ -269,14 +277,15 @@ describe("team extension job workflow", () => {
     expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
   });
 
-  it("preserves AI eligibility warnings for human review even for a stretch match", async () => {
-    mocks.callWithUsageTracking.mockResolvedValue({ result: { tier: "stretch", score: 25, reason: "Domain gap", hardGates: ["Required clearance is not evidenced"] },
-      providerName: "opencode", model: "glm-5.3-flash", inputTokens: 100, outputTokens: 50, latencyMs: 500 });
-    const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }], assignmentStatus: "in_progress" }));
-    expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiTier: "stretch", workflowStarted: false });
-    const insert = mocks.queryOne.mock.calls.find(([sql]) => sql.includes("INSERT INTO candidate_job_review_queue"));
-    expect(insert?.[0]).toContain("'pending'");
-    expect(JSON.parse(insert?.[1][9])).toContain("Required clearance is not evidenced");
+  it("persists deterministic warnings before AI so a human can review immediately", async () => {
+    const score=vi.spyOn(scoring,"scoreStage1").mockReturnValueOnce({bestResume:null,bestScore:25,
+      hardGates:["Required clearance is not evidenced"],rankedResumes:[]});
+    try {
+      const response = await POST(makeRequest({ action: "assign", jobId, selections: [{ candidateId, baseResumeId: resumeId }], assignmentStatus: "in_progress" }));
+      expect((await response.json()).results[0]).toMatchObject({ status: "submitted_for_review", aiStatus:"pending", workflowStarted: false });
+      const insert = mocks.queryOne.mock.calls.find(([sql]) => sql.includes("INSERT INTO candidate_job_review_queue"));
+      expect(JSON.parse(insert?.[1][9])).toContain("Required clearance is not evidenced");
+    } finally {score.mockRestore();}
   });
 
   it("returns an explicit already-logged result without creating a duplicate when the job already has an application for any candidate", async () => {

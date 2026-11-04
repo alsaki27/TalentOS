@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, CANDIDATE_JOB_REVIEW_ROLES } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
 import { retryAiScoring } from "@/server/services/candidateJobReviewQueueService";
+import { enqueueExtensionReviewAiRetry, processPendingReviewAi } from "@/server/services/candidateReviewAiService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +11,13 @@ export async function POST(_request: NextRequest, { params }: { params: { id: st
   const auth = await requireCurrentUser(CANDIDATE_JOB_REVIEW_ROLES);
   if (auth.response) return auth.response;
   try {
+    const item=await queryOne<{source:string}>("SELECT source FROM candidate_job_review_queue WHERE id=$1",[params.id]);
+    if(!item) return NextResponse.json({error:"Review item not found."},{status:404});
+    if(item.source==="extension") {
+      await enqueueExtensionReviewAiRetry(params.id);
+      backgroundDispatch(processPendingReviewAi({ids:[params.id]}));
+      return NextResponse.json({ok:true,accepted:true,aiStatus:"pending"},{status:202});
+    }
     const config = await queryOne<{ custom_prompt: string; ai_match_threshold: number }>(
       "SELECT custom_prompt, ai_match_threshold FROM scheduled_candidate_logging_config WHERE id = true",
     );

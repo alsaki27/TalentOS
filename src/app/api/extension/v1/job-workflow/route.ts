@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
-import { assessmentForHumanReview } from "@/lib/candidateReviewAssessment";
 import { checkIdempotencyKey, checkRequiredHeaders, authenticateExtension, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
 import { createJob } from "@/server/repositories/jobsRepository";
 import { query, queryOne } from "@/server/db/neon";
 import { getExtensionCandidateResumeOptions, listExtensionCandidates, validateExtensionResumeMatch } from "@/server/services/extensionJobMatchService";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
-import { scoreStage1, scoreStage2, type ScoringCandidate, type ScoringJob, type ScoringResume } from "@/server/services/candidateJobScoring";
+import { scoreStage1, type ScoringCandidate, type ScoringJob, type ScoringResume } from "@/server/services/candidateJobScoring";
+import { processPendingReviewAi } from "@/server/services/candidateReviewAiService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 import { cleanCapturedCompany, resolveJobCaptureTarget } from "@/server/services/jobCaptureStatusService";
 
@@ -173,6 +174,7 @@ export const POST = withExtensionCors(async (request) => {
     // queued for review.
 
     const results: Array<Record<string, unknown>> = [];
+    const pendingAiIds: string[] = [];
     const seenCandidates = new Set<string>();
     for (const selection of body.selections) {
       if (!selection?.candidateId || !selection?.baseResumeId
@@ -263,7 +265,7 @@ export const POST = withExtensionCors(async (request) => {
 
         let atsScore: number | null = null;
         let hardGates: string[] = [];
-        let aiStatus: "scored" | "failed" = "failed";
+        let aiStatus: "pending" | "failed" = "failed";
         let aiTier: string | null = null;
         let aiRecommendation: string | null = null;
         let aiScore: number | null = null;
@@ -274,19 +276,8 @@ export const POST = withExtensionCors(async (request) => {
           atsScore = stage1.bestScore;
           hardGates = stage1.hardGates;
           if (description.length >= 250) {
-            const stage2Config = await queryOne<{ custom_prompt: string; ai_match_threshold: number }>("SELECT custom_prompt, ai_match_threshold FROM scheduled_candidate_logging_config WHERE id = true");
-            const stage2 = await scoreStage2({
-              customPrompt: stage2Config?.custom_prompt ?? "", job: scoringJob, candidate: scoringCandidate,
-              resume: fullResume, description, deterministicScore: atsScore, crossCheckFloor: stage2Config?.ai_match_threshold, runId: null,
-            });
-            if (stage2.status === "scored") {
-              const review = assessmentForHumanReview(stage2);
-              aiStatus = "scored"; aiTier = review.aiTier; aiScore = stage2.score; aiReason = review.aiReason;
-              aiRecommendation = stage2.tier;
-              hardGates = [...hardGates, ...review.hardGates];
-            } else {
-              aiFailureReason = stage2.failureReason;
-            }
+            // Persist first; the pending review itself is the durable work item.
+            aiStatus = "pending";
           } else {
             aiFailureReason = "Job description too short to run the AI eligibility check; ATS score only.";
           }
@@ -311,6 +302,7 @@ export const POST = withExtensionCors(async (request) => {
           results.push({ candidateId: selection.candidateId, status: "already_pending_review", message: "This candidate already has a pending or resolved review item for this job." });
           continue;
         }
+        if (aiStatus === "pending") pendingAiIds.push(queueRow.id);
 
         await recordExtensionActivity({
           actorUserId: auth.key.owner_user_id,
@@ -354,6 +346,7 @@ export const POST = withExtensionCors(async (request) => {
       }
     }
 
+    if (pendingAiIds.length) backgroundDispatch(processPendingReviewAi({ids:pendingAiIds}));
     return NextResponse.json({ ...REVIEW_CONTRACT, jobId: job.id, results, completed: results.filter((x) => x.status === "submitted_for_review").length, failed: results.filter((x) => x.status === "failed").length });
   }
 

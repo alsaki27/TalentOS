@@ -2,12 +2,14 @@ import {beforeEach,describe,expect,it,vi} from "vitest";
 import {NextRequest} from "next/server";
 
 const mocks=vi.hoisted(()=>({cookie:vi.fn(),jwt:vi.fn(),query:vi.fn(),queryOne:vi.fn(),
-  approve:vi.fn(),reject:vi.fn(),bulk:vi.fn(),legacyRetry:vi.fn()}));
+  approve:vi.fn(),reject:vi.fn(),bulk:vi.fn(),legacyRetry:vi.fn(),enqueueAi:vi.fn(),processAi:vi.fn()}));
 vi.mock("next/headers",()=>({cookies:()=>({get:mocks.cookie})}));
 vi.mock("@/server/auth/jwt",()=>({verifyJWT:mocks.jwt}));
 vi.mock("@/server/db/neon",()=>({query:mocks.query,queryOne:mocks.queryOne}));
 vi.mock("@/server/services/candidateJobReviewQueueService",()=>({approveReviewItem:mocks.approve,
   rejectReviewItem:mocks.reject,bulkApproveByTier:mocks.bulk,retryAiScoring:mocks.legacyRetry}));
+vi.mock("@/server/services/candidateReviewAiService",()=>({enqueueExtensionReviewAiRetry:mocks.enqueueAi,processPendingReviewAi:mocks.processAi}));
+vi.mock("@/server/lib/waitUntil",()=>({backgroundDispatch:vi.fn()}));
 
 // Exercise real cookie/JWT/profile authentication and each real route guard.
 import {GET as list} from "@/app/api/admin/candidate-job-review/route";
@@ -54,6 +56,7 @@ describe("Review Queue permissions for admin, manager and Application Engineer",
     });
     mocks.approve.mockResolvedValue({applicationId:"application"});mocks.reject.mockResolvedValue(undefined);
     mocks.bulk.mockResolvedValue({approved:1,failed:[]});mocks.legacyRetry.mockResolvedValue(undefined);
+    mocks.enqueueAi.mockResolvedValue(undefined);mocks.processAi.mockResolvedValue({processed:1});
   });
 
   describe.each(["admin","manager","application_engineer"])("active %s",userRole=>{

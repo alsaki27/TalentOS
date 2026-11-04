@@ -11,12 +11,12 @@ const built=await build({entryPoints:["worker-entry.mjs"],bundle:true,write:fals
   }}],
 });
 const calls=[];
-let failLogging=false;
+let failLogging=false,failReview=false;
 const module={exports:{}};
 const context=vm.createContext({module,exports:module.exports,Request,Response,Headers,AbortSignal,URL,Date,setTimeout,clearTimeout,
   process:{env:{}},console:{log(){},warn(){},error(){}},fetch:async(url,options)=>{
     calls.push({url:String(url),options});
-    return new Response(JSON.stringify({ok:true}),{status:failLogging&&String(url).includes("scheduled-candidate-logging")?500:200});
+    return new Response(JSON.stringify({ok:true}),{status:(failLogging&&String(url).includes("scheduled-candidate-logging"))||(failReview&&String(url).includes("candidate-review-ai"))?500:200});
   },
 });
 vm.runInContext(built.outputFiles[0].text,context);
@@ -31,6 +31,7 @@ await invoke("* * * * *","2026-11-04T02:10:00Z");
 assert.equal(calls.filter(c=>c.url.endsWith("/api/cron/scheduled-candidate-logging")).length,1);
 assert.ok(calls.some(c=>c.url.endsWith("/api/application-ai-workflows/dispatch")),"existing resume dispatcher must remain scheduled");
 assert.ok(calls.some(c=>c.url.endsWith("/api/cron/job-agent-poll")),"existing Apify poll must remain scheduled");
+assert.equal(calls.filter(c=>c.url.endsWith("/api/cron/candidate-review-ai")).length,1,"extension AI recovery has an independent minute tick");
 assert.equal(calls.find(c=>c.url.endsWith("scheduled-candidate-logging")).options.headers["X-Scheduled-Logging-Trigger"],"tick");
 await invoke("0 18 * * *","2026-11-03T18:00:00Z");
 assert.ok(calls.some(c=>c.url.endsWith("/api/cron/job-agent")));
@@ -40,6 +41,10 @@ assert.ok(calls.some(c=>c.url.endsWith("/api/cron/job-agent-retention")));
 failLogging=true;
 await assert.rejects(invoke("* * * * *","2026-11-04T02:10:00Z"),/Scheduled candidate logging tick failed/);
 assert.ok(calls.some(c=>c.url.endsWith("/api/application-ai-workflows/dispatch")),"one failed task must not prevent unrelated dispatches");
+failLogging=false;failReview=true;
+await assert.rejects(invoke("* * * * *","2026-11-04T02:10:00Z"),/Review AI recovery failed/);
+assert.ok(calls.some(c=>c.url.endsWith("/api/cron/scheduled-candidate-logging")),"review scoring failure must not suppress scheduled matching");
+assert.ok(calls.some(c=>c.url.endsWith("/api/application-ai-workflows/dispatch")),"review scoring failure must not suppress resume dispatch");
 const config=readFileSync("wrangler.toml","utf8");
 assert.match(config,/crons\s*=\s*\[.*"\* \* \* \* \*".*"0 23 \* \* \*"/);
 const github=readFileSync(".github/workflows/scheduled-candidate-logging.yml","utf8");

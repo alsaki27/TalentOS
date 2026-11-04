@@ -38,6 +38,7 @@ const TABS = [
 const TIER_LABEL: Record<string, string> = { strong: "Strong", adjacent: "Adjacent", stretch: "Stretch" };
 const TIER_BADGE_CLASS: Record<string, string> = { strong: "badge-tier-a", adjacent: "badge-warn", stretch: "badge-accent" };
 const SOURCE_LABEL: Record<string, string> = { scheduled_logging: "Scheduled logging", extension: "Extension" };
+const REFRESH_INTERVAL_MS = 15_000;
 
 function formatDate(value: string | null): string {
   if (!value) return "unknown";
@@ -63,6 +64,9 @@ export default function CandidateJobReviewPage() {
   const [pendingTiers,setPendingTiers] = useState<{strong:number;adjacent:number;stretch:number}|null>(null);
   const [timezone,setTimezone] = useState("");
   const loadSequence=useRef(0);
+  const activeLoad=useRef<{controller:AbortController;quiet:boolean}|null>(null);
+  const activeAction=useRef<AbortController|null>(null);
+  const lastLoadStarted=useRef(0);
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [loading, setLoading] = useState(true);
@@ -70,7 +74,11 @@ export default function CandidateJobReviewPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [notice, setNotice] = useState("");
+  const [lastUpdated, setLastUpdated] = useState<string|null>(null);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [visible, setVisible] = useState(true);
 
   const filterParams = useCallback(() => {
     const params=new URLSearchParams({status,source:sourceFilter,tier:tierFilter,page:String(page)});
@@ -89,9 +97,20 @@ export default function CandidateJobReviewPage() {
   const latestFilterParams=useRef(filterParams);
   latestFilterParams.current=filterParams;
 
-  const load = useCallback(async (signal?:AbortSignal) => {
+  const cancelLoad = useCallback(() => {
+    ++loadSequence.current;
+    activeLoad.current?.controller.abort();
+    activeLoad.current=null;
+  },[]);
+
+  const load = useCallback(async (quiet=false) => {
+    activeLoad.current?.controller.abort();
+    const controller=new AbortController();
+    const {signal}=controller;
+    activeLoad.current={controller,quiet};
     const sequence=++loadSequence.current;
-    setLoading(true); setError("");
+    lastLoadStarted.current=Date.now();
+    if(!quiet) {setLoading(true);setError("");setLoadError("");setRefreshFailed(false);}
     try {
       const params=latestFilterParams.current();
       const response=await fetch(`/api/admin/candidate-job-review?${params}`,{cache:"no-store",signal});
@@ -103,14 +122,46 @@ export default function CandidateJobReviewPage() {
       setPagination(data.pagination || {page:1,pageSize:50,total:data.items?.length || 0});
       if(data.filterOptions) setFilterOptions(data.filterOptions);
       else setFilterOptions({candidates:Array.from(new Map((data.items || []).map((item:ReviewItem)=>[item.candidate_id,{id:item.candidate_id,name:item.candidate_name}])).values()) as {id:string;name:string}[],staff:[]});
+      setLastUpdated(new Date().toISOString());setRefreshFailed(false);setLoadError("");
     } catch(error) {
       if(sequence!==loadSequence.current || signal?.aborted) return;
+      if(quiet) {setRefreshFailed(true);return;}
       setItems([]);setCounts({pending:0,approved:0,rejected:0});setPendingTiers(null);setPagination({page:1,pageSize:50,total:0});
-      setError(error instanceof Error ? error.message : "Could not load the review queue.");
-    } finally {if(sequence===loadSequence.current && !signal?.aborted)setLoading(false);}
+      setLastUpdated(null);
+      setLoadError(error instanceof Error ? error.message : "Could not load the review queue.");
+    } finally {
+      if(sequence===loadSequence.current && !signal.aborted) {
+        activeLoad.current=null;setLoading(false);
+      }
+    }
   },[]);
 
-  useEffect(()=>{const controller=new AbortController();void load(controller.signal);return()=>controller.abort();},[load,filterParams]);
+  useEffect(()=>{void load();return cancelLoad;},[load,cancelLoad,filterParams]);
+  useEffect(() => {
+    let timer:ReturnType<typeof setInterval>|undefined;
+    const refresh=() => {
+      // Coalesce focus/visibility events, and never overlap a read or review action.
+      if(document.visibilityState!=="visible" || activeAction.current || activeLoad.current || Date.now()-lastLoadStarted.current<1000) return;
+      void load(true);
+    };
+    const visibilityChanged=() => {
+      const isVisible=document.visibilityState==="visible";
+      setVisible(isVisible);
+      clearInterval(timer);
+      if(isVisible) {timer=setInterval(refresh,REFRESH_INTERVAL_MS);refresh();}
+      else if(activeLoad.current?.quiet) cancelLoad();
+    };
+    visibilityChanged();
+    document.addEventListener("visibilitychange",visibilityChanged);
+    window.addEventListener("focus",refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange",visibilityChanged);
+      window.removeEventListener("focus",refresh);
+      cancelLoad();
+      activeAction.current?.abort();
+    };
+  },[load,cancelLoad]);
   useEffect(()=>{setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);},[]);
   useEffect(() => {
     if (!notice) return;
@@ -118,51 +169,76 @@ export default function CandidateJobReviewPage() {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  function startAction() {
+    if(activeAction.current) return null;
+    const controller=new AbortController();
+    activeAction.current=controller;
+    cancelLoad();setLoading(false);
+    return controller;
+  }
+
   async function decide(id: string, action: "approve" | "reject") {
+    const controller=startAction();
+    if(!controller) return;
     setBusy(id); setError(""); setNotice("");
     try {
       const note = action === "reject" ? window.prompt("Optional rejection reason") ?? "" : undefined;
       const response = await fetch(`/api/admin/candidate-job-review/${id}/${action}`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }), signal:controller.signal,
       });
       const data = await response.json();
+      if(controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.error || `Could not ${action} this item.`);
       setNotice(action === "approve" ? "Approved — a real application was created and the AI resume workflow has started." : "Rejected.");
-      await load();
+      await load(true);
     } catch (err: any) {
-      setError(err.message || `Could not ${action} this item.`);
+      if(!controller.signal.aborted) setError(err.message || `Could not ${action} this item.`);
+    } finally {
+      if(!controller.signal.aborted) setBusy(null);
+      if(activeAction.current===controller) activeAction.current=null;
     }
-    setBusy(null);
   }
 
   async function retryAi(id: string) {
+    const controller=startAction();
+    if(!controller) return;
     setBusy(id); setError(""); setNotice("");
     try {
-      const response = await fetch(`/api/admin/candidate-job-review/${id}/retry-ai`, { method: "POST" });
+      const response = await fetch(`/api/admin/candidate-job-review/${id}/retry-ai`, { method: "POST", signal:controller.signal });
       const data = await response.json();
+      if(controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.error || "AI eligibility check failed again.");
-      setNotice("AI eligibility check succeeded.");
-      await load();
+      const queued=response.status===202 || data.queued===true || data.ai_status==="pending";
+      if(queued) setItems(current=>current.map(item=>item.id===id ? {...item,ai_status:"pending",ai_tier:null,ai_score:null,ai_reason:null,ai_failure_reason:null} : item));
+      setNotice(queued ? "AI eligibility check queued. Results will update automatically; you can still approve or reject this item." : "AI eligibility check succeeded.");
+      await load(true);
     } catch (err: any) {
-      setError(err.message || "AI eligibility check failed again.");
+      if(!controller.signal.aborted) setError(err.message || "AI eligibility check failed again.");
+    } finally {
+      if(!controller.signal.aborted) setBusy(null);
+      if(activeAction.current===controller) activeAction.current=null;
     }
-    setBusy(null);
   }
 
   async function bulkApprove(tiers: string[]) {
+    const controller=startAction();
+    if(!controller) return;
     setBulkBusy(true); setError(""); setNotice("");
     try {
       const response = await fetch("/api/admin/candidate-job-review/bulk-approve", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers,filters:filterParams().toString() }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers,filters:filterParams().toString() }), signal:controller.signal,
       });
       const data = await response.json();
+      if(controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.error || "Bulk approve failed.");
       setNotice(`Approved ${data.approved} item(s).${data.failed?.length ? ` ${data.failed.length} failed.` : ""}`);
-      await load();
+      await load(true);
     } catch (err: any) {
-      setError(err.message || "Bulk approve failed.");
+      if(!controller.signal.aborted) setError(err.message || "Bulk approve failed.");
+    } finally {
+      if(!controller.signal.aborted) setBulkBusy(false);
+      if(activeAction.current===controller) activeAction.current=null;
     }
-    setBulkBusy(false);
   }
 
   function toggleExpanded(id: string) {
@@ -189,6 +265,8 @@ export default function CandidateJobReviewPage() {
   for(const item of visibleItems) if(item.status==="pending" && item.ai_tier)visibleTierCounts[item.ai_tier]++;
   const pendingByTier=pendingTiers ?? visibleTierCounts;
   const filtersActive=Boolean(candidateFilter || staffFilter || startTime || endTime || sourceFilter!=="all" || tierFilter!=="all");
+  const actionBusy=busy!==null || bulkBusy;
+  const displayedError=error || loadError;
 
   return <div className={`candidate-job-review-page ${styles.page}`}>
     <div className={`page-header ${styles.pageHeader}`}>
@@ -235,17 +313,24 @@ export default function CandidateJobReviewPage() {
       </div>
       {status === "pending" && <div className={styles.bulkActions}>
         <span className={`muted ${styles.bulkLabel}`}>Bulk approve matching results:</span>
-        <button className="btn-secondary" disabled={bulkBusy || loading || Boolean(error) || !pendingByTier.strong} onClick={() => void bulkApprove(["strong"])}>
+        <button className="btn-secondary" disabled={actionBusy || loading || Boolean(displayedError) || !pendingByTier.strong} onClick={() => void bulkApprove(["strong"])}>
           Strong{pendingByTier.strong ? ` (${pendingByTier.strong})` : ""}
         </button>
-        <button className="btn-secondary" disabled={bulkBusy || loading || Boolean(error) || (pendingByTier.strong + pendingByTier.adjacent) === 0} onClick={() => void bulkApprove(["strong", "adjacent"])}>
+        <button className="btn-secondary" disabled={actionBusy || loading || Boolean(displayedError) || (pendingByTier.strong + pendingByTier.adjacent) === 0} onClick={() => void bulkApprove(["strong", "adjacent"])}>
           Strong + Adjacent{(pendingByTier.strong + pendingByTier.adjacent) ? ` (${pendingByTier.strong + pendingByTier.adjacent})` : ""}
         </button>
       </div>}
     </div>
 
-    {error && <div role="alert" className={`card ${styles.message} ${styles.error}`}>
-      <AlertCircle size={16} /> <span>{error}</span>
+    <div className={styles.refreshStatus}>
+      <span role="status" aria-label="Review queue updates" aria-live="polite">
+        {actionBusy ? "Updates paused during review action." : !visible ? "Updates paused while this tab is hidden." : refreshFailed ? "Automatic refresh failed. Showing the last loaded results; updates will retry." : "Updates automatically every 15 seconds and when you return."}
+      </span>
+      {lastUpdated && <span>Last updated <time dateTime={lastUpdated}>{new Date(lastUpdated).toLocaleTimeString()}</time>.</span>}
+    </div>
+
+    {displayedError && <div role="alert" className={`card ${styles.message} ${styles.error}`}>
+      <AlertCircle size={16} /> <span>{displayedError}</span>
     </div>}
     {notice && <div role="status" className={`card ${styles.message} ${styles.notice}`}>
       <CheckCircle2 size={16} /> <span>{notice}</span>
@@ -301,13 +386,16 @@ export default function CandidateJobReviewPage() {
                     {item.ai_status === "failed" && <span className="badge badge-warn" style={{ fontSize: 12.5 }} title={item.ai_failure_reason ?? undefined}>
                       AI check unavailable
                     </span>}
-                    {item.ai_status === "pending" && <span className="badge muted" style={{ fontSize: 12.5 }}>AI not yet attempted</span>}
+                    {item.ai_status === "pending" && <span className="badge muted" style={{ fontSize: 12.5 }}>AI check pending</span>}
                   </div>
                 </div>
 
                 {item.ai_reason && <p className={styles.reason}>{item.ai_reason}</p>}
                 {!item.ai_reason && item.ai_status === "failed" && <p className={`muted ${styles.reason}`}>
                   AI eligibility check could not complete: {item.ai_failure_reason || "unknown error"}. Showing the ATS score only — approve on that basis, or retry the AI check below.
+                </p>}
+                {!item.ai_reason && item.ai_status === "pending" && <p className={`muted ${styles.reason}`}>
+                  AI eligibility check is queued or running. You can review the ATS score and approve or reject while it finishes.
                 </p>}
 
                 {item.hard_gates?.length > 0 && <ul className={styles.warnings} aria-label="Eligibility warnings">
@@ -326,13 +414,13 @@ export default function CandidateJobReviewPage() {
                     {item.application_id && <Link className={`btn-primary ${styles.action}`} href="/application-queue">View application</Link>}
                   </div>
                   {item.status === "pending" && <div className={styles.actions}>
-                    {item.ai_status === "failed" && <button className={`btn-secondary ${styles.action}`} disabled={busy === item.id} onClick={() => void retryAi(item.id)}>
+                    {(item.ai_status === "failed" || item.ai_status === "pending") && <button className={`btn-secondary ${styles.action}`} disabled={actionBusy || item.ai_status === "pending"} onClick={() => void retryAi(item.id)}>
                       {busy === item.id ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />} Retry AI check
                     </button>}
-                    <button className={`btn-secondary ${styles.action}`} disabled={busy === item.id} onClick={() => void decide(item.id, "reject")}>
+                    <button className={`btn-secondary ${styles.action}`} disabled={actionBusy} onClick={() => void decide(item.id, "reject")}>
                       <XCircle size={14} /> Reject
                     </button>
-                    <button className={`btn-primary ${styles.action}`} disabled={busy === item.id} onClick={() => void decide(item.id, "approve")}>
+                    <button className={`btn-primary ${styles.action}`} disabled={actionBusy} onClick={() => void decide(item.id, "approve")}>
                       {busy === item.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Approve & start AI workflow
                     </button>
                   </div>}

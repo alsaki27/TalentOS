@@ -124,7 +124,10 @@ export async function approveReviewItem(id: string, actorUserId: string): Promis
 
   await execute(
     `UPDATE candidate_job_review_queue
-        SET status = 'approved', application_id = $2, reviewed_by_user_id = $3, reviewed_at = NOW(), updated_at = NOW()
+        SET status = 'approved', application_id = $2, reviewed_by_user_id = $3, reviewed_at = NOW(), updated_at = NOW(),
+            ai_status=CASE WHEN source='extension' AND ai_status='pending' THEN 'failed' ELSE ai_status END,
+            ai_failure_reason=CASE WHEN source='extension' AND ai_status='pending'
+              THEN 'Background AI stopped after human approval; the ATS score remains available.' ELSE ai_failure_reason END
       WHERE id = $1`,
     [row.id, created.id, actorUserId],
   );
@@ -144,7 +147,10 @@ export async function rejectReviewItem(id: string, actorUserId: string, note: st
   if (row.status === "approved") throw new Error("This item was already approved and has a live application; it cannot be rejected from here.");
   await execute(
     `UPDATE candidate_job_review_queue
-        SET status = 'rejected', reviewed_by_user_id = $2, reviewed_at = NOW(), review_note = $3, updated_at = NOW()
+        SET status = 'rejected', reviewed_by_user_id = $2, reviewed_at = NOW(), review_note = $3, updated_at = NOW(),
+            ai_status=CASE WHEN source='extension' AND ai_status='pending' THEN 'failed' ELSE ai_status END,
+            ai_failure_reason=CASE WHEN source='extension' AND ai_status='pending'
+              THEN 'Background AI stopped after human rejection; the ATS score remains available.' ELSE ai_failure_reason END
       WHERE id = $1`,
     [id, actorUserId, note?.slice(0, 2000) ?? null],
   );
@@ -169,7 +175,7 @@ export async function bulkApproveByTier(tiers: string[], actorUserId: string, fi
   return { approved, failed };
 }
 
-// Lets an admin/manager re-run just Stage 2 for one item that's sitting
+// Lets an authorized reviewer re-run Stage 2 for one item that's sitting
 // ai_status='failed' (or 'pending') - the AI-failure-resilience requirement:
 // a pair is never stuck just because the shared pool had a bad moment.
 export async function retryAiScoring(id: string, customPrompt: string, crossCheckFloor?: number): Promise<void> {

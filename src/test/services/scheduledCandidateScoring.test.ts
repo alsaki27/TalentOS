@@ -9,7 +9,7 @@ const input={customPrompt:"",description:"Evidence only.",deterministicScore:85,
   candidate:{id:"candidate",name:"Fixture",priority:"default" as const,preferences:{},custom_requirements:"",work_authorization:null,visa_status:null,preferred_locations:null},
   resume:{id:"resume",candidate_id:"candidate",name:"Draft resume",target_industry:null,target_roles:null,content:"Engineering evidence",status:"draft"},
 };
-describe("scheduled-only structured output and retry policy",()=>{
+describe("structured eligibility output and scoped retry policy",()=>{
   beforeEach(()=>{
     vi.resetAllMocks();mocks.query.mockResolvedValue([]);
     mocks.send.mockResolvedValue({content:[{type:"text",text:JSON.stringify({tier:"strong",score:90,reason:"Supported fit",hard_gates:[]})}],stopReason:"end_turn"});
@@ -20,16 +20,22 @@ describe("scheduled-only structured output and retry policy",()=>{
     const result=await scoreStage2({...input,scheduledExecution:{deadlineAt:deadline}});
     expect(result.status).toBe("scored");
     expect(mocks.call.mock.calls[0][1]).toEqual({scheduledPoolRecovery:true,deadlineAt:deadline});
-    expect(mocks.send.mock.calls[0][0]).toMatchObject({maxTokens:700,responseMimeType:"application/json",responseSchema:{required:["tier","score","reason","hard_gates"]}});
+    expect(mocks.send.mock.calls[0][0]).toMatchObject({maxTokens:1400,responseMimeType:"application/json",responseSchema:{required:["tier","score","reason","hard_gates"]}});
     expect(mocks.truncation).toHaveBeenCalledOnce();
   });
-  it("leaves existing extension/review scoring options and failure fallback unchanged",async()=>{
+  it("also constrains manual review output without enabling scheduled recovery by default",async()=>{
     await scoreStage2(input);
     expect(mocks.call.mock.calls[0][1]).toEqual({});
-    expect(mocks.send.mock.calls[0][0]).not.toHaveProperty("responseSchema");
-    expect(mocks.truncation).not.toHaveBeenCalled();
+    expect(mocks.send.mock.calls[0][0]).toHaveProperty("responseSchema");
+    expect(mocks.truncation).toHaveBeenCalledOnce();
     mocks.call.mockRejectedValue(new Error("Pool unavailable"));
     expect(await scoreStage2(input)).not.toHaveProperty("retryAfterMs");
+  });
+  it("bounds background review attempts and rotates healthy sibling accounts through the existing recovery policy",async()=>{
+    const deadlineAt=Date.now()+25_000;
+    expect((await scoreStage2({...input,reviewExecution:{deadlineAt}})).status).toBe("scored");
+    expect(mocks.call.mock.calls[0][1]).toEqual({scheduledPoolRecovery:true,deadlineAt});
+    expect(mocks.send.mock.calls[0][0]).toMatchObject({timeoutMs:15_000,maxTokens:1400});
   });
   it("pauses scheduled work on pool exhaustion instead of producing ATS-only review floods",async()=>{
     mocks.call.mockRejectedValue(new Error("All keys cooling"));

@@ -14,6 +14,16 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.refreshStatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-bottom: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .toolbar {
   display: flex;
   align-items: center;

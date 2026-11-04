@@ -203,7 +203,7 @@ Tier the pair into exactly one of four buckets:
 
 Separately, note citizenship/security clearance and years-of-experience concerns in hard_gates if the job's structured citizenship/export-control/clearance flags are set or the job text otherwise requires either, and the candidate's recorded status doesn't affirmatively prove it, or there's a clear, substantial years-of-experience mismatch. hard_gates are warnings for the human reviewer, not an instruction to reject - do not let a hard gate by itself push the tier to "reject" unless the underlying fit is also fundamentally wrong.
 
-Return exactly one JSON object with tier (one of "strong","adjacent","stretch","reject"), score (integer 0-100, informational - reflects your tier choice, does not override it), reason (short evidence-based explanation), and hard_gates (array of explicit, unresolved citizenship/clearance/experience concerns, or an empty array).`;
+Return exactly one JSON object with tier (one of "strong","adjacent","stretch","reject"), score (integer 0-100, informational - reflects your tier choice, does not override it), reason (at most 80 words, evidence-based), and hard_gates (at most 6 concise unresolved citizenship/clearance/experience concerns, at most 160 characters each, or an empty array). Do not repeat the resume or job description. Keep the complete JSON concise.`;
 
 export function parseEligibilityResponse(raw: string): { tier: AiTier; score: number; reason: string; hardGates: string[] } {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
@@ -265,10 +265,13 @@ export async function scoreStage2(params: {
   deterministicScore: number;
   crossCheckFloor?: number;
   runId?: string | null;
-  /** Only the scheduled executor opts into bounded, account-aware recovery. */
+  /** Scheduled matching opts into bounded, account-aware recovery. */
   scheduledExecution?: { deadlineAt: number };
+  /** Extension review work runs after the review is saved, with a bounded lease. */
+  reviewExecution?: { deadlineAt: number };
 }): Promise<Stage2Outcome> {
   const { customPrompt, job, candidate, resume, description, deterministicScore, runId } = params;
+  const execution = params.scheduledExecution ?? params.reviewExecution;
   const payload = {
     job: {
       title: job.title, company: job.company, location: job.location, seniority: job.seniority_level,
@@ -303,22 +306,24 @@ export async function scoreStage2(params: {
   try {
     const { result, providerName, model, inputTokens, outputTokens, latencyMs } = await callWithUsageTracking(
       SCHEDULED_LOGGING_AUTOMATION_ID,
-      params.scheduledExecution ? {scheduledPoolRecovery:true,deadlineAt:params.scheduledExecution.deadlineAt} : {},
+      execution ? {scheduledPoolRecovery:true,deadlineAt:execution.deadlineAt} : {},
       async (provider) => {
         const response = await provider.send({
           system: `${ELIGIBILITY_SYSTEM_PROMPT}\n\nAdditional administrator scoring guidance (must obey the protections and evidence rules above):\n${customPrompt || "No extra scoring instructions."}`,
           messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify(payload) }] }],
           tools: [],
           temperature: 0,
-          maxTokens: 700,
-          timeoutMs: 30_000,
-          ...(params.scheduledExecution ? {responseMimeType:"application/json",responseSchema:{
+          // A ceiling is not a target: the concise prompt keeps normal usage
+          // low, while headroom avoids paying repeatedly for cut-off JSON.
+          maxTokens: 1400,
+          timeoutMs: params.reviewExecution ? 15_000 : 30_000,
+          responseMimeType:"application/json",responseSchema:{
             type:"object",additionalProperties:false,required:["tier","score","reason","hard_gates"],
             properties:{tier:{type:"string",enum:["strong","adjacent","stretch","reject"]},score:{type:"integer",minimum:0,maximum:100},
               reason:{type:"string"},hard_gates:{type:"array",items:{type:"string"}}},
-          }} : {}),
+          },
         });
-        if (params.scheduledExecution) assertNotTruncated(response, "Scheduled eligibility check");
+        assertNotTruncated(response, "Candidate eligibility check");
         return parseEligibilityResponse(textOf(response.content));
       },
     );
@@ -354,7 +359,7 @@ export async function scoreStage2(params: {
     return {
       status: "failed", provider: failedProvider, model: failedModel,
       failureReason: error instanceof Error ? error.message.slice(0, 1000) : "Eligibility AI check failed after exhausting the shared OpenCode pool.",
-      ...(params.scheduledExecution ? {retryAfterMs:60_000} : {}),
+      ...(execution ? {retryAfterMs:60_000} : {}),
     };
   }
 }
