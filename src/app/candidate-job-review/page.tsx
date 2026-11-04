@@ -6,6 +6,8 @@ import { Loader2, ExternalLink, CheckCircle2, XCircle, Inbox, AlertCircle, Alert
 import { parseCandidateReviewFilters } from "@/lib/candidateReviewFilters";
 import { CANDIDATE_PIPELINE_STAGES, type CandidatePipelineStage } from "@/lib/candidatePipeline";
 import styles from "./review-queue.module.css";
+import { MatchEvidence } from "./MatchEvidence";
+import type { ScheduledMatchQuality } from "@/lib/scheduledMatchQuality";
 
 interface AlternateResume { resumeId: string; resumeName: string | null; score: number }
 interface ReviewItem {
@@ -26,6 +28,7 @@ interface ReviewItem {
   reviewed_by_name: string | null; reviewed_at: string | null; review_note: string | null;
   application_id: string | null;
   created_at: string;
+  match_quality?: ScheduledMatchQuality | null;
 }
 
 const TABS = [
@@ -391,6 +394,7 @@ export default function CandidateJobReviewPage() {
                 </div>
 
                 {item.ai_reason && <p className={styles.reason}>{item.ai_reason}</p>}
+                <MatchEvidence quality={item.match_quality} />
                 {!item.ai_reason && item.ai_status === "failed" && <p className={`muted ${styles.reason}`}>
                   AI eligibility check could not complete: {item.ai_failure_reason || "unknown error"}. Showing the ATS score only — approve on that basis, or retry the AI check below.
                 </p>}

@@ -39,7 +39,7 @@ export async function GET() {
     const [candidates, rules, members, runs, sources, decisions] = await Promise.all([
       query<any>(
         `SELECT c.id, c.name, c.status, c.pipeline_stage,
-                (SELECT COUNT(*)::int FROM base_resumes br WHERE br.candidate_id = c.id AND br.status IN ('draft', 'approved')) AS approved_resume_count
+                (SELECT COUNT(*)::int FROM base_resumes br WHERE br.candidate_id = c.id AND br.status = 'approved') AS approved_resume_count
            FROM candidates c
           WHERE c.status = 'active' AND c.pipeline_stage = 'applying'
           ORDER BY c.name ASC`,

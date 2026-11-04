@@ -54,6 +54,10 @@ function job(overrides: Partial<ScoringJob> = {}): ScoringJob {
 const DESCRIPTION = `${TERMS.join(" ")}. The engineer prepares plans, calculations, reports, and construction documents for land development projects. Minimum 3 years experience.`;
 
 describe("scoreStage1 (lane-breadth)", () => {
+  test("does not turn an explicitly unnecessary clearance into an eligibility blocker",()=> {
+    const result=scoreStage1(candidate(),[resume()],`${DESCRIPTION} No security clearance is required.`,job(),365);
+    expect(result.hardGates.some(gate=>/clearance/i.test(gate))).toBe(false);
+  });
   test("scores every resume and ranks the best first", () => {
     const strongResume = resume({ id: "strong", name: "Strong fit" });
     const weakResume = resume({ id: "weak", name: "Weak fit", target_roles: ["unrelated field", "retail sales", "customer service"], content: "Retail sales associate with customer service experience." });

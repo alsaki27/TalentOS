@@ -31,7 +31,9 @@ const resumeAId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const resumeBId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const assignedByUserId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
-const LONG_DESCRIPTION = "A detailed job description with enough content to clear the 250-character floor. ".repeat(4);
+const LONG_DESCRIPTION = "A detailed engineering job description with responsibility and qualification evidence. ".repeat(8);
+const ASSESSMENT = { role_fit: "aligned", seniority_fit: "aligned", experience_fit: "meets", preferences_fit: "compatible",
+  requirements: [1,2,3].map(n => ({requirement: `Core duty ${n}`, assessment: "met", jd_quote: "The job requires engineering evidence.", resume_quote: "The candidate performed engineering work."})) };
 
 function baseConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -47,8 +49,8 @@ function baseConfig(overrides: Record<string, unknown> = {}) {
 function job(overrides: Record<string, unknown> = {}) {
   return {
     event_id: eventId, job_id: jobId, source: "cron", ingested_at: "2026-11-01T00:00:00.000Z",
-    title: "Engineer", company: "Acme", location: null, source_url: null, apply_url: null,
-    description_text: LONG_DESCRIPTION, raw_description: null, posted_at: null,
+    title: "Engineer", company: "Acme", location: null, source_url: "https://example.com/jobs/1", apply_url: null,
+    description_text: LONG_DESCRIPTION, raw_description: null, posted_at: new Date().toISOString(),
     seniority_level: null, job_category: null, is_active: true,
     requires_citizenship: false, citizenship_countries: null,
     export_control_restricted: false, eligibility_restriction_evidence: null,
@@ -78,6 +80,7 @@ describe("runScheduledCandidateLogging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.execute.mockResolvedValue({ rowCount: 1 });
+    mocks.isSafeExternalUrl.mockReturnValue(true);
     mocks.activeRun=null;
     mocks.requestRun.mockImplementation(async input => {
       const selected=await mocks.query("FROM scheduled_job_ingestion_events e JOIN jobs j");
@@ -140,7 +143,7 @@ describe("runScheduledCandidateLogging", () => {
     }));
     mocks.scoreStage2.mockImplementation(({ candidate }: any) => Promise.resolve(
       candidate.id === candidateAId
-        ? { status: "scored", tier: "strong", score: 92, reason: "Great fit.", hardGates: [], provider: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5 }
+        ? { status: "scored", tier: "strong", score: 92, assessment: ASSESSMENT, reason: "Great fit.", hardGates: [], provider: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5 }
         : { status: "scored", tier: "reject", score: 20, reason: "Wrong field entirely.", hardGates: [], provider: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5 },
     ));
 
@@ -155,7 +158,7 @@ describe("runScheduledCandidateLogging", () => {
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"complete"]));
   });
 
-  it("queues ATS-only when Stage 2 fails, instead of dropping the pair", async () => {
+  it("records a permanent AI failure without producing an ATS-only suggestion", async () => {
     wireQueryOne();
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return [job()];
@@ -168,14 +171,11 @@ describe("runScheduledCandidateLogging", () => {
 
     const result = await runScheduledCandidateLogging({ triggerType: "manual" });
 
-    expect(result).toMatchObject({ queuedForReview: 1, failedCount: 1 });
-    expect(mocks.execute).toHaveBeenCalledWith(
-      expect.stringContaining("INSERT INTO candidate_job_review_queue"),
-      expect.arrayContaining([candidateAId, jobId, resumeAId, 90, "failed", null]),
-    );
+    expect(result).toMatchObject({ status: "completed", queuedForReview: 0, failedCount: 1 });
+    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.anything());
   });
 
-  it("surfaces hard gates as warnings and still queues the pair, rather than excluding it", async () => {
+  it("blocks unresolved mandatory gates before spending on Stage 2", async () => {
     wireQueryOne();
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return [job()];
@@ -192,14 +192,12 @@ describe("runScheduledCandidateLogging", () => {
 
     const result = await runScheduledCandidateLogging({ triggerType: "manual" });
 
-    expect(result.queuedForReview).toBe(1);
-    expect(mocks.execute).toHaveBeenCalledWith(
-      expect.stringContaining("INSERT INTO candidate_job_review_queue"),
-      expect.arrayContaining([JSON.stringify(["Required security clearance is not proven by the resume"])]),
-    );
+    expect(result.queuedForReview).toBe(0);
+    expect(mocks.scoreStage2).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.anything());
   });
 
-  it("applies global dedup: a job already applied to for any candidate is skipped, not scored", async () => {
+  it("skips an existing application for this candidate-job pair before scoring", async () => {
     wireQueryOne({ existingApplication: { id: "existing-app" } });
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return [job()];
@@ -227,11 +225,11 @@ describe("runScheduledCandidateLogging", () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")) return jobs;
       if (sql.includes("FROM candidates c")) return [candidateRow(candidateAId)];
-      if (sql.includes("FROM base_resumes WHERE candidate_id")) return [resumeRow(resumeAId, candidateAId, { status: "draft" })];
+      if (sql.includes("FROM base_resumes WHERE candidate_id")) return [resumeRow(resumeAId, candidateAId, { status: "approved" })];
       return [];
     });
     mocks.scoreStage1.mockReturnValue({ bestResume: resumeRow(resumeAId, candidateAId), bestScore: 30, hardGates: [], rankedResumes: [] });
-    mocks.scoreStage2.mockResolvedValue({ status: "scored", tier: "strong", score: 80, reason: "Fit", hardGates: [],
+    mocks.scoreStage2.mockResolvedValue({ status: "scored", tier: "strong", score: 90, assessment: ASSESSMENT, reason: "Fit", hardGates: [],
       provider: "opencode", model: "glm-5.3-flash", inputTokens: 10, outputTokens: 5 });
   }
 
@@ -243,12 +241,47 @@ describe("runScheduledCandidateLogging", () => {
     expect(mocks.scoreStage2).not.toHaveBeenCalled();
   });
 
-  it("admits the exact ATS boundary, draft resumes, and the saved AI cross-check floor", async () => {
+  it("requires explicit candidate opt-in and approved-only resume selection",async()=> {
+    wireSingleCandidate();await runScheduledCandidateLogging({triggerType:"manual"});
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("AND r.is_enabled = true"));
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("status = 'approved'"),expect.anything());
+  });
+
+  it("does not admit a draft even if a stale loader supplies one",async()=> {
+    wireSingleCandidate();const previous=mocks.query.getMockImplementation()!;
+    mocks.query.mockImplementation((sql:string,...args:unknown[])=>sql.includes("FROM base_resumes WHERE")
+      ?[resumeRow(resumeAId,candidateAId,{status:"draft"})]:previous(sql,...args));
+    expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({queuedForReview:0,aiCalls:0});
+  });
+
+  it.each(["adjacent","stretch","reject"])("keeps %s out of automated suggestions even with a high score",async tier=> {
+    wireSingleCandidate();mocks.scoreStage2.mockResolvedValue({status:"scored",tier,score:99,assessment:ASSESSMENT,
+      reason:"Keyword overlap only",hardGates:[],provider:"opencode",model:"fixture",inputTokens:1,outputTokens:1});
+    expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({queuedForReview:0,skippedCount:1});
+  });
+
+  it("holds an old publisher date even when the ingestion event is new",async()=> {
+    wireSingleCandidate(baseConfig(),[job({posted_at:"2020-01-01",ingested_at:new Date().toISOString()})]);
+    expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({queuedForReview:0,aiCalls:0});
+  });
+
+  it("scopes dedup to each candidate and preserves valid SQL bind positions for evidence writes",async()=> {
+    wireSingleCandidate();await runScheduledCandidateLogging({triggerType:"manual"});
+    expect(mocks.queryOne).toHaveBeenCalledWith(expect.stringContaining("AND candidate_id=$2"),[jobId,candidateAId]);
+    for (const [,statements] of mocks.leasedWrites.mock.calls) for(const {text,values} of statements) {
+      const highest=Math.max(...[...text.matchAll(/\$(\d+)/g)].map(m=>Number(m[1])));
+      expect(highest).toBe(values.length);
+    }
+    const queued=mocks.execute.mock.calls.find(([sql])=>sql.includes("INSERT INTO candidate_job_review_queue"));
+    expect(JSON.parse(queued![1][16])).toMatchObject({policyVersion:"precision-v1",reasons:[]});
+  });
+
+  it("admits the ATS retrieval boundary only after independent precision evidence passes", async () => {
     wireSingleCandidate(baseConfig({ ai_match_threshold: 30 }));
     const result = await runScheduledCandidateLogging({ triggerType: "manual" });
     expect(result).toMatchObject({ aiCalls: 1, queuedForReview: 1 });
-    expect(mocks.scoreStage2).toHaveBeenCalledWith(expect.objectContaining({ deterministicScore: 30, crossCheckFloor: 30 }));
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("status IN ('draft', 'approved')"), expect.any(Array));
+    expect(mocks.scoreStage2).toHaveBeenCalledWith(expect.objectContaining({ deterministicScore: 30, approvedResumes: expect.any(Array) }));
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("status = 'approved'"), expect.any(Array));
     expect(mocks.checkpoint).toHaveBeenCalledWith(expect.objectContaining({id:runId,ai_calls:1,applications_created:1}),expect.any(Object));
   });
 
@@ -282,7 +315,7 @@ describe("runScheduledCandidateLogging", () => {
     const clock=vi.spyOn(Date,"now").mockReturnValue(100000);
     mocks.scoreStage2.mockImplementationOnce(async()=>{
       clock.mockReturnValue(145000);
-      return {status:"scored",tier:"strong",score:80,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+      return {status:"scored",tier:"strong",score:90,assessment:ASSESSMENT,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
     });
     try {
       const first=await runScheduledCandidateLogging({triggerType:"manual"});
@@ -312,7 +345,7 @@ describe("runScheduledCandidateLogging", () => {
     const clock=vi.spyOn(Date,"now").mockReturnValue(100000);
     mocks.scoreStage2.mockImplementationOnce(async()=>{
       clock.mockReturnValue(125000);
-      return {status:"scored",tier:"strong",score:80,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+      return {status:"scored",tier:"strong",score:90,assessment:ASSESSMENT,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
     });
     try {
       const result=await runScheduledCandidateLogging({triggerType:"manual"});
@@ -334,7 +367,7 @@ describe("runScheduledCandidateLogging", () => {
     const {ScheduledLoggingLeaseLost}=await import("@/server/services/scheduledLoggingExecution");
     mocks.scoreStage2.mockImplementation(async()=>{
       mocks.checkpoint.mockRejectedValueOnce(new ScheduledLoggingLeaseLost());
-      return {status:"scored",tier:"strong",score:90,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+      return {status:"scored",tier:"strong",score:90,assessment:ASSESSMENT,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
     });
     expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({leaseLost:true});
     expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"),expect.anything());
