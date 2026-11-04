@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { query } from "@/server/db/neon";
+import { parseCandidateReviewFilters, candidateReviewFilterSql } from "@/lib/candidateReviewFilters";
 
 export const dynamic = "force-dynamic";
 
@@ -8,12 +9,30 @@ export async function GET(request: NextRequest) {
   const auth = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (auth.response) return auth.response;
 
-  const status = request.nextUrl.searchParams.get("status") || "pending";
-  const statuses = status === "all" ? ["pending", "approved", "rejected"] : [status];
+  let filters;
+  try { filters = parseCandidateReviewFilters(request.nextUrl.searchParams); }
+  catch (error) { return NextResponse.json({error: error instanceof Error ? error.message : "Invalid filters."}, {status:400}); }
+  const statuses = filters.status === "all" ? ["pending", "approved", "rejected"] : [filters.status];
+  const scope = candidateReviewFilterSql(filters);
 
   try {
-    const [items, counts] = await Promise.all([
-      query<any>(
+    const [counts, candidates, staff] = await Promise.all([
+      query<{status: string; count: number; strong_count: number; adjacent_count: number; stretch_count: number}>(`SELECT q.status,COUNT(*)::int AS count,
+        COUNT(*) FILTER(WHERE q.ai_tier='strong')::int AS strong_count,
+        COUNT(*) FILTER(WHERE q.ai_tier='adjacent')::int AS adjacent_count,
+        COUNT(*) FILTER(WHERE q.ai_tier='stretch')::int AS stretch_count
+        FROM candidate_job_review_queue q WHERE ${scope.where} GROUP BY q.status`, scope.values),
+      query<{id:string; name:string}>(`SELECT DISTINCT c.id,c.name FROM candidate_job_review_queue q JOIN candidates c ON c.id=q.candidate_id ORDER BY c.name,c.id`),
+      query<{id:string; name:string}>(`SELECT DISTINCT p.user_id AS id,COALESCE(p.display_name,'Unnamed staff') AS name FROM candidate_job_review_queue q JOIN profiles p ON p.user_id=q.assigned_to_user_id ORDER BY name,id`),
+    ]);
+    const countsByStatus = { pending: 0, approved: 0, rejected: 0 };
+    for (const row of counts) if (row.status in countsByStatus) (countsByStatus as any)[row.status] = row.count;
+    const total = filters.status === "all" ? Object.values(countsByStatus).reduce((a,b)=>a+b,0) : countsByStatus[filters.status];
+    const pageSize = 50;
+    const page = Math.min(filters.page, Math.max(1, Math.ceil(total / pageSize)));
+    const itemScope = candidateReviewFilterSql(filters, 2);
+    const limitParameter = itemScope.values.length + 2;
+    const items = await query<any>(
         `SELECT q.id, q.source, q.candidate_id, c.name AS candidate_name,
                 q.job_id, j.title AS job_title, j.company, j.apply_url,
                 q.base_resume_id, br.name AS base_resume_name,
@@ -28,20 +47,15 @@ export async function GET(request: NextRequest) {
            LEFT JOIN base_resumes br ON br.id = q.base_resume_id
            LEFT JOIN profiles assignee ON assignee.user_id = q.assigned_to_user_id
            LEFT JOIN profiles reviewer ON reviewer.user_id = q.reviewed_by_user_id
-          WHERE q.status = ANY($1::text[])
+          WHERE q.status = ANY($1::text[]) AND ${itemScope.where}
           ORDER BY CASE q.status WHEN 'pending' THEN 0 ELSE 1 END,
                    CASE q.ai_tier WHEN 'strong' THEN 0 WHEN 'adjacent' THEN 1 WHEN 'stretch' THEN 2 ELSE 3 END,
-                   q.created_at DESC
-          LIMIT 300`,
-        [statuses],
-      ),
-      query<{ status: string; count: number }>(
-        `SELECT status, COUNT(*)::int AS count FROM candidate_job_review_queue GROUP BY status`,
-      ),
-    ]);
-    const countsByStatus = { pending: 0, approved: 0, rejected: 0 };
-    for (const row of counts) if (row.status in countsByStatus) (countsByStatus as any)[row.status] = row.count;
-    return NextResponse.json({ items, counts: countsByStatus });
+                   q.created_at DESC, q.id DESC
+          LIMIT $${limitParameter} OFFSET $${limitParameter + 1}`,
+        [statuses,...itemScope.values,pageSize,(page-1)*pageSize],
+      );
+    const pending = counts.find(row=>row.status==='pending');
+    return NextResponse.json({items,counts:countsByStatus,pendingTiers:{strong:pending?.strong_count ?? 0,adjacent:pending?.adjacent_count ?? 0,stretch:pending?.stretch_count ?? 0},filterOptions:{candidates,staff},pagination:{page,pageSize,total}});
   } catch (error) {
     console.error("[candidate-job-review] List failed:", error);
     return NextResponse.json({ error: "Could not load the review queue." }, { status: 500 });

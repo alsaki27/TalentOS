@@ -18,6 +18,7 @@ vi.mock("@/lib/ai/routing", () => ({
 }));
 
 import { approveReviewItem, rejectReviewItem, bulkApproveByTier, retryAiScoring } from "@/server/services/candidateJobReviewQueueService";
+import {parseCandidateReviewFilters} from "@/lib/candidateReviewFilters";
 
 const queueId = "11111111-1111-4111-8111-111111111111";
 const candidateId = "22222222-2222-4222-8222-222222222222";
@@ -126,6 +127,16 @@ describe("candidateJobReviewQueueService", () => {
   });
 
   describe("bulkApproveByTier", () => {
+    it("limits bulk selection to the current candidate, staff owner and queued-time range",async()=>{
+      mocks.query.mockResolvedValue([]);
+      const filters=parseCandidateReviewFilters(new URLSearchParams({candidate_id:candidateId,staff_id:actorId,start:"2026-11-04T00:00:00Z",end:"2026-11-04T03:00:00Z"}));
+      await bulkApproveByTier(["strong"],actorId,filters);
+      const [sql,values]=mocks.query.mock.calls[0];
+      expect(sql).toContain("q.candidate_id = $2::uuid");expect(sql).toContain("q.assigned_to_user_id = $3::uuid");
+      expect(sql).toContain("q.created_at >= $4::timestamptz");expect(sql).toContain("q.created_at <= $5::timestamptz");
+      expect(values).toEqual([["strong"],candidateId,actorId,"2026-11-04T00:00:00.000Z","2026-11-04T03:00:00.000Z"]);
+      expect(mocks.createApplications).not.toHaveBeenCalled();
+    });
     it("approves every pending item matching the given tiers and reports failures separately", async () => {
       mocks.query.mockResolvedValue([{ id: "q-1" }, { id: "q-2" }]);
       let call = 0;

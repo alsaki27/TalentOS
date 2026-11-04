@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, ExternalLink, CheckCircle2, XCircle, Inbox, AlertCircle, AlertTriangle, RotateCw, ChevronDown, ChevronUp } from "lucide-react";
+import { parseCandidateReviewFilters } from "@/lib/candidateReviewFilters";
 import styles from "./review-queue.module.css";
 
 interface AlternateResume { resumeId: string; resumeName: string | null; score: number }
@@ -20,7 +21,7 @@ interface ReviewItem {
   hard_gates: string[];
   status: "pending" | "approved" | "rejected";
   priority: "high" | "default" | "low";
-  assigned_to_name: string | null;
+  assigned_to_user_id: string | null; assigned_to_name: string | null;
   reviewed_by_name: string | null; reviewed_at: string | null; review_note: string | null;
   application_id: string | null;
   created_at: string;
@@ -48,6 +49,16 @@ export default function CandidateJobReviewPage() {
   const [status, setStatus] = useState<(typeof TABS)[number]["value"]>("pending");
   const [sourceFilter, setSourceFilter] = useState<"all" | "scheduled_logging" | "extension">("all");
   const [tierFilter, setTierFilter] = useState<"all" | "strong" | "adjacent" | "stretch" | "unscored">("all");
+  const [candidateFilter, setCandidateFilter] = useState("");
+  const [staffFilter, setStaffFilter] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({page:1,pageSize:50,total:0});
+  const [filterOptions, setFilterOptions] = useState<{candidates:{id:string;name:string}[];staff:{id:string;name:string}[]}>({candidates:[],staff:[]});
+  const [pendingTiers,setPendingTiers] = useState<{strong:number;adjacent:number;stretch:number}|null>(null);
+  const [timezone,setTimezone] = useState("");
+  const loadSequence=useRef(0);
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [loading, setLoading] = useState(true);
@@ -57,16 +68,46 @@ export default function CandidateJobReviewPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
-  const load = useCallback(async () => {
-    setLoading(true); setError("");
-    const response = await fetch(`/api/admin/candidate-job-review?status=${status}`, { cache: "no-store" });
-    const data = await response.json();
-    if (!response.ok) setError(data.error || "Could not load the review queue.");
-    else { setItems(data.items || []); setCounts(data.counts || { pending: 0, approved: 0, rejected: 0 }); }
-    setLoading(false);
-  }, [status]);
+  const filterParams = useCallback(() => {
+    const params=new URLSearchParams({status,source:sourceFilter,tier:tierFilter,page:String(page)});
+    if(candidateFilter) params.set("candidate_id",candidateFilter);
+    if(staffFilter) params.set("staff_id",staffFilter);
+    for(const [key,value] of [["start",startTime],["end",endTime]]) {
+      if(value) {
+        const parsed=new Date(value);
+        if(!Number.isFinite(parsed.getTime())) throw new Error(`Invalid ${key} time.`);
+        params.set(key,parsed.toISOString());
+      }
+    }
+    parseCandidateReviewFilters(params);
+    return params;
+  },[status,sourceFilter,tierFilter,candidateFilter,staffFilter,startTime,endTime,page]);
+  const latestFilterParams=useRef(filterParams);
+  latestFilterParams.current=filterParams;
 
-  useEffect(() => { void load(); }, [load]);
+  const load = useCallback(async (signal?:AbortSignal) => {
+    const sequence=++loadSequence.current;
+    setLoading(true); setError("");
+    try {
+      const params=latestFilterParams.current();
+      const response=await fetch(`/api/admin/candidate-job-review?${params}`,{cache:"no-store",signal});
+      const data=await response.json();
+      if(sequence!==loadSequence.current || signal?.aborted) return;
+      if(!response.ok) throw new Error(data.error || "Could not load the review queue.");
+      setItems(data.items || []); setCounts(data.counts || {pending:0,approved:0,rejected:0});
+      setPendingTiers(data.pendingTiers ?? null);
+      setPagination(data.pagination || {page:1,pageSize:50,total:data.items?.length || 0});
+      if(data.filterOptions) setFilterOptions(data.filterOptions);
+      else setFilterOptions({candidates:Array.from(new Map((data.items || []).map((item:ReviewItem)=>[item.candidate_id,{id:item.candidate_id,name:item.candidate_name}])).values()) as {id:string;name:string}[],staff:[]});
+    } catch(error) {
+      if(sequence!==loadSequence.current || signal?.aborted) return;
+      setItems([]);setCounts({pending:0,approved:0,rejected:0});setPendingTiers(null);setPagination({page:1,pageSize:50,total:0});
+      setError(error instanceof Error ? error.message : "Could not load the review queue.");
+    } finally {if(sequence===loadSequence.current && !signal?.aborted)setLoading(false);}
+  },[]);
+
+  useEffect(()=>{const controller=new AbortController();void load(controller.signal);return()=>controller.abort();},[load,filterParams]);
+  useEffect(()=>{setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone);},[]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 5000);
@@ -108,7 +149,7 @@ export default function CandidateJobReviewPage() {
     setBulkBusy(true); setError(""); setNotice("");
     try {
       const response = await fetch("/api/admin/candidate-job-review/bulk-approve", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tiers,filters:filterParams().toString() }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Bulk approve failed.");
@@ -129,14 +170,21 @@ export default function CandidateJobReviewPage() {
   }
 
   const visibleItems = items.filter((item) => {
+    if (candidateFilter && item.candidate_id !== candidateFilter) return false;
+    if (staffFilter === "unassigned" && item.assigned_to_user_id) return false;
+    if (staffFilter && staffFilter !== "unassigned" && item.assigned_to_user_id !== staffFilter) return false;
+    if (startTime && Date.parse(item.created_at)<new Date(startTime).getTime()) return false;
+    if (endTime && Date.parse(item.created_at)>new Date(endTime).getTime()) return false;
     if (sourceFilter !== "all" && item.source !== sourceFilter) return false;
     if (tierFilter === "unscored") return item.ai_status !== "scored";
     if (tierFilter !== "all" && item.ai_tier !== tierFilter) return false;
     return true;
   });
   const totalCount = counts.pending + counts.approved + counts.rejected;
-  const pendingByTier = { strong: 0, adjacent: 0, stretch: 0 };
-  for (const item of items) if (item.status === "pending" && item.ai_tier) (pendingByTier as any)[item.ai_tier]++;
+  const visibleTierCounts={strong:0,adjacent:0,stretch:0};
+  for(const item of visibleItems) if(item.status==="pending" && item.ai_tier)visibleTierCounts[item.ai_tier]++;
+  const pendingByTier=pendingTiers ?? visibleTierCounts;
+  const filtersActive=Boolean(candidateFilter || staffFilter || startTime || endTime || sourceFilter!=="all" || tierFilter!=="all");
 
   return <div className={`candidate-job-review-page ${styles.page}`}>
     <div className={`page-header ${styles.pageHeader}`}>
@@ -148,7 +196,7 @@ export default function CandidateJobReviewPage() {
 
     <div className={`stats-strip ${styles.stats}`}>
       {TABS.map((tab) =>
-        <button key={tab.value} className={`stat-button ${status === tab.value ? "active" : ""}`} aria-pressed={status === tab.value} onClick={() => setStatus(tab.value)}>
+        <button key={tab.value} className={`stat-button ${status === tab.value ? "active" : ""}`} aria-pressed={status === tab.value} onClick={() => {setStatus(tab.value);setPage(1);}}>
           <span className="stat-label">{tab.label}</span>
           <span className="stat-value">{tab.value === "all" ? totalCount : counts[tab.value]}</span>
         </button>)}
@@ -156,25 +204,33 @@ export default function CandidateJobReviewPage() {
 
     <div className={styles.toolbar}>
       <div className={styles.filters}>
-        <select aria-label="Filter by source" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as any)}>
-          <option value="all">All sources</option>
-          <option value="scheduled_logging">Scheduled logging</option>
-          <option value="extension">Extension</option>
-        </select>
-        <select aria-label="Filter by AI tier" value={tierFilter} onChange={(e) => setTierFilter(e.target.value as any)}>
-          <option value="all">All tiers</option>
-          <option value="strong">Strong</option>
-          <option value="adjacent">Adjacent</option>
-          <option value="stretch">Stretch</option>
-          <option value="unscored">AI unavailable (ATS only)</option>
-        </select>
+        <label>Candidate<select aria-label="Filter by candidate" value={candidateFilter} onChange={event=>{setCandidateFilter(event.target.value);setPage(1);}}>
+          <option value="">All candidates</option>
+          {filterOptions.candidates.map(candidate=><option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+        </select></label>
+        <label>Staff owner<select aria-label="Filter by staff owner" value={staffFilter} onChange={event=>{setStaffFilter(event.target.value);setPage(1);}}>
+          <option value="">All staff</option><option value="unassigned">Unassigned</option>
+          {filterOptions.staff.map(staff=><option key={staff.id} value={staff.id}>{staff.name}</option>)}
+        </select></label>
+        <label>Source<select aria-label="Filter by source" value={sourceFilter} onChange={event=>{setSourceFilter(event.target.value as any);setPage(1);}}>
+          <option value="all">All sources</option><option value="scheduled_logging">Scheduled logging</option><option value="extension">Extension</option>
+        </select></label>
+        <label>AI tier<select aria-label="Filter by AI tier" value={tierFilter} onChange={event=>{setTierFilter(event.target.value as any);setPage(1);}}>
+          <option value="all">All tiers</option><option value="strong">Strong</option><option value="adjacent">Adjacent</option>
+          <option value="stretch">Stretch</option><option value="unscored">AI unavailable (ATS only)</option>
+        </select></label>
+        <label>Queued from<input aria-label="Queued from" type="datetime-local" step="1" value={startTime} onChange={event=>{setStartTime(event.target.value);setPage(1);}} /></label>
+        <label>Queued until<input aria-label="Queued until" type="datetime-local" step="1" value={endTime} onChange={event=>{setEndTime(event.target.value);setPage(1);}} /></label>
+      </div>
+      <div className={styles.filterSummary}><span>Queued time in {timezone || "your local timezone"}. Start and end are inclusive.</span>
+        <button className="btn-secondary" disabled={!filtersActive} onClick={()=>{setCandidateFilter("");setStaffFilter("");setStartTime("");setEndTime("");setSourceFilter("all");setTierFilter("all");setPage(1);}}>Clear filters</button>
       </div>
       {status === "pending" && <div className={styles.bulkActions}>
-        <span className={`muted ${styles.bulkLabel}`}>Bulk approve:</span>
-        <button className="btn-secondary" disabled={bulkBusy || !pendingByTier.strong} onClick={() => void bulkApprove(["strong"])}>
+        <span className={`muted ${styles.bulkLabel}`}>Bulk approve matching results:</span>
+        <button className="btn-secondary" disabled={bulkBusy || loading || Boolean(error) || !pendingByTier.strong} onClick={() => void bulkApprove(["strong"])}>
           Strong{pendingByTier.strong ? ` (${pendingByTier.strong})` : ""}
         </button>
-        <button className="btn-secondary" disabled={bulkBusy || (pendingByTier.strong + pendingByTier.adjacent) === 0} onClick={() => void bulkApprove(["strong", "adjacent"])}>
+        <button className="btn-secondary" disabled={bulkBusy || loading || Boolean(error) || (pendingByTier.strong + pendingByTier.adjacent) === 0} onClick={() => void bulkApprove(["strong", "adjacent"])}>
           Strong + Adjacent{(pendingByTier.strong + pendingByTier.adjacent) ? ` (${pendingByTier.strong + pendingByTier.adjacent})` : ""}
         </button>
       </div>}
@@ -276,5 +332,11 @@ export default function CandidateJobReviewPage() {
               </section>;
             })}
           </div>}
+    {!loading && pagination.total>0 && <nav className={styles.pagination} aria-label="Review results pages">
+      <span>{(pagination.page-1)*pagination.pageSize+1}–{Math.min(pagination.page*pagination.pageSize,pagination.total)} of {pagination.total} matching results</span>
+      <div><button className="btn-secondary" disabled={pagination.page<=1} onClick={()=>setPage(pagination.page-1)}>Previous</button>
+        <span>Page {pagination.page} of {Math.max(1,Math.ceil(pagination.total/pagination.pageSize))}</span>
+        <button className="btn-secondary" disabled={pagination.page*pagination.pageSize>=pagination.total} onClick={()=>setPage(pagination.page+1)}>Next</button></div>
+    </nav>}
   </div>;
 }

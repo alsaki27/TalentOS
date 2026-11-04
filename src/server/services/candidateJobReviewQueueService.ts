@@ -13,6 +13,7 @@ import { triggerAiWorkflowForApplication } from "@/server/services/applicationAi
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { assessmentForHumanReview } from "@/lib/candidateReviewAssessment";
 import { scoreStage2, type ScoringJob, type ScoringCandidate, type ScoringResume } from "@/server/services/candidateJobScoring";
+import {candidateReviewFilterSql, type CandidateReviewFilters} from "@/lib/candidateReviewFilters";
 
 export interface ReviewQueueRow {
   id: string;
@@ -149,10 +150,11 @@ export async function rejectReviewItem(id: string, actorUserId: string, note: st
   );
 }
 
-export async function bulkApproveByTier(tiers: string[], actorUserId: string): Promise<{ approved: number; failed: { id: string; error: string }[] }> {
+export async function bulkApproveByTier(tiers: string[], actorUserId: string, filters?: CandidateReviewFilters): Promise<{ approved: number; failed: { id: string; error: string }[] }> {
+  const scope = filters ? candidateReviewFilterSql(filters, 2) : {where:"true",values:[]};
   const rows = await query<{ id: string }>(
-    `SELECT id FROM candidate_job_review_queue WHERE status = 'pending' AND ai_tier = ANY($1::text[]) ORDER BY created_at ASC`,
-    [tiers],
+    `SELECT q.id FROM candidate_job_review_queue q WHERE q.status = 'pending' AND q.ai_tier = ANY($1::text[]) AND ${scope.where} ORDER BY q.created_at ASC`,
+    [tiers,...scope.values],
   );
   let approved = 0;
   const failed: { id: string; error: string }[] = [];
