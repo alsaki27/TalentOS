@@ -8,7 +8,7 @@
 import { textOf } from "@/lib/ai/provider";
 import { evaluateCandidateJob } from "@/lib/candidateJobMatcher";
 import type { BaseResumeCandidate } from "@/lib/ai/selectBestBaseResume";
-import { callWithUsageTracking, AiRouteCallError } from "@/lib/ai/routing";
+import { callWithUsageTracking, AiRouteCallError, assertNotTruncated } from "@/lib/ai/routing";
 import { query } from "@/server/db/neon";
 
 export const SCHEDULED_LOGGING_AUTOMATION_ID = "scheduled_candidate_logging_eligibility_check";
@@ -245,7 +245,7 @@ export type Stage2Outcome =
       status: "scored"; tier: AiTier; score: number; reason: string; hardGates: string[];
       provider: string; model: string | null; inputTokens: number; outputTokens: number;
     }
-  | { status: "failed"; provider: string; model: string; failureReason: string };
+  | { status: "failed"; provider: string; model: string; failureReason: string; retryAfterMs?: number };
 
 // Stage 2: AI fit/eligibility tiering. Never throws - a failure (pool
 // exhausted, invalid output after retries, etc.) comes back as a { status:
@@ -265,6 +265,8 @@ export async function scoreStage2(params: {
   deterministicScore: number;
   crossCheckFloor?: number;
   runId?: string | null;
+  /** Only the scheduled executor opts into bounded, account-aware recovery. */
+  scheduledExecution?: { deadlineAt: number };
 }): Promise<Stage2Outcome> {
   const { customPrompt, job, candidate, resume, description, deterministicScore, runId } = params;
   const payload = {
@@ -301,7 +303,7 @@ export async function scoreStage2(params: {
   try {
     const { result, providerName, model, inputTokens, outputTokens, latencyMs } = await callWithUsageTracking(
       SCHEDULED_LOGGING_AUTOMATION_ID,
-      {},
+      params.scheduledExecution ? {scheduledPoolRecovery:true,deadlineAt:params.scheduledExecution.deadlineAt} : {},
       async (provider) => {
         const response = await provider.send({
           system: `${ELIGIBILITY_SYSTEM_PROMPT}\n\nAdditional administrator scoring guidance (must obey the protections and evidence rules above):\n${customPrompt || "No extra scoring instructions."}`,
@@ -310,7 +312,13 @@ export async function scoreStage2(params: {
           temperature: 0,
           maxTokens: 700,
           timeoutMs: 30_000,
+          ...(params.scheduledExecution ? {responseMimeType:"application/json",responseSchema:{
+            type:"object",additionalProperties:false,required:["tier","score","reason","hard_gates"],
+            properties:{tier:{type:"string",enum:["strong","adjacent","stretch","reject"]},score:{type:"integer",minimum:0,maximum:100},
+              reason:{type:"string"},hard_gates:{type:"array",items:{type:"string"}}},
+          }} : {}),
         });
+        if (params.scheduledExecution) assertNotTruncated(response, "Scheduled eligibility check");
         return parseEligibilityResponse(textOf(response.content));
       },
     );
@@ -346,6 +354,7 @@ export async function scoreStage2(params: {
     return {
       status: "failed", provider: failedProvider, model: failedModel,
       failureReason: error instanceof Error ? error.message.slice(0, 1000) : "Eligibility AI check failed after exhausting the shared OpenCode pool.",
+      ...(params.scheduledExecution ? {retryAfterMs:60_000} : {}),
     };
   }
 }

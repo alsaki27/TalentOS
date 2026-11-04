@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ auth: vi.fn(), session: vi.fn(), queryOne: vi.
 vi.mock("@/lib/auth", () => ({ requireCurrentUser: mocks.auth, MASTER_DATA_MANAGER_ROLES: ["admin", "manager"] }));
 vi.mock("@/server/security/scheduledCandidateLoggingAuth", () => ({ hasScheduledLoggingSession: mocks.session }));
 vi.mock("@/server/db/neon", () => ({ queryOne: mocks.queryOne }));
-vi.mock("@/server/services/scheduledCandidateLoggingService", () => ({ runScheduledCandidateLogging: mocks.run }));
+vi.mock("@/server/services/scheduledCandidateLoggingService", () => ({ enqueueScheduledCandidateLogging: mocks.run }));
 
 import { POST } from "@/app/api/admin/scheduled-job-logging/run/route";
 const actorId = "11111111-1111-4111-8111-111111111111";
@@ -17,7 +17,7 @@ describe("Run one scheduled candidate logging batch", () => {
     mocks.auth.mockResolvedValue({ response: null, context: { profile: { user_id: actorId, role: "manager" } } });
     mocks.session.mockResolvedValue(true);
     mocks.queryOne.mockResolvedValue({ is_enabled: true });
-    mocks.run.mockResolvedValue({ runId: "run-fixture", status: "completed", jobsSeen: 2, queuedForReview: 1, aiCalls: 1 });
+    mocks.run.mockResolvedValue({ runId: "run-fixture", status: "running",phase:"queued",jobsSeen:0,queuedForReview:0,aiCalls:0 });
   });
 
   it.each([401, 403])("refuses unauthorized access (%s) before running anything", async status => {
@@ -40,10 +40,10 @@ describe("Run one scheduled candidate logging batch", () => {
     expect(mocks.run).not.toHaveBeenCalled();
   });
 
-  it("dispatches one manual run with the signed-in actor and returns review counts", async () => {
+  it("accepts a durable manual run with the signed-in actor without waiting for AI", async () => {
     const response = await POST(request());
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ ok: true, result: { queuedForReview: 1, aiCalls: 1 } });
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ ok: true,accepted:true,result:{status:"running",phase:"queued",aiCalls:0} });
     expect(mocks.auth).toHaveBeenCalledWith(["admin", "manager"]);
     expect(mocks.run).toHaveBeenCalledExactlyOnceWith({ triggerType: "manual", actorUserId: actorId,
       runKey: expect.stringMatching(/^scheduled-candidate-logging:manual:[a-f0-9-]+$/) });

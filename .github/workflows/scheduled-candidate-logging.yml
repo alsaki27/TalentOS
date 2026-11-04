@@ -1,9 +1,8 @@
 name: Scheduled Candidate Job Logging
 
 on:
-  schedule:
-    # 11:00 PM UTC is 5:00 AM in Bangladesh (Asia/Dhaka, UTC+6).
-    - cron: "0 23 * * *"
+  # The daily 05:00 BDT trigger and minute-by-minute continuation are owned
+  # by Cloudflare Cron (worker-entry.mjs). GitHub scheduling is best effort.
   workflow_dispatch:
 
 concurrency:
@@ -13,13 +12,12 @@ concurrency:
 jobs:
   log-matching-jobs:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 3
     steps:
       - name: Run scheduled candidate logging batch
         env:
           TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
         run: |
           set -euo pipefail
           if [ -z "$CRON_SECRET" ]; then
@@ -29,11 +27,14 @@ jobs:
 
           BASE_URL="$(printf '%s' "$TALENTOS_BASE_URL" | tr -d '[:space:]')"
           BASE_URL="${BASE_URL%/}"
-          echo "Calling TalentOS scheduled candidate logging ($TRIGGER_TYPE)."
+          echo "Requesting a durable TalentOS batch. Cloudflare will process bounded chunks."
           curl --fail-with-body --silent --show-error \
-            --max-time 1200 \
+            --connect-timeout 10 --max-time 45 --retry 2 --retry-all-errors \
             -X POST \
             -H "Authorization: Bearer $CRON_SECRET" \
-            -H "X-Scheduled-Logging-Trigger: $TRIGGER_TYPE" \
+            -H "X-Scheduled-Logging-Trigger: manual" \
+            -H "X-Scheduled-Logging-Request-Id: github-${GITHUB_RUN_ID}" \
             -H "Content-Type: application/json" \
             "$BASE_URL/api/cron/scheduled-candidate-logging"
+          echo ""
+          echo "Request accepted; this is not a claim that the batch finished. Follow run history at $BASE_URL/admin/auto-job-logging."

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
 import { hasScheduledLoggingSession } from "@/server/security/scheduledCandidateLoggingAuth";
-import { runScheduledCandidateLogging } from "@/server/services/scheduledCandidateLoggingService";
+import { enqueueScheduledCandidateLogging } from "@/server/services/scheduledCandidateLoggingService";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -22,12 +22,12 @@ export async function POST(_request: NextRequest) {
     if (!config) return NextResponse.json({ error: "Feature migration is not installed." }, { status: 503 });
     if (!config.is_enabled) return NextResponse.json({ error: "Enable scheduled logging before running a batch." }, { status: 409 });
 
-    const result = await runScheduledCandidateLogging({
+    const result = await enqueueScheduledCandidateLogging({
       triggerType: "manual",
       actorUserId: auth.context.profile.user_id,
       runKey: `scheduled-candidate-logging:manual:${randomUUID()}`,
     });
-    return NextResponse.json({ ok: true, result });
+    return NextResponse.json({ ok: true, accepted: true, result }, {status:202});
   } catch (error) {
     console.error("[Scheduled candidate logging] Manual run failed:", error);
     return NextResponse.json({

@@ -149,10 +149,35 @@ async function checkRouteHealth(
   return { blocked: false };
 }
 
+// Opt-in only for the scheduled batch executor. A malformed response or a
+// slow request on one account must not black out every account for this
+// automation. Other agents retain their existing model-wide breaker policy.
+async function checkScheduledKeyModelHealth(automationId: string, keyId: string, model: string | null | undefined) {
+  const latest = await queryOne<{ outcome: string; error_code: string | null; created_at: string }>(
+    `SELECT outcome,error_code,created_at FROM ai_usage_events
+      WHERE automation_id=$1 AND ai_key_id=$2 AND provider='opencode'
+        AND (model=$3 OR error_code IN ('auth_error','billing_error'))
+        AND outcome IN ('success','failure','timeout')
+        AND created_at >= NOW() - INTERVAL '15 minutes'
+      ORDER BY created_at DESC,id DESC LIMIT 1`, [automationId,keyId,model ?? null],
+  );
+  if (!latest || latest.outcome === "success") return { blocked:false };
+  const code=latest.error_code;
+  const cooldownMs=code === "auth_error" || code === "billing_error" || code === "rate_limit" ? 15*60_000
+    : code === "not_found" || code === "configuration_error" || code === "model_unavailable" ? 5*60_000
+    : code === "invalid_output" || code === "timeout" ? 60_000 : 30_000;
+  return { blocked:Date.now()-Date.parse(latest.created_at)<cooldownMs,
+    reason:code === "auth_error" ? "key_auth_cooldown" : "key_model_cooldown" };
+}
+
 function isKeyHealthBlocked(
   keyRow: { provider?: string | null; status: AiKeyStatus; last_failure_at?: string | null; cooldown_until?: string | null },
+  scheduledRecovery = false,
 ): boolean {
   if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
+  // An ordinary burst 429 need not block another model on this account.
+  // Explicit Go weekly/monthly cooldowns and billing limits remain key-wide.
+  if (scheduledRecovery && keyRow.provider === "opencode" && keyRow.status === "rate_limited" && !keyRow.cooldown_until) return false;
   return isKeyCoolingDown(keyRow);
 }
 
@@ -239,10 +264,11 @@ async function getPoolKeyMetadata(
   provider: string,
   excludeKeyIds?: Set<string>,
   benchmarkMode?: boolean,
+  scheduledRecovery = false,
 ): Promise<any[]> {
   const keys = (await listEnabledAiKeys())
     .filter((key) => key.provider === provider && !excludeKeyIds?.has(key.id))
-    .filter((key) => !isKeyHealthBlocked(key as any))
+    .filter((key) => !isKeyHealthBlocked(key as any, scheduledRecovery))
     .sort((a, b) => {
       const priority = (a.priority ?? 100) - (b.priority ?? 100);
       if (priority !== 0) return priority;
@@ -274,7 +300,9 @@ export async function getProviderForAutomation(
   // See CallContext.benchmarkMode - suppresses every write this resolution
   // would otherwise make (skipped/fallback usage events, pool cursor advance).
   benchmarkMode?: boolean,
+  scheduledPoolRecovery?: boolean,
 ): Promise<AutomationRouteResult | null> {
+  const keyScopedRecovery = scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check";
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
     return {
@@ -330,14 +358,14 @@ export async function getProviderForAutomation(
         route.rank === 1 &&
         PINNED_OPENCODE_PRIMARY_AUTOMATIONS.has(automationId);
       const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider) && !pinConfiguredOpenCodePrimary
-        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds, benchmarkMode)
+        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds, benchmarkMode, keyScopedRecovery)
         : (anchor && !excludeKeyIds?.has(route.ai_key_id) ? [anchor] : []);
 
       for (const candidate of candidates) {
         const keyRow = candidate.id === anchor?.id
           ? anchor
           : await getAiKeyWithDecryptedKey(candidate.id);
-        if (!keyRow || !keyRow.is_enabled || isKeyHealthBlocked(keyRow)) continue;
+        if (!keyRow || !keyRow.is_enabled || isKeyHealthBlocked(keyRow, keyScopedRecovery)) continue;
         if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
@@ -366,7 +394,9 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
+        const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
+          ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
+          : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
           if (!benchmarkMode) {
@@ -411,9 +441,9 @@ export async function getProviderForAutomation(
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
       // Provider-only routes resolve from Neon and never from deployment env.
-      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds, benchmarkMode);
+      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds, benchmarkMode, keyScopedRecovery);
       for (const key of dbKeys) {
-        if (isKeyHealthBlocked(key as any)) continue;
+        if (isKeyHealthBlocked(key as any, keyScopedRecovery)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
         if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
@@ -444,7 +474,9 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
+        const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
+          ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
+          : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
           if (!benchmarkMode) {
@@ -582,6 +614,9 @@ export interface CallContext {
   attemptNumber?: number;
   routingStateId?: string;
   maxProviderAttempts?: number;
+  /** Bounded chunk execution; ignored by all existing callers. */
+  scheduledPoolRecovery?: boolean;
+  deadlineAt?: number;
   // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
   // harness). Suppresses every write this call would otherwise make against
   // live routing state - ai_usage_events rows, ai_api_keys health mutations,
@@ -619,7 +654,8 @@ export async function callWithUsageTracking<T>(
   // can be fully tried for one model before the state's next model is ever
   // attempted. Off by default: every retry counts against MAX_RETRIES,
   // identical to the pre-existing behavior.
-  const boundRetriesByRouteRank = runtime.pooled_retry_bounded_by_route_rank;
+  const scheduledRecovery = ctx?.scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check";
+  const boundRetriesByRouteRank = scheduledRecovery || runtime.pooled_retry_bounded_by_route_rank;
   // Runaway-loop safety valve for same-rank retries, not a tunable - today's
   // largest configured pool is a handful of accounts.
   const MAX_SAME_RANK_ITERATIONS = 50;
@@ -637,6 +673,12 @@ export async function callWithUsageTracking<T>(
   let iteration = 0;
 
   while (true) {
+    if (scheduledRecovery && ctx?.deadlineAt && Date.now() >= ctx.deadlineAt - 500) {
+      throw new AiRouteCallError("Scheduled AI check deadline exceeded; retry in a later chunk.", {
+        aiKeyId:lastResolved?.aiKeyId ?? null,provider:lastResolved?.name ?? "opencode",
+        model:lastResolved?.model ?? null,routeRank:lastResolved?.routeRank ?? null,errorCode:"timeout",
+      });
+    }
     let resolved: AutomationRouteResult | null;
     try {
       resolved = await getProviderForAutomation(
@@ -647,6 +689,7 @@ export async function callWithUsageTracking<T>(
         ctx?.routingStateId,
         excludedKeyModels,
         ctx?.benchmarkMode,
+        scheduledRecovery,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -720,7 +763,10 @@ export async function callWithUsageTracking<T>(
         const startedAt = new Date();
         const sequence = ++requestSequence;
         try {
-          const response = await resolved.provider.send(opts);
+          const remainingMs = scheduledRecovery && ctx?.deadlineAt ? ctx.deadlineAt - Date.now() : null;
+          if (remainingMs !== null && remainingMs <= 0) throw new Error("Scheduled AI request timed out before sending.");
+          const requestOptions = remainingMs === null ? opts : { ...opts, timeoutMs:Math.min(opts.timeoutMs ?? 30_000, remainingMs) };
+          const response = await resolved.provider.send(requestOptions);
           if (response.usage) {
             // fn() may call send() more than once per agent run (e.g. Resume
             // Forge's job-only extraction + requirement analysis + draft).

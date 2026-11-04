@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { isSafeExternalUrl, fetchJobPageText } from "@/lib/ai/job-agents/fetchJobPage";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 import type { AiProvider as DbAiProvider } from "@/server/repositories/aiKeyRepository";
 import {
   scoreStage1, scoreStage2, SCHEDULED_LOGGING_AUTOMATION_ID,
@@ -10,6 +10,11 @@ import {
 // Re-exported for existing test coverage and any other callers that still
 // import these from here rather than the shared scoring module directly.
 export { provesCitizenshipOf, checkStructuredEligibility, parseEligibilityResponse } from "@/server/services/candidateJobScoring";
+
+import {
+  CHUNK_BUDGET_MS, MAX_RECOVERIES, ScheduledLoggingLeaseLost, claimLoggingRun, requestLoggingRun,
+  checkpointLoggingRun, leasedWrites, leasePredicate, type LoggingRun,
+} from "./scheduledLoggingExecution";
 
 type RunTrigger = "scheduled" | "manual" | "preview";
 
@@ -65,52 +70,69 @@ interface IngestedJob {
   eligibility_restriction_evidence: string | null;
 }
 
-async function saveDecision(input: {
-  runId: string; job: IngestedJob; candidateId: string; resumeId?: string | null;
+interface DecisionInput {
+  job: IngestedJob; candidateId: string; resumeId?: string | null;
   deterministicScore?: number | null; score?: number | null; priority: CandidatePriority;
   status: string; reason: string; provider?: string | null; model?: string | null;
   inputTokens?: number; outputTokens?: number;
-}): Promise<string> {
-  const row = await queryOne<{ id: string }>(
-    `INSERT INTO scheduled_candidate_logging_decisions
-       (run_id, ingestion_event_id, job_id, candidate_id, base_resume_id,
-        deterministic_score, match_score, priority, status, reason, provider, model, input_tokens, output_tokens)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-     ON CONFLICT (ingestion_event_id, candidate_id) DO UPDATE SET
-       run_id = EXCLUDED.run_id, base_resume_id = EXCLUDED.base_resume_id,
-       deterministic_score = EXCLUDED.deterministic_score, match_score = EXCLUDED.match_score,
-       priority = EXCLUDED.priority, status = EXCLUDED.status, reason = EXCLUDED.reason,
-       provider = EXCLUDED.provider, model = EXCLUDED.model,
-       input_tokens = EXCLUDED.input_tokens, output_tokens = EXCLUDED.output_tokens,
-       updated_at = NOW()
-     RETURNING id`,
-    [input.runId, input.job.event_id, input.job.job_id, input.candidateId, input.resumeId ?? null,
-      input.deterministicScore ?? null, input.score ?? null, input.priority, input.status,
-      input.reason.slice(0, 2000), input.provider ?? null, input.model ?? null,
-      input.inputTokens ?? 0, input.outputTokens ?? 0],
-  );
-  if (!row) throw new Error("Could not save scheduled-logging decision.");
-  return row.id;
 }
-
-async function queueForReview(input: {
-  candidateId: string; jobId: string; baseResumeId: string;
+function decisionStatement(run: LoggingRun, input: DecisionInput) {
+  const lease = leasePredicate(run, 15);
+  return {
+    text: `INSERT INTO scheduled_candidate_logging_decisions
+      (run_id,ingestion_event_id,job_id,candidate_id,base_resume_id,deterministic_score,match_score,
+       priority,status,reason,provider,model,input_tokens,output_tokens)
+      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 WHERE ${lease.text}
+      ON CONFLICT (ingestion_event_id,candidate_id) DO UPDATE SET
+        run_id=EXCLUDED.run_id,base_resume_id=EXCLUDED.base_resume_id,deterministic_score=EXCLUDED.deterministic_score,
+        match_score=EXCLUDED.match_score,priority=EXCLUDED.priority,status=EXCLUDED.status,reason=EXCLUDED.reason,
+        provider=EXCLUDED.provider,model=EXCLUDED.model,input_tokens=EXCLUDED.input_tokens,output_tokens=EXCLUDED.output_tokens,updated_at=NOW()
+      RETURNING id`,
+    values: [run.id,input.job.event_id,input.job.job_id,input.candidateId,input.resumeId ?? null,
+      input.deterministicScore ?? null,input.score ?? null,input.priority,input.status,input.reason.slice(0,2000),
+      input.provider ?? null,input.model ?? null,input.inputTokens ?? 0,input.outputTokens ?? 0,...lease.values],
+  };
+}
+async function saveDecision(run: LoggingRun, input: DecisionInput) {
+  await leasedWrites(run, [decisionStatement(run, input)]);
+}
+async function saveReviewPair(run: LoggingRun, input: DecisionInput, review: {
   alternateResumes: { resumeId: string; resumeName: string | null; score: number }[];
-  atsScore: number; aiStatus: "scored" | "failed"; aiTier: string | null; aiScore: number | null;
+  aiStatus: "scored" | "failed"; aiTier: string | null; aiScore: number | null;
   aiReason: string | null; aiFailureReason: string | null; hardGates: string[];
-  priority: CandidatePriority; assignedBy: string; assignedTo: string; sourceDecisionId: string;
-}) {
-  await execute(
-    `INSERT INTO candidate_job_review_queue
-       (source, candidate_id, job_id, base_resume_id, alternate_resumes, ats_score,
-        ai_status, ai_tier, ai_score, ai_reason, ai_failure_reason, hard_gates,
-        priority, assigned_by_user_id, assigned_to_user_id, source_decision_id)
-     VALUES ('scheduled_logging', $1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
-     ON CONFLICT (candidate_id, job_id) DO NOTHING`,
-    [input.candidateId, input.jobId, input.baseResumeId, JSON.stringify(input.alternateResumes), input.atsScore,
-      input.aiStatus, input.aiTier, input.aiScore, input.aiReason, input.aiFailureReason, JSON.stringify(input.hardGates),
-      input.priority, input.assignedBy, input.assignedTo, input.sourceDecisionId],
-  );
+  assignedBy: string; assignedTo: string;
+}): Promise<boolean> {
+  const lease = leasePredicate(run, 17);
+  const results = await leasedWrites(run, [decisionStatement(run, input), {
+    text: `INSERT INTO candidate_job_review_queue
+      (source,candidate_id,job_id,base_resume_id,alternate_resumes,ats_score,ai_status,ai_tier,ai_score,
+       ai_reason,ai_failure_reason,hard_gates,priority,assigned_by_user_id,assigned_to_user_id,source_decision_id)
+      SELECT 'scheduled_logging',$1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,d.id
+      FROM scheduled_candidate_logging_decisions d WHERE d.ingestion_event_id=$15 AND d.candidate_id=$1 AND d.run_id=$16
+        AND ${lease.text}
+        AND NOT EXISTS (SELECT 1 FROM candidate_job_review_queue WHERE job_id=$2 AND status IN ('pending','approved'))
+        AND NOT EXISTS (SELECT 1 FROM applications WHERE job_id=$2)
+      ON CONFLICT (candidate_id,job_id) DO NOTHING RETURNING id`,
+    values: [input.candidateId,input.job.job_id,input.resumeId,JSON.stringify(review.alternateResumes),input.deterministicScore,
+      review.aiStatus,review.aiTier,review.aiScore,review.aiReason,review.aiFailureReason,JSON.stringify(review.hardGates),input.priority,
+      review.assignedBy,review.assignedTo,input.job.event_id,run.id,...lease.values],
+  }, {
+    text: `UPDATE scheduled_candidate_logging_decisions d SET status='existing_application',
+      reason='This job was claimed for review or application while AI scoring was in progress.',updated_at=NOW()
+      WHERE d.ingestion_event_id=$1 AND d.candidate_id=$2 AND d.run_id=$3
+        AND NOT EXISTS (SELECT 1 FROM candidate_job_review_queue WHERE source_decision_id=d.id)
+        AND ${leasePredicate(run, 4).text}`,
+    values: [input.job.event_id,input.candidateId,run.id,...leasePredicate(run,4).values],
+  }]);
+  return (results[1] as unknown[]).length > 0;
+}
+async function setEventState(run: LoggingRun, eventId: string, state: string) {
+  const lease = leasePredicate(run, 3);
+  const result = await leasedWrites(run, [{
+    text: `UPDATE scheduled_job_ingestion_events SET processing_status=$2,updated_at=NOW(),last_error=NULL
+      WHERE id=$1 AND ${lease.text} RETURNING id`, values: [eventId,state,...lease.values],
+  }]);
+  if (!(result[0] as unknown[]).length) throw new ScheduledLoggingLeaseLost();
 }
 
 async function loadCandidates(): Promise<CandidateRow[]> {
@@ -175,245 +197,170 @@ function toScoringJob(job: IngestedJob): ScoringJob {
   };
 }
 
-export async function runScheduledCandidateLogging(options: {
-  triggerType: RunTrigger;
-  actorUserId?: string | null;
-  runKey?: string;
+export function loggingRunResult(run: LoggingRun) {
+  return { runId:run.id,status:run.status,phase:run.config_snapshot.execution?.phase,
+    jobsSeen:run.jobs_seen,candidatePairsScored:run.candidate_pairs_scored,queuedForReview:run.applications_created,
+    skippedCount:run.skipped_count,failedCount:run.failed_count,aiCalls:run.ai_calls,
+    inputTokens:run.input_tokens,outputTokens:run.output_tokens,pending:run.status === "running" || run.status === "partial" };
+}
+
+/** Durable acceptance only: never hold a UI/GitHub HTTP request open for the batch. */
+export async function enqueueScheduledCandidateLogging(options: {
+  triggerType: RunTrigger; actorUserId?: string | null; runKey?: string;
 }) {
   const config = await queryOne<LoggingConfig>("SELECT * FROM scheduled_candidate_logging_config WHERE id = true");
   if (!config) throw new Error("Scheduled candidate-logging migration is not installed.");
-  if (!config.is_enabled) return { skipped: true, reason: "Feature is disabled." };
-  // BEGIN commented out (restorable together with the matching block in
-  // client.tsx and route.ts): this feature used to require its own
-  // dedicated AI provider/model/key. Stage 2 now runs through the shared
-  // OpenCode pool (see SCHEDULED_LOGGING_AUTOMATION_ID / migration 124), so
-  // no per-feature provider/model/key is required to run.
-  // if (!config.ai_provider || !config.ai_model || !config.ai_encrypted_api_key) throw new Error("The separate AI provider key and model must be configured.");
-  // END commented out
+  if (!config.is_enabled) return { skipped:true,reason:"Feature is disabled." };
   if (!config.assigned_by_user_id || !config.application_owner_user_id) throw new Error("Select the assigned-by member and application owner before running.");
+  await claimLoggingRun(false); // Reconcile orphaned runs, without starting AI work.
+  const run = await requestLoggingRun({
+    runKey:options.runKey ?? `scheduled-candidate-logging:${options.triggerType}:${randomUUID()}`,
+    triggerType:options.triggerType,actorUserId:options.actorUserId,jobsPerRun:config.jobs_per_run,
+    snapshot:{ threshold:config.match_threshold,aiTierCrossCheckFloor:config.ai_match_threshold,
+      jobsPerRun:config.jobs_per_run,aiCallsPerRun:config.ai_calls_per_run,maxQueuedPerRun:config.max_applications_per_run,
+      jobFreshnessDays:config.job_freshness_days,provider:"opencode",model:SCHEDULED_LOGGING_AUTOMATION_ID,
+      candidateEligibility:"active_applying",assignedByUserId:config.assigned_by_user_id,applicationOwnerUserId:config.application_owner_user_id,
+      // Only execution settings; the retired dedicated provider/key fields are never copied.
+      settings:{match_threshold:config.match_threshold,ai_match_threshold:config.ai_match_threshold,
+        ai_calls_per_run:config.ai_calls_per_run,max_applications_per_run:config.max_applications_per_run,
+        job_freshness_days:config.job_freshness_days,custom_prompt:config.custom_prompt,
+        assigned_by_user_id:config.assigned_by_user_id,application_owner_user_id:config.application_owner_user_id},
+    },
+  });
+  return loggingRunResult(run);
+}
 
-  const runKey = options.runKey ?? `scheduled-candidate-logging:${options.triggerType}:${randomUUID()}`;
-  let run = await queryOne<any>(
-    `INSERT INTO scheduled_candidate_logging_runs (run_key, trigger_type, config_snapshot, started_by_user_id)
-     VALUES ($1, $2, $3::jsonb, $4)
-     ON CONFLICT (run_key) DO NOTHING
-     RETURNING *`,
-    [runKey, options.triggerType, JSON.stringify({
-      threshold: config.match_threshold,
-      aiTierCrossCheckFloor: config.ai_match_threshold,
-      jobsPerRun: config.jobs_per_run,
-      aiCallsPerRun: config.ai_calls_per_run, maxQueuedPerRun: config.max_applications_per_run,
-      jobFreshnessDays: config.job_freshness_days,
-      provider: "opencode", model: SCHEDULED_LOGGING_AUTOMATION_ID,
-      candidateEligibility: "active_applying",
-      assignedByUserId: config.assigned_by_user_id,
-      applicationOwnerUserId: config.application_owner_user_id,
-    }), options.actorUserId ?? null],
-  );
-  if (!run) {
-    const existing = await queryOne<any>("SELECT * FROM scheduled_candidate_logging_runs WHERE run_key = $1", [runKey]);
-    if (!existing) throw new Error("Could not create scheduled logging run.");
-    return { runId: existing.id, status: existing.status, skipped: true, reason: "This run key has already been processed." };
-  }
-  let aiCalls = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let pairCount = 0;
-  let queuedCount = 0;
-  let skippedCount = 0;
-  let failedCount = 0;
-  let jobsSeen = 0;
-  let pending = false;
+/** One bounded, fenced chunk. Cloudflare's minute tick continues the same run. */
+export async function continueScheduledCandidateLogging() {
+  const run = await claimLoggingRun();
+  if (!run) return { skipped:true,reason:"No batch is ready, or another executor holds its lease." };
+  const deadline = Date.now() + CHUNK_BUDGET_MS;
+  const config = run.config_snapshot.settings as LoggingConfig;
+  const state = run.config_snapshot.execution;
   let currentEventId: string | null = null;
-  const persistProgress = () => query(
-    `UPDATE scheduled_candidate_logging_runs SET jobs_seen = $2, candidate_pairs_scored = $3,
-        applications_created = $4, skipped_count = $5, failed_count = $6,
-        ai_calls = $7, input_tokens = $8, output_tokens = $9
-      WHERE id = $1 AND status = 'running'`,
-    [run.id, jobsSeen, pairCount, queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens],
-  );
+  let retryAfterMs = 0;
+  let capped = false;
+  const beat = () => checkpointLoggingRun(run, state);
   try {
+    const liveConfig = await queryOne<{is_enabled:boolean}>("SELECT is_enabled FROM scheduled_candidate_logging_config WHERE id = true");
+    if (!liveConfig?.is_enabled) {
+      await checkpointLoggingRun(run,{...state,phase:"finished",leaseToken:null,leaseUntil:null},"partial","Feature was disabled; unprocessed jobs remain queued.");
+      return loggingRunResult(run);
+    }
     const jobs = await query<IngestedJob>(
-      `SELECT e.id AS event_id, e.job_id, e.source, e.ingested_at,
-              j.title, j.company, j.location, j.source_url, j.apply_url,
-              j.description_text, j.raw_description, j.posted_at::text,
-              j.seniority_level, j.job_category, j.is_active,
-              j.requires_citizenship, j.citizenship_countries,
-              j.export_control_restricted, j.eligibility_restriction_evidence
-         FROM scheduled_job_ingestion_events e JOIN jobs j ON j.id = e.job_id
-        WHERE (e.processing_status IN ('pending','failed')
-           OR (e.processing_status = 'processing' AND e.updated_at < NOW() - INTERVAL '30 minutes'))
-        ORDER BY e.attempts ASC, e.ingested_at ASC LIMIT $1`,
-      [config.jobs_per_run],
-    );
+      `SELECT e.id AS event_id,e.job_id,e.source,e.ingested_at,
+        j.title,j.company,j.location,j.source_url,j.apply_url,j.description_text,j.raw_description,j.posted_at::text,
+        j.seniority_level,j.job_category,j.is_active,j.requires_citizenship,j.citizenship_countries,
+        j.export_control_restricted,j.eligibility_restriction_evidence
+       FROM scheduled_job_ingestion_events e JOIN jobs j ON j.id=e.job_id
+       WHERE e.id=ANY($1::uuid[]) AND NOT(e.id=ANY($2::uuid[]))
+       ORDER BY e.attempts ASC,e.ingested_at ASC,e.id`,[state.eventIds,state.completedEventIds]);
     const candidates = await loadCandidates();
-    const resumesByCandidate = await loadResumes(candidates.map((candidate) => candidate.id));
-
-    for (const job of jobs) {
-      const claimed = await queryOne<{ id: string }>(
-        `UPDATE scheduled_job_ingestion_events
-            SET processing_status = 'processing', attempts = attempts + 1, updated_at = NOW()
-          WHERE id = $1 AND (
-            processing_status IN ('pending', 'failed') OR
-            (processing_status = 'processing' AND updated_at < NOW() - INTERVAL '30 minutes')
-          )
-          RETURNING id`,
-        [job.event_id],
-      );
-      if (!claimed) continue;
-      jobsSeen++;
-      currentEventId = job.event_id;
-      if (!job.is_active) {
-        await query("UPDATE scheduled_job_ingestion_events SET processing_status = 'complete', updated_at = NOW(), last_error = 'Job is inactive' WHERE id = $1", [job.event_id]);
-        skippedCount++;
-        await persistProgress();
-        currentEventId = null;
-        continue;
-      }
-      const description = await resolveDescription(job);
-      const scoringJob = toScoringJob(job);
-      let jobPending = false;
-      for (const candidate of candidates) {
-        const resumes = resumesByCandidate.get(candidate.id) ?? [];
-        if (!resumes.length) {
-          await saveDecision({ runId: run.id, job, candidateId: candidate.id, priority: candidate.priority, status: "no_approved_resume", reason: "No approved base resume is available." });
-          skippedCount++;
-          continue;
-        }
-        const prior = await queryOne<{ status: string }>(
-          `SELECT status FROM scheduled_candidate_logging_decisions WHERE ingestion_event_id = $1 AND candidate_id = $2`,
-          [job.event_id, candidate.id],
-        );
-        if (prior && ["below_threshold", "ineligible", "existing_application", "no_approved_resume", "description_unavailable", "application_created", "pending_review"].includes(prior.status)) {
-          continue;
-        }
-
-        // Global dedup ("a job is excluded for everyone the moment anyone
-        // has applied to it"): check before spending any scoring work, not
-        // just before creating an application.
-        const [existingApplication, existingQueueItem] = await Promise.all([
-          queryOne<{ id: string }>("SELECT id FROM applications WHERE job_id = $1 LIMIT 1", [job.job_id]),
-          queryOne<{ id: string }>("SELECT id FROM candidate_job_review_queue WHERE job_id = $1 AND status IN ('pending','approved') LIMIT 1", [job.job_id]),
-        ]);
-        if (existingApplication || existingQueueItem) {
-          await saveDecision({ runId: run.id, job, candidateId: candidate.id, priority: candidate.priority,
-            status: "existing_application", reason: "Another candidate already has an application (or a pending review item) for this job." });
-          skippedCount++;
-          continue;
-        }
-
-        if (description.length < 250) {
-          await saveDecision({ runId: run.id, job, candidateId: candidate.id, priority: candidate.priority, status: "description_unavailable", reason: "A usable job description was not available after the safe page-fetch attempt." });
-          skippedCount++;
-          continue;
-        }
-
-        // Stage 1: deterministic keyword/ATS score across every draft/
-        // approved resume (lane-breadth). match_threshold is now a low noise
-        // floor, not a fit-quality pass bar - hard gates (free-text +
-        // structured citizenship/clearance) are warnings attached to the
-        // queued item, never a silent exclusion.
-        const stage1 = scoreStage1(candidate, resumes, description, scoringJob, config.job_freshness_days);
-        if (!stage1.bestResume || stage1.bestScore < config.match_threshold) {
-          await saveDecision({ runId: run.id, job, candidateId: candidate.id, resumeId: stage1.bestResume?.id,
-            deterministicScore: stage1.bestScore, score: stage1.bestScore, priority: candidate.priority,
-            status: "below_threshold", reason: `Keyword/ATS score ${stage1.bestScore} is below the ${config.match_threshold}% Stage 1 floor.` });
-          skippedCount++;
-          continue;
-        }
-
-        // Stage 2 (AI tiering) is the minority-of-pairs step the "minimum AI
-        // tokens" goal is about. Cap on either AI calls or review-queue
-        // slots before spending the call - no point scoring a pair that
-        // can't be queued this run anyway.
-        if (aiCalls >= config.ai_calls_per_run || queuedCount >= config.max_applications_per_run) {
-          jobPending = true;
-          pending = true;
-          continue;
-        }
-        aiCalls++;
-        pairCount++;
-        const stage2 = await scoreStage2({
-          customPrompt: config.custom_prompt, job: scoringJob, candidate, resume: stage1.bestResume,
-          description, deterministicScore: stage1.bestScore, crossCheckFloor: config.ai_match_threshold, runId: run.id,
-        });
-
-        if (stage2.status === "failed") {
-          // AI failure must never block the pipeline: queue ATS-only
-          // instead of waiting for a future batch to retry. An admin/
-          // manager can retry Stage 2 for this one item from the review page.
-          const decisionId = await saveDecision({ runId: run.id, job, candidateId: candidate.id, resumeId: stage1.bestResume.id,
-            deterministicScore: stage1.bestScore, priority: candidate.priority, status: "pending_review",
-            reason: "AI eligibility check unavailable; queued for review with the ATS score only.",
-            provider: stage2.provider, model: stage2.model });
-          await queueForReview({
-            candidateId: candidate.id, jobId: job.job_id, baseResumeId: stage1.bestResume.id,
-            alternateResumes: stage1.rankedResumes, atsScore: stage1.bestScore,
-            aiStatus: "failed", aiTier: null, aiScore: null, aiReason: null, aiFailureReason: stage2.failureReason,
-            hardGates: stage1.hardGates, priority: candidate.priority,
-            assignedBy: config.assigned_by_user_id, assignedTo: config.application_owner_user_id,
-            sourceDecisionId: decisionId,
+    const resumesByCandidate = await loadResumes(candidates.map(candidate => candidate.id));
+    jobsLoop: for (const job of jobs) {
+      if (Date.now() >= deadline - 3_000) break;
+      if (run.ai_calls >= config.ai_calls_per_run || run.applications_created >= config.max_applications_per_run) { capped=true;break; }
+      state.currentEventId=job.event_id;
+      await beat();
+      const lease=leasePredicate(run,2);
+      const [claimed] = await leasedWrites(run,[{
+        text:`UPDATE scheduled_job_ingestion_events SET processing_status='processing',attempts=attempts+1,updated_at=NOW()
+          WHERE id=$1 AND (processing_status IN ('pending','failed') OR
+            (processing_status='processing' AND updated_at<NOW()-INTERVAL '30 minutes')) AND ${lease.text} RETURNING id`,
+        values:[job.event_id,...lease.values],
+      }]);
+      if (!(claimed as unknown[]).length) {state.completedEventIds.push(job.event_id);state.currentEventId=null;continue;}
+      currentEventId=job.event_id;
+      if (!state.startedEventIds.includes(job.event_id)) {state.startedEventIds.push(job.event_id);run.jobs_seen++;}
+      await beat();
+      if (!job.is_active) {run.skipped_count++;}
+      else {
+        const description=await resolveDescription(job);
+        const scoringJob=toScoringJob(job);
+        for (const candidate of candidates) {
+          if (Date.now() >= deadline - 3_000) break jobsLoop;
+          const resumes=resumesByCandidate.get(candidate.id) ?? [];
+          const prior=await queryOne<{status:string}>(`SELECT status FROM scheduled_candidate_logging_decisions WHERE ingestion_event_id=$1 AND candidate_id=$2`,[job.event_id,candidate.id]);
+          if (prior && ["below_threshold","ineligible","existing_application","no_approved_resume","description_unavailable","application_created","pending_review"].includes(prior.status)) continue;
+          const common={job,candidateId:candidate.id,priority:candidate.priority};
+          if (!resumes.length) {await saveDecision(run,{...common,status:"no_approved_resume",reason:"No draft or approved base resume is available."});run.skipped_count++;await beat();continue;}
+          const [application,review]=await Promise.all([
+            queryOne("SELECT id FROM applications WHERE job_id=$1 LIMIT 1",[job.job_id]),
+            queryOne("SELECT id FROM candidate_job_review_queue WHERE job_id=$1 AND status IN ('pending','approved') LIMIT 1",[job.job_id]),
+          ]);
+          if (application || review) {await saveDecision(run,{...common,status:"existing_application",reason:"This job already has an application or a pending review item."});run.skipped_count++;await beat();continue;}
+          if (description.length<250) {await saveDecision(run,{...common,status:"description_unavailable",reason:"A usable job description was not available after the safe page-fetch attempt."});run.skipped_count++;await beat();continue;}
+          const stage1=scoreStage1(candidate,resumes,description,scoringJob,config.job_freshness_days);
+          const decision={...common,resumeId:stage1.bestResume?.id,deterministicScore:stage1.bestScore};
+          if (!stage1.bestResume || stage1.bestScore<config.match_threshold) {
+            await saveDecision(run,{...decision,score:stage1.bestScore,status:"below_threshold",reason:`Keyword/ATS score ${stage1.bestScore} is below the ${config.match_threshold}% Stage 1 floor.`});
+            run.skipped_count++;await beat();continue;
+          }
+          if (run.ai_calls>=config.ai_calls_per_run || run.applications_created>=config.max_applications_per_run) {capped=true;break jobsLoop;}
+          // Reserve before spending: a terminated chunk cannot reset the per-run AI budget.
+          run.ai_calls++;run.candidate_pairs_scored++;await beat();
+          const stage2=await scoreStage2({customPrompt:config.custom_prompt,job:scoringJob,candidate,resume:stage1.bestResume,
+            description,deterministicScore:stage1.bestScore,crossCheckFloor:config.ai_match_threshold,runId:run.id,
+            scheduledExecution:{deadlineAt:Math.min(deadline-2_000,Date.now()+20_000)},
           });
-          queuedCount++;
-          failedCount++;
-          continue;
+          await beat(); // Verify the lease again before any result can change a decision.
+          if (stage2.status==="failed" && stage2.retryAfterMs) {
+            run.failed_count++;retryAfterMs=stage2.retryAfterMs;
+            await saveDecision(run,{...decision,status:"ai_failed",reason:stage2.failureReason,provider:stage2.provider,model:stage2.model});
+            break jobsLoop;
+          }
+          if (stage2.status==="scored") {run.input_tokens+=stage2.inputTokens;run.output_tokens+=stage2.outputTokens;}
+          if (stage2.status==="scored" && stage2.tier==="reject") {
+            await saveDecision(run,{...decision,score:stage2.score,status:"below_threshold",reason:stage2.reason,
+              provider:stage2.provider,model:stage2.model,inputTokens:stage2.inputTokens,outputTokens:stage2.outputTokens});
+            run.skipped_count++;await beat();continue;
+          }
+          const failed=stage2.status==="failed";
+          const queued=await saveReviewPair(run,{...decision,status:"pending_review",score:failed?null:stage2.score,
+            reason:failed?"AI eligibility check unavailable; queued for review with the ATS score only.":stage2.reason,
+            provider:stage2.provider,model:stage2.model,inputTokens:failed?0:stage2.inputTokens,outputTokens:failed?0:stage2.outputTokens},
+          {alternateResumes:stage1.rankedResumes,aiStatus:failed?"failed":"scored",aiTier:failed?null:stage2.tier,
+            aiScore:failed?null:stage2.score,aiReason:failed?null:stage2.reason,aiFailureReason:failed?stage2.failureReason:null,
+            hardGates:failed?stage1.hardGates:[...stage1.hardGates,...stage2.hardGates],
+            assignedBy:config.assigned_by_user_id!,assignedTo:config.application_owner_user_id!});
+          if (queued) {run.applications_created++;if(failed)run.failed_count++;} else run.skipped_count++;
+          await beat();
         }
-
-        inputTokens += stage2.inputTokens;
-        outputTokens += stage2.outputTokens;
-        if (stage2.tier === "reject") {
-          await saveDecision({ runId: run.id, job, candidateId: candidate.id, resumeId: stage1.bestResume.id,
-            deterministicScore: stage1.bestScore, score: stage2.score, priority: candidate.priority, status: "below_threshold",
-            reason: stage2.reason, provider: stage2.provider, model: stage2.model,
-            inputTokens: stage2.inputTokens, outputTokens: stage2.outputTokens });
-          skippedCount++;
-          continue;
-        }
-
-        const decisionId = await saveDecision({ runId: run.id, job, candidateId: candidate.id, resumeId: stage1.bestResume.id,
-          deterministicScore: stage1.bestScore, score: stage2.score, priority: candidate.priority, status: "pending_review",
-          reason: stage2.reason, provider: stage2.provider, model: stage2.model,
-          inputTokens: stage2.inputTokens, outputTokens: stage2.outputTokens });
-        await queueForReview({
-          candidateId: candidate.id, jobId: job.job_id, baseResumeId: stage1.bestResume.id,
-          alternateResumes: stage1.rankedResumes, atsScore: stage1.bestScore,
-          aiStatus: "scored", aiTier: stage2.tier, aiScore: stage2.score, aiReason: stage2.reason, aiFailureReason: null,
-          hardGates: [...stage1.hardGates, ...stage2.hardGates], priority: candidate.priority,
-          assignedBy: config.assigned_by_user_id, assignedTo: config.application_owner_user_id,
-          sourceDecisionId: decisionId,
-        });
-        queuedCount++;
       }
-      if (jobPending) {
-        pending = true;
-        await query("UPDATE scheduled_job_ingestion_events SET processing_status = 'pending', updated_at = NOW(), last_error = NULL WHERE id = $1", [job.event_id]);
-      } else {
-        await query("UPDATE scheduled_job_ingestion_events SET processing_status = 'complete', updated_at = NOW(), last_error = NULL WHERE id = $1", [job.event_id]);
+      await setEventState(run,job.event_id,"complete");
+      state.completedEventIds.push(job.event_id);state.currentEventId=null;currentEventId=null;await beat();
+    }
+    if (currentEventId) await setEventState(run,currentEventId,"pending");
+    const finished=state.completedEventIds.length>=state.eventIds.length;
+    const status=finished?"completed":capped?"partial":"running";
+    await checkpointLoggingRun(run,{...state,currentEventId:null,leaseToken:null,leaseUntil:null,
+      phase:status!=="running"?"finished":retryAfterMs?"waiting":"queued",
+      nextAttemptAt:retryAfterMs?new Date(Date.now()+retryAfterMs).toISOString():null},status);
+    run.status=status;
+    return loggingRunResult(run);
+  } catch(error) {
+    if (error instanceof ScheduledLoggingLeaseLost) return {...loggingRunResult(run),leaseLost:true};
+    const message=(error instanceof Error?error.message:String(error)).slice(0,1000);
+    try {
+      if(currentEventId) await setEventState(run,currentEventId,"pending");
+      const transient=/connection (?:reset|terminated|closed)|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket|fetch failed|network|timeout/i.test(message);
+      if(transient && state.recoveries<MAX_RECOVERIES) {
+        await checkpointLoggingRun(run,{...state,currentEventId:null,phase:"waiting",leaseToken:null,leaseUntil:null,
+          recoveries:state.recoveries+1,nextAttemptAt:new Date(Date.now()+60000).toISOString()},"running",`Temporary connection error; retrying automatically. ${message}`);
+        return {...loggingRunResult(run),retrying:true};
       }
-      // The Activity page polls while this request is still running. Persist
-      // completed-job counters so a slow AI batch does not appear idle.
-      await persistProgress();
-      currentEventId = null;
-    }
-
-    const status = pending ? "partial" : "completed";
-    await query(
-      `UPDATE scheduled_candidate_logging_runs SET status = $2, jobs_seen = $3,
-          candidate_pairs_scored = $4, applications_created = $5, skipped_count = $6,
-          failed_count = $7, ai_calls = $8, input_tokens = $9, output_tokens = $10,
-          finished_at = NOW() WHERE id = $1`,
-      [run.id, status, jobsSeen, pairCount, queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens],
-    );
-    return { runId: run.id, status, jobsSeen, candidatePairsScored: pairCount,
-      queuedForReview: queuedCount, skippedCount, failedCount, aiCalls, inputTokens, outputTokens, pending };
-  } catch (error) {
-    if (currentEventId) {
-      await query(
-        `UPDATE scheduled_job_ingestion_events SET processing_status = 'failed', updated_at = NOW(), last_error = $2 WHERE id = $1`,
-        [currentEventId, (error instanceof Error ? error.message : String(error)).slice(0, 1000)],
-      ).catch(() => undefined);
-    }
-    await query("UPDATE scheduled_candidate_logging_runs SET status = 'failed', error_message = $2, finished_at = NOW() WHERE id = $1", [run.id, (error instanceof Error ? error.message : String(error)).slice(0, 1000)]).catch(() => undefined);
+      await checkpointLoggingRun(run,{...state,currentEventId:null,phase:"finished",leaseToken:null,leaseUntil:null},"failed",message);
+    } catch { /* If storage is unreachable, the lease watchdog recovers the chunk on a later tick. */ }
     throw error;
   }
+}
+
+// Kept for scripts and existing callers. The HTTP routes enqueue only;
+// this helper performs at most ONE short chunk, never the whole large batch.
+export async function runScheduledCandidateLogging(options: {
+  triggerType:RunTrigger;actorUserId?:string|null;runKey?:string;
+}) {
+  const accepted=await enqueueScheduledCandidateLogging(options);
+  if ('skipped' in accepted || accepted.status!=="running") return accepted;
+  return continueScheduledCandidateLogging();
 }

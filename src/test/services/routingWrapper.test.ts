@@ -1215,6 +1215,87 @@ describe("OpenCode shared route breaker and model-scoped retries", () => {
   });
 });
 
+describe("scheduled logging scoped OpenCode recovery",()=>{
+  const automation="scheduled_candidate_logging_eligibility_check";
+  beforeEach(()=>{
+    vi.clearAllMocks();
+    mockQuery.mockReset();mockQueryOne.mockReset();mockListEnabledAiKeys.mockReset();mockGetAiKeyWithDecryptedKey.mockReset();
+    mockGetAiRuntimeConfig.mockResolvedValue({active_routing_state_id:null,allow_unrouted_fallback:false,pooled_retry_bounded_by_route_rank:false});
+    mockQuery.mockImplementation(async sql=>sql.includes("ai_automation_routes")?[
+      {id:"scheduled-glm",automation_id:automation,provider:"opencode",rank:1,is_enabled:true,model_override:"glm-5.3-flash"},
+      {id:"scheduled-qwen",automation_id:automation,provider:"opencode",rank:2,is_enabled:true,model_override:"qwen3.7-plus"},
+    ]:[]);
+    mockQueryOne.mockImplementation(async sql=>sql.includes("ai_key_pool_cursors")?{start_index:0}:null);
+    const keys=["a","b","c","d","e"].map((id,i)=>({id,provider:"opencode",priority:i,status:"working",created_at:"2026-01-01"}));
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async id=>({...keys.find(k=>k.id===id),decrypted_key:id,is_enabled:true,model:null}));
+    mockBuildProviderFromDbKey.mockImplementation(()=>({send:vi.fn().mockResolvedValue({content:[{type:"text",text:"ok"}],stopReason:"end_turn"})}));
+  });
+  it.each(["invalid_output","timeout","auth_error"])("skips only the affected key for a recent %s and tries healthy siblings",async code=>{
+    mockQueryOne.mockImplementation(async(sql,values)=>sql.includes("ai_key_pool_cursors")?{start_index:0}:
+      sql.includes("SELECT outcome,error_code") && values[1]==="a"?{outcome:"failure",error_code:code,created_at:new Date().toISOString()}:null);
+    const {getProviderForAutomation}=await import("@/lib/ai/routing");
+    const resolved=await getProviderForAutomation(automation,undefined,undefined,undefined,undefined,undefined,false,true);
+    expect(resolved?.aiKeyId).toBe("b");expect(resolved?.model).toBe("glm-5.3-flash");
+    expect(mockBuildProviderFromDbKey.mock.calls.some(([,secret])=>secret==="a")).toBe(false);
+  });
+  it("lets a key rejoin after its brief malformed-output cooldown",async()=>{
+    mockQueryOne.mockImplementation(async sql=>sql.includes("ai_key_pool_cursors")?{start_index:0}:
+      sql.includes("SELECT outcome,error_code")?{outcome:"failure",error_code:"invalid_output",created_at:new Date(Date.now()-61000).toISOString()}:null);
+    const {getProviderForAutomation}=await import("@/lib/ai/routing");
+    expect((await getProviderForAutomation(automation,undefined,undefined,undefined,undefined,undefined,false,true))?.aiKeyId).toBe("a");
+  });
+  it("ignores old model-wide cooldown totals only for the scheduled executor opt-in",async()=>{
+    mockQueryOne.mockImplementation(async sql=>sql.includes("ai_key_pool_cursors")?{start_index:0}:
+      sql.includes("COUNT(*) FILTER")?{recent_failures:3,recent_invalid_outputs:3,last_failure_at:new Date().toISOString(),last_success_at:null}:null);
+    const {getProviderForAutomation}=await import("@/lib/ai/routing");
+    expect((await getProviderForAutomation(automation,undefined,undefined,undefined,undefined,undefined,false,true))?.aiKeyId).toBe("a");
+    // Existing extension/review callers do not opt in and keep the old policy.
+    await expect(getProviderForAutomation(automation)).rejects.toThrow("All configured routes failed");
+  });
+  it("cannot change unrelated agent breaker behavior even if the flag is passed accidentally",async()=>{
+    mockQueryOne.mockImplementation(async sql=>sql.includes("ai_key_pool_cursors")?{start_index:0}:
+      sql.includes("COUNT(*) FILTER")?{recent_failures:3,recent_invalid_outputs:3,last_failure_at:new Date().toISOString(),last_success_at:null}:null);
+    const {getProviderForAutomation}=await import("@/lib/ai/routing");
+    await expect(getProviderForAutomation("unrelated_agent",undefined,undefined,undefined,undefined,undefined,false,true)).rejects.toThrow("All configured routes failed");
+    expect(mockQueryOne.mock.calls.some(([sql])=>sql.includes("SELECT outcome,error_code"))).toBe(false);
+  });
+  it("tries all fast-failing accounts before the next model even when the global rank-budget flag is off",async()=>{
+    const calls:string[]=[];
+    mockBuildProviderFromDbKey.mockImplementation((_provider,key,model)=>({send:vi.fn(async()=>{
+      calls.push(`${key}:${model}`);if(model==="glm-5.3-flash") throw new SyntaxError("Invalid model output JSON");
+      return {content:[{type:"text",text:"ok"}],stopReason:"end_turn"};
+    })}));
+    const {callWithUsageTracking}=await import("@/lib/ai/routing");
+    const result=await callWithUsageTracking(automation,{scheduledPoolRecovery:true,deadlineAt:Date.now()+20000,maxProviderAttempts:2},p=>p.send({system:"s",messages:[],tools:[]}));
+    expect(calls).toEqual(["a:glm-5.3-flash","b:glm-5.3-flash","c:glm-5.3-flash","d:glm-5.3-flash","e:glm-5.3-flash","a:qwen3.7-plus"]);
+    expect(result.model).toBe("qwen3.7-plus");
+  });
+  it("does not start another provider call after the chunk's AI deadline",async()=>{
+    const {callWithUsageTracking}=await import("@/lib/ai/routing");
+    await expect(callWithUsageTracking(automation,{scheduledPoolRecovery:true,deadlineAt:Date.now()-1},p=>p.send({system:"s",messages:[],tools:[]}))).rejects.toThrow("deadline exceeded");
+    expect(mockBuildProviderFromDbKey).not.toHaveBeenCalled();
+  });
+  it("clamps each provider request timeout to the remaining total deadline",async()=>{
+    const send=vi.fn().mockResolvedValue({content:[],stopReason:"end_turn"});mockBuildProviderFromDbKey.mockReturnValue({send});
+    const {callWithUsageTracking}=await import("@/lib/ai/routing");
+    await callWithUsageTracking(automation,{scheduledPoolRecovery:true,deadlineAt:Date.now()+5000},p=>p.send({system:"s",messages:[],tools:[],timeoutMs:30000}));
+    expect(send.mock.calls[0][0].timeoutMs).toBeLessThanOrEqual(5000);
+    expect(send.mock.calls[0][0].timeoutMs).toBeGreaterThan(0);
+  });
+  it("can use another model on a burst-limited account without bypassing an explicit monthly cooldown",async()=>{
+    const key={id:"a",provider:"opencode",priority:1,status:"rate_limited",last_failure_at:new Date().toISOString(),cooldown_until:null};
+    mockListEnabledAiKeys.mockResolvedValue([key]);mockGetAiKeyWithDecryptedKey.mockResolvedValue({...key,decrypted_key:"a",is_enabled:true,model:null});
+    mockQueryOne.mockImplementation(async(sql,values)=>sql.includes("ai_key_pool_cursors")?{start_index:0}:
+      sql.includes("SELECT outcome,error_code")&&values[2]==="glm-5.3-flash"?{outcome:"failure",error_code:"rate_limit",created_at:new Date().toISOString()}:null);
+    const {getProviderForAutomation}=await import("@/lib/ai/routing");
+    const result=await getProviderForAutomation(automation,undefined,undefined,undefined,undefined,undefined,false,true);
+    expect(result?.model).toBe("qwen3.7-plus");
+    mockListEnabledAiKeys.mockResolvedValue([{...key,cooldown_until:new Date(Date.now()+3600000).toISOString()}]);
+    await expect(getProviderForAutomation(automation,undefined,undefined,undefined,undefined,undefined,false,true)).rejects.toThrow("All configured routes failed");
+  });
+});
+
 describe("buildProviderFromDbKey — new providers", () => {
   it("creates a Moonshot provider without throwing", async () => {
     const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");

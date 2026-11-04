@@ -20,6 +20,7 @@ const config = { is_enabled: true, password_configured: true, match_threshold: 3
   assigned_by_user_id: "actor-fixture", application_owner_user_id: "actor-fixture", updated_at: "2026-11-04T00:00:00Z" };
 let runRequests = 0, readRequests = 0, releaseRun;
 let holdRun = true, failRun = false;
+let latestRun = null;
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
@@ -34,14 +35,18 @@ try {
       runRequests++;
       assert.equal(route.request().method(), "POST");
       if (holdRun) await new Promise(resolve => { releaseRun = resolve; });
-      return route.fulfill({ status: failRun ? 500 : 200, json: failRun ? { error: "Batch storage unavailable" } : {
-        ok: true, result: { runId: "run-fixture", status: "partial", jobsSeen: 3, candidatePairsScored: 2, queuedForReview: 2, failedCount: 0, aiCalls: 2 },
+      if (!failRun) latestRun = {id:"run-fixture",trigger_type:"manual",status:"running",jobs_seen:0,candidate_pairs_scored:0,
+        applications_created:0,skipped_count:0,failed_count:0,ai_calls:0,input_tokens:0,output_tokens:0,
+        ai_success_count:0,ai_failure_count:0,avg_latency_ms:null,started_at:new Date().toISOString(),finished_at:null,error_message:null,
+        config_snapshot:{provider:"opencode",execution:{phase:"queued",heartbeatAt:new Date().toISOString(),leaseUntil:null}}};
+      return route.fulfill({ status: failRun ? 500 : 202, json: failRun ? { error: "Batch storage unavailable" } : {
+        ok: true, accepted:true, result: { runId: "run-fixture", status: "running",phase:"queued",jobsSeen:0,candidatePairsScored:0,queuedForReview:0,failedCount:0,aiCalls:0 },
       } });
     }
     if (url.pathname === "/api/admin/scheduled-job-logging") {
       assert.equal(route.request().method(), "GET");
       readRequests++;
-      return route.fulfill({ json: { locked: false, config, candidates: [], candidateRules: [], recentRuns: [], recentDecisions: [],
+      return route.fulfill({ json: { locked: false, config, candidates: [], candidateRules: [], recentRuns: latestRun ? [latestRun] : [], recentDecisions: [],
         teamMembers: [{ user_id: "actor-fixture", display_name: "Test Manager", role: "manager" }],
         scheduledSources: [{ source: "apify_job_agent", pending_count: 98, latest_ingested_at: "2026-11-04T00:00:00Z" }],
       } });
@@ -69,7 +74,19 @@ try {
   assert.equal(await button.isDisabled(), true, "button must block duplicate clicks while a run is in flight");
   assert.equal(runRequests, 1);
   releaseRun();
-  await page.getByText(/3 jobs checked · 2 sent to Stage 2 AI · 2 queued for review/).waitFor();
+  await page.getByText(/Batch accepted. It continues automatically/).waitFor();
+  await page.getByText("manual · queued for next chunk", {exact:true}).waitFor();
+  latestRun.config_snapshot.execution.phase="waiting";
+  latestRun.config_snapshot.execution.nextAttemptAt=new Date(Date.now()+60000).toISOString();
+  await page.getByRole("button",{name:"Refresh",exact:true}).click();
+  await page.getByText("manual · waiting for AI retry",{exact:true}).waitFor();
+  latestRun.config_snapshot.execution.phase="working";
+  latestRun.config_snapshot.execution.leaseUntil="2020-01-01T00:00:00Z";
+  await page.getByRole("button",{name:"Refresh",exact:true}).click();
+  await page.getByText("manual · recovering interrupted chunk",{exact:true}).waitFor();
+  Object.assign(latestRun,{status:"completed",jobs_seen:3,candidate_pairs_scored:2,applications_created:2,ai_calls:2,finished_at:new Date().toISOString()});
+  await page.getByRole("button",{name:"Refresh",exact:true}).click();
+  await page.getByText(/3 jobs checked.*2 sent to Stage 2 AI.*2 queued for review/).waitFor();
   assert.ok(readRequests > beforeReads, "counts must refresh without a page reload");
   assert.equal(await button.isEnabled(), true);
   holdRun = false; failRun = true;
@@ -84,5 +101,5 @@ try {
   await openActivity();
   assert.equal(await button.isDisabled(), true);
   assert.deepEqual(errors, []);
-  console.log("Batch button passed: cancellation, one POST per click, disabled during execution, success counts, background refresh, failure/retry, disabled feature and missing owner. Fixture APIs only.");
+  console.log("Batch button passed: cancellation, one POST per click, disabled during execution, durable acceptance, queued/waiting/recovering/completed phases, live counts, background refresh, failure/retry, disabled feature and missing owner. Fixture APIs only.");
 } finally { await browser.close(); }

@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach,beforeEach, describe, expect, it, vi } from "vitest";
+import {writeFileSync} from "node:fs";
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(), queryOne: vi.fn(), execute: vi.fn(),
   scoreStage1: vi.fn(), scoreStage2: vi.fn(),
   fetchJobPageText: vi.fn(), isSafeExternalUrl: vi.fn(),
+  requestRun:vi.fn(),claimRun:vi.fn(),checkpoint:vi.fn(),leasedWrites:vi.fn(),activeRun:null as any,
 }));
 
 vi.mock("@/server/db/neon", () => ({ query: mocks.query, queryOne: mocks.queryOne, execute: mocks.execute }));
@@ -12,8 +14,13 @@ vi.mock("@/server/services/candidateJobScoring", async (importOriginal) => {
   return { ...actual, scoreStage1: mocks.scoreStage1, scoreStage2: mocks.scoreStage2 };
 });
 vi.mock("@/lib/ai/job-agents/fetchJobPage", () => ({ fetchJobPageText: mocks.fetchJobPageText, isSafeExternalUrl: mocks.isSafeExternalUrl }));
+vi.mock("@/server/services/scheduledLoggingExecution",async importOriginal => {
+  const actual=await importOriginal<typeof import("@/server/services/scheduledLoggingExecution")>();
+  return {...actual,requestLoggingRun:mocks.requestRun,claimLoggingRun:mocks.claimRun,
+    checkpointLoggingRun:mocks.checkpoint,leasedWrites:mocks.leasedWrites};
+});
 
-import { runScheduledCandidateLogging } from "@/server/services/scheduledCandidateLoggingService";
+import { runScheduledCandidateLogging,continueScheduledCandidateLogging,enqueueScheduledCandidateLogging } from "@/server/services/scheduledCandidateLoggingService";
 
 const runId = "99999999-9999-4999-8999-999999999999";
 const eventId = "88888888-8888-4888-8888-888888888888";
@@ -63,9 +70,36 @@ function resumeRow(id: string, candidateId: string, overrides: Record<string, un
 }
 
 describe("runScheduledCandidateLogging", () => {
+  afterEach(context=>{
+    if(process.env.TALENTOS_SQL_PLAN_OUTPUT && context.task.name.includes("Strong-tier pair")) {
+      writeFileSync(process.env.TALENTOS_SQL_PLAN_OUTPUT+".decisions",JSON.stringify(mocks.leasedWrites.mock.calls.flatMap(([,statements])=>statements)));
+    }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.execute.mockResolvedValue({ rowCount: 1 });
+    mocks.activeRun=null;
+    mocks.requestRun.mockImplementation(async input => {
+      const selected=await mocks.query("FROM scheduled_job_ingestion_events e JOIN jobs j");
+      const state={version:1,phase:"queued",heartbeatAt:new Date().toISOString(),leaseToken:null,leaseUntil:null,
+        currentEventId:null,eventIds:selected.map((j:any)=>j.event_id),startedEventIds:[],completedEventIds:[],recoveries:0};
+      mocks.activeRun={id:runId,status:"running",config_snapshot:{...input.snapshot,execution:state},jobs_seen:0,
+        candidate_pairs_scored:0,applications_created:0,skipped_count:0,failed_count:0,ai_calls:0,input_tokens:0,output_tokens:0};
+      return mocks.activeRun;
+    });
+    mocks.claimRun.mockImplementation(async (claim=true) => {
+      if(!claim || !mocks.activeRun || mocks.activeRun.status!=="running")return null;
+      mocks.activeRun.config_snapshot.execution={...mocks.activeRun.config_snapshot.execution,
+        phase:"working",leaseToken:"lease-fixture",leaseUntil:new Date(Date.now()+180000).toISOString()};
+      return mocks.activeRun;
+    });
+    mocks.checkpoint.mockImplementation(async (run,state,status="running")=>{run.config_snapshot.execution=structuredClone(state);run.status=status;});
+    mocks.leasedWrites.mockImplementation(async (_run,statements) => Promise.all(statements.map(async({text,values}:any)=> {
+      if(text.includes("INSERT INTO candidate_job_review_queue")) {await mocks.execute(text,values);return [{id:"review"}];}
+      if(text.includes("UPDATE scheduled_job_ingestion_events")) {const row=await mocks.queryOne(text,values);await mocks.query(text,values);return row?[row]:[];}
+      if(text.includes("INSERT INTO scheduled_candidate_logging_decisions")) {const row=await mocks.queryOne(text,values);return row?[row]:[];}
+      return [];
+    })));
   });
 
   function wireQueryOne(options: {
@@ -118,7 +152,7 @@ describe("runScheduledCandidateLogging", () => {
       expect.arrayContaining([candidateAId, jobId, resumeAId, 90, "scored", "strong"]),
     );
     expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"), expect.arrayContaining([candidateBId]));
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status = 'complete'"), [eventId]);
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"complete"]));
   });
 
   it("queues ATS-only when Stage 2 fails, instead of dropping the pair", async () => {
@@ -215,8 +249,7 @@ describe("runScheduledCandidateLogging", () => {
     expect(result).toMatchObject({ aiCalls: 1, queuedForReview: 1 });
     expect(mocks.scoreStage2).toHaveBeenCalledWith(expect.objectContaining({ deterministicScore: 30, crossCheckFloor: 30 }));
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("status IN ('draft', 'approved')"), expect.any(Array));
-    const progress = mocks.query.mock.calls.find(([sql]) => sql.includes("WHERE id = $1 AND status = 'running'"));
-    expect(progress?.[1]).toEqual([runId, 1, 1, 1, 0, 0, 1, 10, 5]);
+    expect(mocks.checkpoint).toHaveBeenCalledWith(expect.objectContaining({id:runId,ai_calls:1,applications_created:1}),expect.any(Object));
   });
 
   it.each(["ai_calls_per_run", "max_applications_per_run"])("obeys %s without spending AI on deferred jobs", async cap => {
@@ -224,7 +257,7 @@ describe("runScheduledCandidateLogging", () => {
     const result = await runScheduledCandidateLogging({ triggerType: "manual" });
     expect(result).toMatchObject({ status: "partial", aiCalls: 1, queuedForReview: 1, pending: true });
     expect(mocks.scoreStage2).toHaveBeenCalledTimes(1);
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status = 'pending'"), ["second-event"]);
+    expect(mocks.activeRun.config_snapshot.execution.completedEventIds).not.toContain("second-event");
   });
 
   it("does not score a job claimed by another batch", async () => {
@@ -235,5 +268,74 @@ describe("runScheduledCandidateLogging", () => {
     expect(result.jobsSeen).toBe(0);
     expect(mocks.scoreStage1).not.toHaveBeenCalled();
     expect(mocks.scoreStage2).not.toHaveBeenCalled();
+  });
+
+  it("accepts a batch without invoking Stage 1 or Stage 2",async()=>{
+    wireSingleCandidate();
+    const result=await enqueueScheduledCandidateLogging({triggerType:"manual"});
+    expect(result).toMatchObject({status:"running",phase:"queued",aiCalls:0});
+    expect(mocks.scoreStage1).not.toHaveBeenCalled();expect(mocks.scoreStage2).not.toHaveBeenCalled();
+  });
+
+  it("yields at the chunk deadline and keeps the saved AI budget on continuation",async()=>{
+    wireSingleCandidate(baseConfig({ai_calls_per_run:2}),[job(),job({event_id:"second-event",job_id:"second-job"})]);
+    const clock=vi.spyOn(Date,"now").mockReturnValue(100000);
+    mocks.scoreStage2.mockImplementationOnce(async()=>{
+      clock.mockReturnValue(145000);
+      return {status:"scored",tier:"strong",score:80,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+    });
+    try {
+      const first=await runScheduledCandidateLogging({triggerType:"manual"});
+      expect(first).toMatchObject({status:"running",phase:"queued",aiCalls:1,queuedForReview:1});
+      expect(mocks.activeRun.config_snapshot.execution.completedEventIds).toEqual([eventId]);
+      clock.mockReturnValue(160000);
+      mocks.query.mockImplementation(async sql=>sql.includes("FROM scheduled_job_ingestion_events e JOIN jobs j")?[job({event_id:"second-event",job_id:"second-job"})]
+        :sql.includes("FROM candidates c")?[candidateRow(candidateAId)]:sql.includes("FROM base_resumes WHERE")?[resumeRow(resumeAId,candidateAId)]:[]);
+      const second=await continueScheduledCandidateLogging();
+      expect(second).toMatchObject({status:"completed",aiCalls:2,queuedForReview:2,jobsSeen:2});
+      expect(mocks.scoreStage2).toHaveBeenCalledTimes(2);
+    } finally {clock.mockRestore();}
+  });
+
+  it("defers a cooling/exhausted AI pool rather than flooding review with ATS-only items",async()=>{
+    wireSingleCandidate();
+    mocks.scoreStage2.mockResolvedValue({status:"failed",provider:"opencode",model:"glm-5.3-flash",failureReason:"All keys cooling",retryAfterMs:60000});
+    const result=await runScheduledCandidateLogging({triggerType:"manual"});
+    expect(result).toMatchObject({status:"running",phase:"waiting",aiCalls:1,queuedForReview:0,failedCount:1});
+    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"),expect.anything());
+    expect(mocks.activeRun.config_snapshot.execution.nextAttemptAt).toBeTruthy();
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"pending"]));
+  });
+
+  it("does no work if a different chunk already owns the batch lease",async()=>{
+    wireSingleCandidate();mocks.claimRun.mockResolvedValue(null);
+    const result=await continueScheduledCandidateLogging();
+    expect(result).toMatchObject({skipped:true});expect(mocks.scoreStage2).not.toHaveBeenCalled();
+  });
+
+  it("rejects a result from an executor that lost its lease while AI was running",async()=>{
+    wireSingleCandidate();
+    const {ScheduledLoggingLeaseLost}=await import("@/server/services/scheduledLoggingExecution");
+    mocks.scoreStage2.mockImplementation(async()=>{
+      mocks.checkpoint.mockRejectedValueOnce(new ScheduledLoggingLeaseLost());
+      return {status:"scored",tier:"strong",score:90,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+    });
+    expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({leaseLost:true});
+    expect(mocks.execute).not.toHaveBeenCalledWith(expect.stringContaining("INSERT INTO candidate_job_review_queue"),expect.anything());
+  });
+
+  it("releases the claimed event and records a failed run on a normal storage error",async()=>{
+    wireSingleCandidate();mocks.scoreStage1.mockImplementation(()=>{throw new Error("Storage fixture failed");});
+    await expect(runScheduledCandidateLogging({triggerType:"manual"})).rejects.toThrow("Storage fixture failed");
+    expect(mocks.activeRun.status).toBe("failed");
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"pending"]));
+  });
+
+  it("automatically retries bounded transient connection failures without discarding saved progress",async()=>{
+    wireSingleCandidate();mocks.scoreStage1.mockImplementation(()=>{throw new Error("Connection terminated unexpectedly");});
+    expect(await runScheduledCandidateLogging({triggerType:"manual"})).toMatchObject({status:"running",phase:"waiting",retrying:true});
+    expect(mocks.activeRun.config_snapshot.execution.recoveries).toBe(1);
+    expect(mocks.activeRun.config_snapshot.execution.nextAttemptAt).toBeTruthy();
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"pending"]));
   });
 });

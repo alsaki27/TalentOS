@@ -24,7 +24,7 @@ interface RunRow {
   failed_count: number; ai_calls: number; input_tokens: number; output_tokens: number;
   ai_success_count: number; ai_failure_count: number; avg_latency_ms: number | null;
   started_at: string; finished_at: string | null; error_message: string | null;
-  config_snapshot: { provider?: string; model?: string } | null;
+  config_snapshot: { provider?: string; model?: string; execution?: {phase:string;heartbeatAt:string;leaseUntil:string|null;nextAttemptAt?:string|null} } | null;
 }
 interface DecisionRow {
   id: string; run_id: string; job_id: string; job_title: string; company: string | null; source: string;
@@ -69,6 +69,15 @@ function displayDate(value: string | null | undefined) {
   if (!value) return "—";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+function runState(run: RunRow) {
+  if (run.status !== "running") return run.status;
+  const execution=run.config_snapshot?.execution;
+  if (!execution) return "awaiting recovery";
+  if (execution.phase === "waiting") return "waiting for AI retry";
+  if (execution.phase === "queued") return "queued for next chunk";
+  if (execution.leaseUntil && Date.parse(execution.leaseUntil)<Date.now()) return "recovering interrupted chunk";
+  return "running";
 }
 function emptyRule(candidate: Candidate): CandidateRule {
   return {
@@ -159,6 +168,12 @@ export default function AutoJobLoggingPage() {
       const payload = await response.json();
       if (!response.ok || payload.locked) return;
       const fresh = payload as PageData;
+      setRunResult((current:any) => {
+        const latest=fresh.recentRuns.find(run => run.id === current?.runId);
+        return latest ? {...current,status:latest.status,phase:latest.config_snapshot?.execution?.phase,
+          jobsSeen:latest.jobs_seen,candidatePairsScored:latest.candidate_pairs_scored,
+          queuedForReview:latest.applications_created,failedCount:latest.failed_count,aiCalls:latest.ai_calls} : current;
+      });
       setPageData((current) => current ? {
         ...current,
         config: fresh.config,
@@ -337,7 +352,10 @@ export default function AutoJobLoggingPage() {
       const response = await fetch("/api/admin/scheduled-job-logging/run", { method: "POST" });
       const payload = await response.json();
       if (!response.ok) throw new Error(errorMessage(payload, "The batch did not complete."));
-      setRunResult(payload.result); setNotice("Batch finished. Review its counts and any pending work below.");
+      setRunResult(payload.result); setSelectedRunId(payload.result?.runId ?? null);
+      setNotice(payload.result?.status === "running"
+        ? "Batch accepted. It continues automatically in short chunks; follow its progress in Run history."
+        : "This batch has already finished. Review its saved results below.");
       await refreshPageInBackground();
     } catch (error) { setPageError(error instanceof Error ? error.message : "The batch did not complete."); }
     finally { setBusy(false); }
@@ -399,7 +417,7 @@ export default function AutoJobLoggingPage() {
       {notice && <div className={styles.successBanner} role="status"><Check size={17} />{notice}</div>}
 
       <section className={styles.summaryGrid} aria-label="Workflow summary">
-        <article className={styles.summaryCard}><span className={styles.summaryIcon}><Clock3 size={18} /></span><div><small>Target schedule</small><strong>Daily · 5:00 AM BDT</strong><p>GitHub Actions · 23:00 UTC</p></div></article>
+        <article className={styles.summaryCard}><span className={styles.summaryIcon}><Clock3 size={18} /></span><div><small>Target schedule</small><strong>Daily · 5:00 AM BDT</strong><p>Cloudflare Cron · automatic catch-up</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><BriefcaseBusiness size={18} /></span><div><small>Scheduled jobs waiting</small><strong>{pendingJobs}</strong><p>{pageData.scheduledSources.length} source group{pageData.scheduledSources.length === 1 ? "" : "s"}</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Users size={18} /></span><div><small>Active applying candidates</small><strong>{configuredCount} / {applyingCandidateCount}</strong><p>Only active candidates in the applying stage</p></div></article>
         <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>ATS floor {config.match_threshold}% · AI tier cross-check {config.ai_match_threshold}%</p></div></article>
@@ -524,8 +542,9 @@ export default function AutoJobLoggingPage() {
         <div className={styles.runList}>
           {pageData.recentRuns.map((run) => <article className={run.id === selectedRunId ? `${styles.runRow} ${styles.runRowActive}` : styles.runRow} key={run.id}>
             <div className={styles.runMain}>
-              <strong>{run.trigger_type.replaceAll("_", " ")} · {run.status}</strong>
-              <small>{run.config_snapshot?.provider ?? "unknown provider"} · {run.config_snapshot?.model ?? "unknown model"} · {displayDate(run.started_at)}{run.finished_at ? ` · finished ${displayDate(run.finished_at)}` : " · still running"}</small>
+              <strong>{run.trigger_type.replaceAll("_", " ")} · {runState(run)}</strong>
+              <small>{run.config_snapshot?.provider ?? "unknown provider"} · {run.config_snapshot?.model ?? "unknown model"} · {displayDate(run.started_at)}{run.finished_at ? ` · finished ${displayDate(run.finished_at)}` : run.config_snapshot?.execution ? ` · heartbeat ${displayDate(run.config_snapshot.execution.heartbeatAt)}` : " · awaiting watchdog recovery"}</small>
+              {run.status === "running" && run.config_snapshot?.execution?.nextAttemptAt && <small>Next AI retry after {displayDate(run.config_snapshot.execution.nextAttemptAt)}</small>}
               {run.error_message && <small className={styles.runError}>{run.error_message}</small>}
               <button type="button" className={styles.viewDecisionsButton} onClick={() => setSelectedRunId(run.id === selectedRunId ? null : run.id)}>
                 {run.id === selectedRunId ? "Showing this run's decisions ↓" : "View this run's decisions"}

@@ -73,7 +73,8 @@ export default {
     const isMinuteTick = cron === "* * * * *";
     const isNightlyStart = cron === "0 18 * * *"; // 12:00 AM Asia/Dhaka
     const isHistoryRetention = cron === "5 18 * * *"; // 12:05 AM Asia/Dhaka
-    if (!isMinuteTick && !isNightlyStart && !isHistoryRetention) return;
+    const isCandidateLoggingStart = cron === "0 23 * * *"; // 5:00 AM Asia/Dhaka
+    if (!isMinuteTick && !isNightlyStart && !isHistoryRetention && !isCandidateLoggingStart) return;
 
     const secret = env?.CRON_SECRET;
     if (typeof secret !== "string" || secret.length === 0) {
@@ -82,6 +83,15 @@ export default {
 
     const baseUrl = env?.TALENTOS_BASE_URL || "https://talent.skarion.com";
     const tasks = [];
+    if (isMinuteTick || isCandidateLoggingStart) tasks.push((async () => {
+      const response = await fetch(`${baseUrl}/api/cron/scheduled-candidate-logging`, {
+        method:"POST",signal:AbortSignal.timeout(75_000),headers:{Authorization:`Bearer ${secret}`,
+          "X-Scheduled-Logging-Trigger":isCandidateLoggingStart?"daily":"tick"},
+      });
+      const body=await response.text();
+      if(!response.ok) throw new Error(`Scheduled candidate logging tick failed with HTTP ${response.status}: ${body.slice(0,500)}`);
+      console.log(`[scheduled candidate logging] ${body.slice(0,500)}`);
+    })());
     if (isMinuteTick) {
       const reportPeriods = getDueTeamActivityReportPeriods(new Date(controller.scheduledTime));
       const emailReminderSlot = getDueEmailReminderSlot(new Date(controller.scheduledTime));

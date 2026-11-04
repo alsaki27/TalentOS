@@ -142,4 +142,4 @@ service = "skarion-crm-platform"
 # pipeline and Apify reconciler every minute, starts a Dhaka-nightly batch,
 # and prunes only expired Job Agent operational history.
 [triggers]
-crons = ["* * * * *", "0 18 * * *", "5 18 * * *"]
+crons = ["* * * * *", "0 18 * * *", "5 18 * * *", "0 23 * * *"]
