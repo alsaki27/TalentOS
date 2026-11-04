@@ -112,9 +112,11 @@ try {
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByLabel("Filter by source").selectOption("extension");
+  await page.locator("section.card").first().waitFor();
   assert.equal(await page.locator("section.card").count(), 1);
   await page.getByLabel("Filter by source").selectOption("all");
   await page.getByLabel("Filter by AI tier").selectOption("unscored");
+  await page.locator("section.card").first().waitFor();
   assert.equal(await page.locator("section.card").count(), 2);
   await assertFits("unavailable and pending AI on phone");
   await page.getByLabel("Filter by AI tier").selectOption("all");
