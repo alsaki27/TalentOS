@@ -307,6 +307,22 @@ describe("runScheduledCandidateLogging", () => {
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("processing_status=$2"),expect.arrayContaining([eventId,"pending"]));
   });
 
+  it("yields before paid work when the chunk cannot fit a full AI check",async()=>{
+    wireSingleCandidate(baseConfig(),[job(),job({event_id:"second-event",job_id:"second-job"})]);
+    const clock=vi.spyOn(Date,"now").mockReturnValue(100000);
+    mocks.scoreStage2.mockImplementationOnce(async()=>{
+      clock.mockReturnValue(125000);
+      return {status:"scored",tier:"strong",score:80,reason:"Fit",hardGates:[],provider:"opencode",model:"glm-5.3-flash",inputTokens:10,outputTokens:5};
+    });
+    try {
+      const result=await runScheduledCandidateLogging({triggerType:"manual"});
+      expect(result).toMatchObject({status:"running",phase:"queued",aiCalls:1,failedCount:0});
+      expect(mocks.scoreStage2).toHaveBeenCalledTimes(1);
+      expect(mocks.scoreStage2.mock.calls[0][0].scheduledExecution.deadlineAt).toBe(130000);
+      expect(mocks.activeRun.config_snapshot.execution.nextAttemptAt).toBeNull();
+    } finally {clock.mockRestore();}
+  });
+
   it("does no work if a different chunk already owns the batch lease",async()=>{
     wireSingleCandidate();mocks.claimRun.mockResolvedValue(null);
     const result=await continueScheduledCandidateLogging();

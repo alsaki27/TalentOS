@@ -3,7 +3,9 @@ import { queryOne, sql } from "@/server/db/neon";
 
 // Execution state lives in the existing run snapshot. No schema migration,
 // extra queue, or changes to candidate/job/application tables are required.
-export const CHUNK_BUDGET_MS = 40_000;
+export const CHUNK_BUDGET_MS = 50_000;
+export const AI_CHECK_BUDGET_MS = 30_000;
+export const CHUNK_FLUSH_MARGIN_MS = 2_000;
 export const RUN_LEASE_SECONDS = 180;
 export const MAX_RECOVERIES = 3;
 export interface ExecutionState {

@@ -12,7 +12,7 @@ import {
 export { provesCitizenshipOf, checkStructuredEligibility, parseEligibilityResponse } from "@/server/services/candidateJobScoring";
 
 import {
-  CHUNK_BUDGET_MS, MAX_RECOVERIES, ScheduledLoggingLeaseLost, claimLoggingRun, requestLoggingRun,
+  CHUNK_BUDGET_MS, AI_CHECK_BUDGET_MS, CHUNK_FLUSH_MARGIN_MS, MAX_RECOVERIES, ScheduledLoggingLeaseLost, claimLoggingRun, requestLoggingRun,
   checkpointLoggingRun, leasedWrites, leasePredicate, type LoggingRun,
 } from "./scheduledLoggingExecution";
 
@@ -297,11 +297,15 @@ export async function continueScheduledCandidateLogging() {
             run.skipped_count++;await beat();continue;
           }
           if (run.ai_calls>=config.ai_calls_per_run || run.applications_created>=config.max_applications_per_run) {capped=true;break jobsLoop;}
+          // Yield before starting paid work unless the full check window and
+          // its persistence margin fit. A short remaining chunk must not
+          // manufacture provider timeouts or cool a genuinely healthy key.
+          if (Date.now()+AI_CHECK_BUDGET_MS+CHUNK_FLUSH_MARGIN_MS>=deadline) break jobsLoop;
           // Reserve before spending: a terminated chunk cannot reset the per-run AI budget.
           run.ai_calls++;run.candidate_pairs_scored++;await beat();
           const stage2=await scoreStage2({customPrompt:config.custom_prompt,job:scoringJob,candidate,resume:stage1.bestResume,
             description,deterministicScore:stage1.bestScore,crossCheckFloor:config.ai_match_threshold,runId:run.id,
-            scheduledExecution:{deadlineAt:Math.min(deadline-2_000,Date.now()+20_000)},
+            scheduledExecution:{deadlineAt:Math.min(deadline-CHUNK_FLUSH_MARGIN_MS,Date.now()+AI_CHECK_BUDGET_MS)},
           });
           await beat(); // Verify the lease again before any result can change a decision.
           if (stage2.status==="failed" && stage2.retryAfterMs) {
