@@ -2945,6 +2945,17 @@ label {
 
 /* ─── Print styles for resume PDF export ─── */
 @media print {
+  /* Assign the page size and zero margins to the document. The positioned
+     preview cannot set the first page's margins, which Chromium otherwise
+     uses to print its own title, date, URL, and page number. */
+  html:has(#resume-print-area) {
+    page: resume-a4;
+  }
+
+  html:has(#resume-print-area[data-page-format="letter"]) {
+    page: resume-letter;
+  }
+
   /* Hide everything except the resume */
   .topnav,
   .print\:hidden,
@@ -2987,14 +2998,12 @@ label {
     width: 210mm !important;
     height: auto !important;
     min-height: 0 !important;
-    page: resume-a4;
   }
 
   #resume-print-area[data-page-format="letter"] {
     width: 8.5in !important;
     height: auto !important;
     min-height: 0 !important;
-    page: resume-letter;
   }
 
   /* The preview wrapper uses small inline pixel dimensions — override to full page */
