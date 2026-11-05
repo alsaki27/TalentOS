@@ -16,6 +16,7 @@ import {
   getDecryptedGmailAccount,
   saveEncryptedGmailTokens,
   markGmailAccountError,
+  recordGmailAccountSyncIssue,
   updateGmailHistoryId,
   updateGmailBackfillState,
   saveGmailWatch,
@@ -28,6 +29,7 @@ import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
 import { changeApplicationStatus, emailStageTarget } from "@/server/services/applicationStatusService";
 import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
+import { classifyGmailSyncFailure } from "@/server/services/gmailSyncFailure";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 const BACKFILL_PAGES_PER_RUN = Math.max(1, Number(process.env.GMAIL_BACKFILL_PAGES_PER_RUN || 8));
@@ -830,6 +832,11 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
           try {
             return await getMessage(accessToken, messageId, account.email);
           } catch (error: any) {
+            // A rejected access token must abort the batch so the account
+            // cursor is not advanced past messages that could not be read.
+            // The outer handler expires the cached token and lets the next
+            // scheduled run refresh it silently.
+            if (classifyGmailSyncFailure(error).kind === "refresh_access_token") throw error;
             // Gmail can return FAILED_PRECONDITION for an individual message
             // (deleted/invalidated message, attachment state, or a transient
             // provider inconsistency). Do not abort the entire mailbox batch.
@@ -928,11 +935,18 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         : await triageStoredBacklogAny(accessToken, TRIAGE_MESSAGES_PER_RUN);
       outcome.triaged += backlogTriaged;
     } catch (err: any) {
-      const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
-        ? "Gmail access was revoked or expired — candidate needs to reconnect."
-        : err?.message || "Gmail sync failed";
-      outcome.error = message;
-      await markGmailAccountError(accountRow.id, message);
+      const failure = classifyGmailSyncFailure(err);
+      outcome.error = failure.userMessage;
+      if (failure.kind === "reauthorize") {
+        await markGmailAccountError(accountRow.id, failure.storedCode);
+      } else if (failure.kind === "refresh_access_token") {
+        await recordGmailAccountSyncIssue(accountRow.id, "access_token_refresh_pending");
+      } else {
+        // Network, provider, and database hiccups do not mean the OAuth grant
+        // is invalid. Keep the mailbox active so cron retries it without
+        // asking a manager to reconnect Gmail.
+        await recordGmailAccountSyncIssue(accountRow.id, "provider_retry_pending");
+      }
     } finally {
       await releaseAccountLock(accountRow.id);
     }

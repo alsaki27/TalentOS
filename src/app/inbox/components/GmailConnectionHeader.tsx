@@ -22,18 +22,26 @@ interface SharedAccountStatus {
 export function GmailConnectionHeader() {
   const [account, setAccount] = useState<SharedAccountStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [statusCheckFailed, setStatusCheckFailed] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
-  const load = () => {
+  const load = async () => {
     setLoading(true);
-    fetch("/api/integrations/gmail/status")
-      .then((res) => (res.ok ? res.json() : []))
-      .then((rows: any[]) => {
-        const shared = Array.isArray(rows) ? rows.find((r) => r.owner_type === "shared_application_mailbox") : null;
-        setAccount(shared || null);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    setStatusCheckFailed(false);
+    try {
+      const response = await fetch("/api/integrations/gmail/status", { cache: "no-store" });
+      if (!response.ok) throw new Error("Gmail status request failed");
+      const rows: unknown = await response.json();
+      if (!Array.isArray(rows)) throw new Error("Gmail status response was invalid");
+      const shared = rows.find((row: any) => row?.owner_type === "shared_application_mailbox");
+      setAccount(shared || null);
+    } catch {
+      // Keep the last known account state. A temporary status API failure must
+      // never turn a connected mailbox into a Connect Gmail prompt.
+      setStatusCheckFailed(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -54,6 +62,10 @@ export function GmailConnectionHeader() {
   };
 
   const isActive = account?.status === "active";
+  const reconnectRequired = account?.status === "error" && (
+    account.sync_error?.startsWith("reauth_required:") === true
+    || account.sync_error?.startsWith("Gmail access was revoked or expired") === true
+  );
 
   return (
     <div style={{
@@ -76,7 +88,11 @@ export function GmailConnectionHeader() {
               <span style={{ color: "#22c55e", fontWeight: 600 }}>{account.email || "Connected"}</span>
             </div>
             <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
-              {account.sync_locked_until
+              {account.sync_error
+                ? "Sync issue — retrying automatically"
+                : statusCheckFailed
+                  ? "Status check unavailable — showing last known state"
+                : account.sync_locked_until
                 ? "Sync in progress"
                 : account.gmail_backfill_complete === false
                   ? "Initial sync continuing"
@@ -91,16 +107,38 @@ export function GmailConnectionHeader() {
               >
                 {disconnecting ? "Disconnecting…" : "Disconnect"}
               </button>}
+            {statusCheckFailed && <button onClick={load} className="btn sm" style={{ cursor: "pointer" }}>Retry</button>}
+          </>
+        ) : statusCheckFailed && !account ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#f59e0b", display: "inline-block" }} />
+              <span style={{ color: "#f59e0b", fontWeight: 600 }}>Could not check Gmail connection</span>
+            </div>
+            <button onClick={load} className="btn sm" style={{ cursor: "pointer" }}>Retry</button>
+          </>
+        ) : account && account.status === "error" && reconnectRequired ? (
+          <>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ef4444", display: "inline-block" }} />
+              <span style={{ color: "#ef4444", fontWeight: 600 }}>{account.email} — Google authorization expired</span>
+            </div>
+            {account.sync_error === "reauth_required:invalid_grant" && (
+              <span style={{ maxWidth: 270, color: "var(--muted)", fontSize: 11 }}>
+                If this repeats weekly, check whether the Google OAuth consent screen is still in Testing.
+              </span>
+            )}
+            <a href="/api/integrations/gmail/start?owner=shared&redirect=/inbox" className="btn primary sm" style={{ textDecoration: "none" }}>
+              Reconnect
+            </a>
           </>
         ) : account && account.status === "error" ? (
           <>
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ef4444", display: "inline-block" }} />
-              <span style={{ color: "#ef4444", fontWeight: 600 }}>{account.email} — needs reconnecting</span>
+              <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#f59e0b", display: "inline-block" }} />
+              <span style={{ color: "#f59e0b", fontWeight: 600 }}>{account.email} — sync retrying</span>
             </div>
-            <a href="/api/integrations/gmail/start?owner=shared&redirect=/inbox" className="btn primary sm" style={{ textDecoration: "none" }}>
-              Reconnect
-            </a>
+            <button onClick={load} className="btn sm" style={{ cursor: "pointer" }}>Refresh status</button>
           </>
         ) : (
           <>

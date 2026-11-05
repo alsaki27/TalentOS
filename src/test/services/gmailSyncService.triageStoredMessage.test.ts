@@ -14,6 +14,7 @@ vi.mock("@/server/repositories/gmailIntegrationRepository", () => ({
   getDecryptedGmailAccount: vi.fn(),
   saveEncryptedGmailTokens: vi.fn(),
   markGmailAccountError: vi.fn(),
+  recordGmailAccountSyncIssue: vi.fn(),
   updateGmailHistoryId: vi.fn(),
   updateGmailBackfillState: vi.fn(),
 }));

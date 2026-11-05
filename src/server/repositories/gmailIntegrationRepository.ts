@@ -101,6 +101,24 @@ export async function markGmailAccountError(id: string, error: string) {
   );
 }
 
+// Keep transient provider, network, and database failures retryable. A failed
+// sync is not evidence that the user's OAuth grant has been revoked. Reset
+// legacy error rows to active so the scheduled sync can recover them too.
+export async function recordGmailAccountSyncIssue(
+  id: string,
+  issue: "provider_retry_pending" | "access_token_refresh_pending",
+) {
+  await execute(
+    `UPDATE integration_accounts
+        SET status = 'active',
+            token_expires_at = CASE WHEN $2::boolean THEN NULL ELSE token_expires_at END,
+            sync_error = $3,
+            updated_at = now()
+      WHERE id = $1`,
+    [id, issue === "access_token_refresh_pending", issue],
+  );
+}
+
 export async function updateGmailHistoryId(id: string, historyId: string) {
   await execute(
     `UPDATE integration_accounts
