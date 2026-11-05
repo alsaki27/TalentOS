@@ -8,6 +8,7 @@ import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFai
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
+import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -40,6 +41,7 @@ interface QueueItem {
   proof_uploaded_at: string | null;
   source_type: string | null;
   ae_stage: "in_ai_pipeline" | "ready_for_review" | "ready_for_application" | "applied";
+  ae_review_pending_since?: string | null;
   ae_stage_updated_at: string | null;
   ae_stage_updated_by_name: string | null;
   ae_reviewed_by_name: string | null;
@@ -120,22 +122,11 @@ const AE_STAGE_LABELS: Record<string, string> = {
 
 const STAGE_FILTER_LABELS: Record<string, string> = {
   ...AE_STAGE_LABELS,
-  replied: "📞 Screening",
+  screening: "📞 Screening",
   interview: "💬 Interview",
   offer: "🎉 Offer",
   rejected: "❌ Rejected",
   withdrawn: "🚫 Withdrawn",
-};
-
-// Mirrors the Activity <select>'s own option labels below, so the caption
-// above the stat tiles always describes the same range in the same words
-// the filter itself uses.
-const TIME_WINDOW_LABELS: Record<string, string> = {
-  "": "any time",
-  "12h": "past 12 hours",
-  "24h": "past 24 hours",
-  "3d": "past 3 days",
-  "7d": "past 7 days",
 };
 
 const AE_STAGE_STYLES: Record<string, { background: string; border: string; color: string }> = {
@@ -257,6 +248,10 @@ function CopyableId({ label, value }: { label: string; value: string | null | un
 
 export default function ApplicationQueuePage() {
   const loadRequestRef = useRef(0);
+  const foregroundLoadRef = useRef<number | null>(null);
+  const refreshAfterLoadRef = useRef(false);
+  const requestedPageRef = useRef(1);
+  const currentQueryRef = useRef("");
   const [items, setItems] = useState<QueueItem[]>([]);
   // Mirrors `items` for the page-fit poller below, which needs the current
   // list of resume-bearing ids inside a long-lived setInterval closure
@@ -279,7 +274,7 @@ export default function ApplicationQueuePage() {
   const [viewFilter, setViewFilter] = useState<TabView>("all");
   const [candidateFilter, setCandidateFilter] = useState("");
   const [timeWindow, setTimeWindow] = useState("");
-  const [sort, setSort] = useState<"due" | "final_score" | "average_score">("due");
+  const [sort, setSort] = useState<QueueSort>(DEFAULT_QUEUE_SORT);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
   const [searchInput, setSearchInput] = useState("");
@@ -292,11 +287,7 @@ export default function ApplicationQueuePage() {
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
 
-  // "Transfer to candidate" — search-as-you-type against /api/candidates
-  // (same debounced pattern as searchInput/search below), not a preloaded
-  // <select>: filterCandidates caps at 500 rows and silently truncates,
-  // which is fine for a filter dropdown but not for picking a specific
-  // transfer target out of a full candidate list.
+  // Transfer can target candidates who have no tickets in the queue yet.
   const [transferQuery, setTransferQuery] = useState("");
   // compact=1 candidate search doesn't return email (see /api/candidates
   // route.ts's `columns` branch) - id/name is all there is to show here.
@@ -343,39 +334,61 @@ export default function ApplicationQueuePage() {
     if (workModeFilter) p.set("work_mode", workModeFilter);
     if (viewFilter !== "all") p.set("view", viewFilter);
     if (timeWindow) p.set("time_window", timeWindow);
-    if (sort !== "due") {
+    if (sort !== DEFAULT_QUEUE_SORT) {
       p.set("sort", sort);
       p.set("direction", sortDirection);
     }
     return p;
   }
+  // Track filters independently of the displayed page. A page render must
+  // not invalidate a deferred refresh already requesting that same page.
+  currentQueryRef.current = buildParams(1).toString();
 
   // isBackgroundPoll = true means this load was triggered by the silent
   // auto-poll below, not a real filter change or user action - it must not
   // clobber whatever the user currently has open (selections, expanded
   // workflow row, Falood panel), or every poll tick collapses their UI.
   async function load(pn: number = page, clearFeedback = true, isBackgroundPoll = false) {
+    // A mutation refresh must not cancel a user's navigation or filter reset.
+    if (isBackgroundPoll && foregroundLoadRef.current !== null) {
+      refreshAfterLoadRef.current = true;
+      return;
+    }
+    const currentQuery = currentQueryRef.current;
+    const params = new URLSearchParams(currentQuery);
+    params.set("page", String(pn));
     const requestId = ++loadRequestRef.current;
-    setLoading(true);
+    if (!isBackgroundPoll) {
+      foregroundLoadRef.current = requestId;
+      requestedPageRef.current = pn;
+      setLoading(true);
+    }
     if (clearFeedback) setFeedback(null);
     try {
       const [queueRes, usersRes, meRes] = await Promise.all([
-        fetch(`/api/application-queue?${buildParams(pn)}`, { cache: "no-store" }),
-        fetch("/api/users", { cache: "no-store" }),
-        fetch("/api/bootstrap", { cache: "no-store" }),
+        fetch(`/api/application-queue?${params}`, { cache: "no-store" }),
+        isBackgroundPoll ? null : fetch("/api/users", { cache: "no-store" }),
+        isBackgroundPoll ? null : fetch("/api/bootstrap", { cache: "no-store" }),
       ]);
       if (!queueRes.ok) throw new Error("Could not load queue.");
-      const data = await queueRes.json();
-      if (requestId !== loadRequestRef.current) return;
+      const [data, nextUsers, nextMe] = await Promise.all([
+        queueRes.json(),
+        usersRes?.ok ? usersRes.json() : null,
+        meRes?.ok ? meRes.json() : null,
+      ]);
+      if (requestId !== loadRequestRef.current || currentQuery !== currentQueryRef.current) return;
       const newTotal = data.total ?? 0;
       const tp = Math.max(1, Math.ceil(newTotal / pageSize));
-      if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
+      if (pn > tp && pn > 1) return load(tp, clearFeedback, isBackgroundPoll);
       setItems(data.items ?? []);
       setTotal(newTotal);
       setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
-      if (usersRes.ok) setUsers(await usersRes.json());
-      if (meRes.ok) setMe(await meRes.json());
-      if (!isBackgroundPoll) {
+      if (nextUsers) setUsers(nextUsers);
+      if (nextMe) setMe(nextMe);
+      if (isBackgroundPoll) {
+        const visibleIds = new Set<string>((data.items ?? []).map((item: QueueItem) => item.id));
+        setSelected((current) => new Set([...current].filter((id) => visibleIds.has(id))));
+      } else {
         setSelected(new Set());
         setFaloodOpen(null);
         setExpandedWorkflow(null);
@@ -383,9 +396,17 @@ export default function ApplicationQueuePage() {
         setFaloodResumes({});
       }
       setPage(pn);
+      requestedPageRef.current = pn;
     } catch (err: any) {
       if (requestId === loadRequestRef.current) setFeedback({ kind: "error", text: err.message || "Load failed." });
     } finally {
+      if (foregroundLoadRef.current === requestId) {
+        foregroundLoadRef.current = null;
+        if (refreshAfterLoadRef.current) {
+          refreshAfterLoadRef.current = false;
+          void refreshQueueInPlace();
+        }
+      }
       if (requestId === loadRequestRef.current) setLoading(false);
     }
   }
@@ -407,23 +428,15 @@ export default function ApplicationQueuePage() {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   }
 
-  // Refreshes only the top counters (ALL TICKETS / MINE / AE REVIEW PENDING /
-  // AE APPLICATION PENDING / AI PIPELINE) and the pagination total, never
-  // `items` - the thing that reads as a reload. Used after actions that need
-  // those counters to stay accurate (e.g. regenerate bumping the AI PIPELINE
-  // count) without paying load()'s wholesale-replace cost for it.
-  async function refreshStatsOnly() {
-    try {
-      const res = await fetch(`/api/application-queue?${buildParams(page)}`, { cache: "no-store" });
-      if (!res.ok) return;
-      const data = await res.json();
-      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
-      setTotal(data.total ?? 0);
-    } catch {}
+  function refreshQueueInPlace() {
+    return load(requestedPageRef.current, false, true);
   }
 
-  var hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || fitScoreFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
-  var hasActiveFilters = hasOtherActiveFilters || Boolean(timeWindow);
+  const hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || fitScoreFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
+  const hasActiveFilters = hasOtherActiveFilters || Boolean(timeWindow) || viewFilter !== "all";
+  const activityWindow = QUEUE_ACTIVITY_WINDOWS.find((window) => window.value === timeWindow);
+  const activityEvent = viewFilter === "failed" ? "workflow failure time"
+    : viewFilter === "ae_review" || stageFilter === "ready_for_review" ? "entry into AE review" : "ticket log time";
 
   function clearFilters() {
     setSearchInput("");
@@ -436,6 +449,7 @@ export default function ApplicationQueuePage() {
     setReviewFilter("");
     setWorkModeFilter("");
     setTimeWindow("");
+    setViewFilter("all");
   }
 
   useEffect(() => {
@@ -455,7 +469,7 @@ export default function ApplicationQueuePage() {
   }, [transferQuery]);
 
   useEffect(() => {
-    fetch("/api/candidates?compact=1&pageSize=500")
+    fetch("/api/application-queue?options=candidates", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setFilterCandidates(Array.isArray(data) ? data : (data.items ?? [])))
       .catch(console.error);
@@ -775,12 +789,8 @@ export default function ApplicationQueuePage() {
         workflow_stage: 0,
         resume_generation_status: "queued",
       });
-      // Counters only (AI PIPELINE count, etc.) - never items. load() here
-      // (even with isBackgroundPoll=true) still calls setItems(data.items)
-      // unconditionally, wholesale-replacing every row and reading as a full
-      // page reload despite the patchItemLocally() call right above it -
-      // confirmed live as exactly the "regenerate refreshes the page" report.
-      void refreshStatsOnly();
+      // Regeneration can move a ticket out of the current filtered view.
+      void refreshQueueInPlace();
       setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
     finally { setActionLoading(null); }
@@ -919,7 +929,7 @@ export default function ApplicationQueuePage() {
         patchItemLocally(item.id, { workflow_status: "queued" });
       }
       setSelected(new Set());
-      refreshStatsOnly();
+      void refreshQueueInPlace();
       const retried = typeof data.retried === "number" ? data.retried : targets.length;
       setFeedback({ kind: "success", text: `${retried} workflow${retried === 1 ? "" : "s"} requeued for retry.` });
     } catch (err: any) {
@@ -1100,7 +1110,7 @@ export default function ApplicationQueuePage() {
       )}
 
       <div className="page-kicker" style={{ marginBottom: 8 }}>
-        Counts below reflect every active filter (search, owner, priority, review, stage, fit score, work mode, and Activity) — currently: {TIME_WINDOW_LABELS[timeWindow]}{hasOtherActiveFilters ? ", plus other active filters" : ""}.
+        Counts reflect the filters below. {activityWindow ? `${activityWindow.label} by ${activityEvent}` : "Any time"}{hasOtherActiveFilters ? ", with additional filters applied" : ""}.
       </div>
 
       <div className="stats-strip">
@@ -1120,7 +1130,7 @@ export default function ApplicationQueuePage() {
           </div>
           <div className="filter-field">
             <span className="filter-label">Candidate</span>
-            <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)}>
+            <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)} aria-label="Filter by candidate">
               <option value="">All candidates</option>
               {filterCandidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
@@ -1153,14 +1163,14 @@ export default function ApplicationQueuePage() {
           </div>
           <div className="filter-field">
             <span className="filter-label">Owner</span>
-            <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
+            <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)} aria-label="Filter by owner">
               <option value="">All owners</option>
               {users.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
             </select>
           </div>
           <div className="filter-field">
             <span className="filter-label">Priority</span>
-            <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+            <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} aria-label="Filter by priority">
               <option value="">All priorities</option>
               <option value="urgent">Urgent</option>
               <option value="high">High</option>
@@ -1170,7 +1180,7 @@ export default function ApplicationQueuePage() {
           </div>
           <div className="filter-field">
             <span className="filter-label">Review</span>
-            <select className="input" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)}>
+            <select className="input" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)} aria-label="Filter by review status">
               <option value="">All review</option>
               <option value="not_required">No review</option>
               <option value="pending">Pending</option>
@@ -1180,7 +1190,7 @@ export default function ApplicationQueuePage() {
           </div>
           <div className="filter-field">
             <span className="filter-label">Work Mode</span>
-            <select className="input" value={workModeFilter} onChange={e => setWorkModeFilter(e.target.value)}>
+            <select className="input" value={workModeFilter} onChange={e => setWorkModeFilter(e.target.value)} aria-label="Filter by work mode">
               <option value="">All modes</option>
               <option value="remote">Remote</option>
               <option value="hybrid">Hybrid</option>
@@ -1189,12 +1199,9 @@ export default function ApplicationQueuePage() {
           </div>
           <div className="filter-field">
             <span className="filter-label">Activity</span>
-            <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by recent application log time">
+            <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by activity" title={`Activity uses ${activityEvent}.`}>
               <option value="">Any time</option>
-              <option value="12h">Past 12 hours</option>
-              <option value="24h">Past 24 hours</option>
-              <option value="3d">Past 3 days</option>
-              <option value="7d">Past 7 days</option>
+              {QUEUE_ACTIVITY_WINDOWS.map((window) => <option key={window.value} value={window.value}>{window.label}</option>)}
             </select>
           </div>
           <div className="filter-field">
@@ -1203,18 +1210,19 @@ export default function ApplicationQueuePage() {
               className="input"
               value={sort}
               onChange={e => {
-                const next = e.target.value as "due" | "final_score" | "average_score";
-                setSort(next);
-                setSortDirection(next === "due" ? "asc" : "desc");
+                setSort(parseQueueSort(e.target.value));
+                setSortDirection("desc");
               }}
               aria-label="Sort application queue"
             >
+              <option value={DEFAULT_QUEUE_SORT}>AE review pending (newest first)</option>
+              <option value="ae_review_pending">AE review pending (oldest first)</option>
               <option value="due">Due date</option>
               <option value="final_score">Final QA score</option>
               <option value="average_score">Average of all scores</option>
             </select>
           </div>
-          {sort !== "due" && (
+          {(sort === "final_score" || sort === "average_score") && (
             <button
               className="btn-compact"
               onClick={() => setSortDirection((d) => d === "desc" ? "asc" : "desc")}
@@ -1500,6 +1508,9 @@ export default function ApplicationQueuePage() {
                         <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
+                    {item.ae_stage === "ready_for_review" && item.ae_review_pending_since && (
+                      <div className="queue-stage-meta">Pending since {new Date(item.ae_review_pending_since).toLocaleString()}</div>
+                    )}
                     {item.ae_stage_updated_at && (
                       <div className="queue-stage-meta queue-stage-meta-changed">
                         Last changed {item.ae_stage_updated_by_name ? `by ${item.ae_stage_updated_by_name} ` : ""}on {new Date(item.ae_stage_updated_at).toLocaleString()}

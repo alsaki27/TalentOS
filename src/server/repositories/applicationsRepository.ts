@@ -1,6 +1,7 @@
 // src/server/repositories/applicationsRepository.ts
 // Data-access abstraction for the applications table.
 
+import { parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | "email_confirmation" | null;
@@ -43,6 +44,7 @@ export interface ApplicationRow {
   updated_at: string | null;
   created_by: string | null;
   ae_stage: string;
+  ae_review_pending_since?: string | null;
   ae_stage_updated_at: string | null;
   ae_stage_updated_by_user_id: string | null;
   ae_stage_updated_by_name: string | null;
@@ -145,7 +147,7 @@ export interface ListApplicationsQuery {
   priority?: string;
   review?: string;
   fitScoreBand?: string;
-  view?: "all" | "mine" | "ae_review" | "ae_application" | "failed";
+  view?: string;
   userId?: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
@@ -156,8 +158,8 @@ export interface ListApplicationsQuery {
    *  explicit Status or Stage selection, so that choice is always honored
    *  in full instead of being silently filtered further. */
   excludeStatuses?: string[];
-  timeWindowHours?: number | null;
-  sort?: "due" | "final_score" | "average_score";
+  timeWindowMinutes?: number | null;
+  sort?: QueueSort;
   sortDirection?: "asc" | "desc";
   /** Filters on jobs.work_mode: "remote" | "hybrid" | "onsite". Empty/omitted = no filter. */
   workMode?: string;
@@ -566,61 +568,120 @@ export async function listApplicationQueue(
     idSearchNumber = parseInt(rawSearch, 10);
     idSearchKind = "any";
   }
-  const requestedStage = queryParams.stage || "";
-  const aeStageFilter = new Set([
-    "in_ai_pipeline",
-    "ready_for_review",
-    "ready_for_application",
-    "applied",
-  ]).has(requestedStage) ? requestedStage : "";
-  const statusStageFilter = new Set([
-    "replied",
-    "interview",
-    "offer",
-    "rejected",
-    "withdrawn",
-  ]).has(requestedStage) ? requestedStage : "";
-  const owner = queryParams.owner || "";
-  const priority = queryParams.priority || "";
-  const review = queryParams.review || "";
-  const view = queryParams.view || "all";
-  const workMode = queryParams.workMode || "";
+  if (idSearchNumber !== null && !Number.isSafeInteger(idSearchNumber)) idSearchNumber = -1;
+  const requestedStage = queryParams.stage === "replied" ? "screening" : queryParams.stage || "";
+  const aeStageFilter = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"].includes(requestedStage)
+    ? requestedStage : "";
+  const lifecycleStageFilter = ["screening", "interview", "offer", "rejected", "withdrawn"].includes(requestedStage)
+    ? requestedStage : "";
   const requestedFitScoreBand = queryParams.fitScoreBand || "";
-  const fitScoreBand = QUALIFICATION_FIT_SCORE_BANDS.has(requestedFitScoreBand)
-    ? requestedFitScoreBand
-    : "";
-
-  const offset = (page - 1) * pageSize;
-  const searchParam = `%${search}%`;
-  const excludeStatuses = queryParams.excludeStatuses ?? DEFAULT_EXCLUDED_STATUSES;
-  const timeWindowHours = queryParams.timeWindowHours ?? null;
+  const fitScoreBand = QUALIFICATION_FIT_SCORE_BANDS.has(requestedFitScoreBand) ? requestedFitScoreBand : "";
   const fitScorePredicate = qualificationFitScoreBandPredicate(fitScoreBand);
-  const fitScoreFilterSql = fitScorePredicate ? `AND (${fitScorePredicate})` : "";
-  const fitScoreArtifactJoin = fitScoreBand ? `
+  const fitScoreJoin = `
     LEFT JOIN LATERAL (
       SELECT data FROM application_ai_artifacts
       WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
-      ORDER BY created_at DESC LIMIT 1
+      ORDER BY created_at DESC, id DESC LIMIT 1
     ) qf ON true
-  ` : "";
-  const sort = queryParams.sort === "final_score" || queryParams.sort === "average_score"
-    ? queryParams.sort
-    : "due";
+  `;
+  const sort = parseQueueSort(queryParams.sort);
   const sortDirection = queryParams.sortDirection === "asc" ? "ASC" : "DESC";
-  // Keep the original due-date ordering as the default. Score ordering is
-  // deliberately whitelisted before it is interpolated into SQL.
-  const orderBy = sort === "final_score"
-    ? `workflow_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
-    : sort === "average_score"
-      ? `average_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
-      : "a.assignment_due_at ASC NULLS LAST, a.applied_at DESC";
-  const today = new Date().toISOString().slice(0, 10);
+  // Email/status updates may advance the canonical stage without updating
+  // legacy ae_stage. Those tickets are no longer waiting for AE review.
+  const effectiveStage = "COALESCE(a.application_stage, a.ae_stage)";
+  const dueOrder = "a.assignment_due_at ASC NULLS LAST, a.applied_at DESC NULLS LAST, a.id ASC";
+  const orderBy = {
+    ae_review_pending_newest: `CASE WHEN ${effectiveStage} = 'ready_for_review' THEN 0 ELSE 1 END,
+      review_entry.pending_since DESC NULLS LAST, ${dueOrder}`,
+    ae_review_pending: `CASE WHEN ${effectiveStage} = 'ready_for_review' THEN 0 ELSE 1 END,
+      review_entry.pending_since ASC NULLS LAST, ${dueOrder}`,
+    due: dueOrder,
+    final_score: `workflow_score ${sortDirection} NULLS LAST, ${dueOrder}`,
+    average_score: `average_score ${sortDirection} NULLS LAST, ${dueOrder}`,
+  }[sort];
+  const now = new Date();
+  const minutes = queryParams.timeWindowMinutes;
+  const activityCutoff = minutes && minutes > 0 && minutes <= 10080
+    ? new Date(now.getTime() - minutes * 60_000).toISOString()
+    : null;
+  const lifecycleStage = `COALESCE(a.application_stage, CASE WHEN a.status = 'replied' THEN 'screening' ELSE a.status::text END)`;
+  const excludeStatuses = queryParams.excludeStatuses ?? (
+    lifecycleStageFilter || aeStageFilter === "applied" ? [] : DEFAULT_EXCLUDED_STATUSES
+  );
+  const params = [
+    excludeStatuses, search, `%${search}%`, queryParams.owner || "", queryParams.priority || "", queryParams.review || "",
+    queryParams.candidateId || "", aeStageFilter, idSearchNumber, idSearchKind, lifecycleStageFilter,
+    queryParams.workMode || "", activityCutoff, queryParams.userId || null, now.toISOString().slice(0, 10),
+  ];
+
+  // Share filter predicates between the paginated rows and the counters.
+  // The selected view determines which event the Activity window measures.
+  const fromJoins = `
+    FROM applications a
+    LEFT JOIN candidates c ON a.candidate_id = c.id
+    LEFT JOIN jobs j ON a.job_id = j.id
+    CROSS JOIN (SELECT $13::timestamptz AS cutoff, $14::text AS viewer, $15::date AS today) settings
+    LEFT JOIN LATERAL (
+      SELECT id, status, current_stage, updated_at FROM application_ai_workflows
+      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
+      ORDER BY created_at DESC, id DESC LIMIT 1
+    ) w ON true
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        (SELECT h.changed_at FROM application_stage_history h
+         WHERE h.application_id = a.id AND h.to_stage = 'ready_for_review'
+           AND h.from_stage IS DISTINCT FROM h.to_stage
+         ORDER BY h.changed_at DESC LIMIT 1),
+        a.ae_stage_updated_at,
+        CASE WHEN a.application_stage = 'ready_for_review' THEN a.application_stage_changed_at END,
+        a.created_at
+      ) AS pending_since
+      WHERE ${effectiveStage} = 'ready_for_review'
+    ) review_entry ON true
+  `;
+  const commonWhere = `
+    NOT (${lifecycleStage} = ANY($1))
+    AND (($2 = '' AND $9::bigint IS NULL)
+      OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
+      OR ($9::bigint IS NOT NULL AND (
+        ($10 = 'any' AND (a.app_number = $9 OR c.candidate_number = $9 OR j.job_number = $9))
+        OR ($10 = 'app' AND a.app_number = $9)
+        OR ($10 = 'candidate' AND c.candidate_number = $9)
+        OR ($10 = 'job' AND j.job_number = $9)
+      )))
+    AND ($4 = '' OR COALESCE(a.assigned_to_user_id::text, a.assigned_to) = $4)
+    AND ($5 = '' OR a.priority = $5)
+    AND ($6 = '' OR a.review_status = $6)
+    AND ($7 = '' OR a.candidate_id::text = $7)
+    AND ($8 = '' OR ${effectiveStage} = $8)
+    AND ($11 = '' OR ${lifecycleStage} = $11)
+    AND ($12 = '' OR j.work_mode = $12)
+    ${fitScorePredicate ? `AND (${fitScorePredicate})` : ""}
+  `;
+  const activity = (timestamp: string) => `(settings.cutoff IS NULL OR ${timestamp} >= settings.cutoff)`;
+  const reviewActivity = activity("review_entry.pending_since");
+  const defaultActivity = aeStageFilter === "ready_for_review" ? reviewActivity : activity("a.created_at");
+  const viewPredicates = {
+    all: defaultActivity,
+    mine: `${defaultActivity} AND COALESCE(a.assigned_to_user_id::text, a.assigned_to) = settings.viewer`,
+    ae_review: `${reviewActivity} AND ${effectiveStage} = 'ready_for_review'`,
+    ae_application: `${defaultActivity} AND ${effectiveStage} = 'ready_for_application'`,
+    workflow: `${defaultActivity} AND ${effectiveStage} = 'in_ai_pipeline'`,
+    failed: `${activity("w.updated_at")} AND w.status = 'failed'`,
+    overdue: `${defaultActivity} AND a.assignment_due_at <= settings.today`,
+    review: `${defaultActivity} AND a.review_status = 'pending'`,
+  };
+  const requestedView = queryParams.view || "all";
+  const view = Object.prototype.hasOwnProperty.call(viewPredicates, requestedView)
+    ? requestedView as keyof typeof viewPredicates
+    : "all";
 
   const dataSql = `
     SELECT a.id, a.app_number, a.status, a.assigned_by, a.assigned_to, a.assigned_by_user_id, a.assigned_to_user_id,
       a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
       a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
       a.ae_stage, a.ae_stage_updated_at, a.ae_stage_updated_by_user_id, a.ae_stage_updated_by_name,
+      review_entry.pending_since as ae_review_pending_since,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
       a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,
       jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename, 'candidate_number', c.candidate_number, 'avatar_url', c.avatar_url) as candidates,
@@ -646,14 +707,8 @@ export async function listApplicationQueue(
       rv.one_page_fit_score,
       rv.page_fit_metrics,
       a.resume_generation_status
-    FROM applications a
-    LEFT JOIN candidates c ON a.candidate_id = c.id
-    LEFT JOIN jobs j ON a.job_id = j.id
-    LEFT JOIN LATERAL (
-      SELECT id, status, current_stage, updated_at FROM application_ai_workflows
-      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
-      ORDER BY created_at DESC LIMIT 1
-    ) w ON true
+    ${fromJoins}
+    ${fitScoreJoin}
     LEFT JOIN LATERAL (
       SELECT data FROM application_ai_artifacts
       WHERE workflow_id = w.id AND automation_id = 'application_hiring_panel'
@@ -664,11 +719,6 @@ export async function listApplicationQueue(
       WHERE workflow_id = w.id AND automation_id = 'application_final_polish'
       ORDER BY created_at DESC LIMIT 1
     ) fp ON true
-    LEFT JOIN LATERAL (
-      SELECT data FROM application_ai_artifacts
-      WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
-      ORDER BY created_at DESC LIMIT 1
-    ) qf ON true
     LEFT JOIN LATERAL (
       SELECT AVG(value)::numeric AS average_score
       FROM (VALUES
@@ -681,316 +731,45 @@ export async function listApplicationQueue(
       WHERE value IS NOT NULL
     ) score ON true
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
-    WHERE NOT (a.status = ANY($1))
-      -- Every role (including application_engineer) sees the whole queue regardless
-      -- of assignment/owner - "mine" ($8) stays available as a voluntary filter.
-      -- NOTE: the Neon HTTP driver (like plain pg) errors "could not determine
-      -- data type of parameter" for any placeholder never referenced in the SQL
-      -- text - unlike a raw pg.Client test, unused params can't just be left in
-      -- the array. Renumbered end-to-end after dropping the old role-restriction
-      -- params instead of leaving gaps.
-      AND (($2 = '' AND $15::int IS NULL)
-        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
-        OR ($15::int IS NOT NULL AND (
-          ($16 = 'any' AND (a.app_number = $15 OR c.candidate_number = $15 OR j.job_number = $15))
-          OR ($16 = 'app' AND a.app_number = $15)
-          OR ($16 = 'candidate' AND c.candidate_number = $15)
-          OR ($16 = 'job' AND j.job_number = $15)
-        )))
-      AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
-      AND ($5 = '' OR a.priority = $5)
-      AND ($6 = '' OR a.review_status = $6)
-      AND ($7 <> 'mine' OR $8::text IS NULL OR a.assigned_to_user_id::text = $8::text)
-      AND ($7 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $9))
-      AND ($7 <> 'review' OR a.review_status = 'pending')
-      AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
-      AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
-      AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
-      AND ($7 <> 'failed' OR w.status = 'failed')
-      AND ($12 = '' OR a.candidate_id::text = $12)
-      AND ($13 = '' OR a.ae_stage = $13)
-      AND ($17 = '' OR a.status = $17)
-      -- The Activity window normally scopes by ticket creation time. Viewing
-      -- the Failed tab specifically means "failed within this window", not
-      -- "created within this window" (a ticket created weeks ago can fail
-      -- today on a retry) - see buildQueueStats' failed bucket below for
-      -- the matching logic in the stat-tile count.
-      AND ($14::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($14::int * INTERVAL '1 hour'))
-      AND ($18 = '' OR j.work_mode = $18)
-      ${fitScoreFilterSql}
+    WHERE ${commonWhere} AND (${viewPredicates[view]})
     ORDER BY ${orderBy}
-    OFFSET $10 LIMIT $11
+    OFFSET $16 LIMIT $17
   `;
-  const items = await query<ApplicationRow>(dataSql, [
-    excludeStatuses,
-    search,
-    searchParam,
-    owner,
-    priority,
-    review,
-    view,
-    queryParams.userId ?? null,
-    today,
-    offset,
-    pageSize,
-    queryParams.candidateId ?? "",
-    aeStageFilter,
-    timeWindowHours,
-    idSearchNumber,
-    idSearchKind,
-    statusStageFilter,
-    workMode,
-  ]);
-
-  const countSql = `
-    SELECT COUNT(*)::int as total
-    FROM applications a
-    LEFT JOIN candidates c ON a.candidate_id = c.id
-    LEFT JOIN jobs j ON a.job_id = j.id
-    LEFT JOIN LATERAL (
-      SELECT id, status, current_stage, updated_at FROM application_ai_workflows
-      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
-      ORDER BY created_at DESC LIMIT 1
-    ) w ON true
-    ${fitScoreArtifactJoin}
-    WHERE NOT (a.status = ANY($1))
-      AND (($2 = '' AND $13::int IS NULL)
-        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
-        OR ($13::int IS NOT NULL AND (
-          ($14 = 'any' AND (a.app_number = $13 OR c.candidate_number = $13 OR j.job_number = $13))
-          OR ($14 = 'app' AND a.app_number = $13)
-          OR ($14 = 'candidate' AND c.candidate_number = $13)
-          OR ($14 = 'job' AND j.job_number = $13)
-        )))
-      AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
-      AND ($5 = '' OR a.priority = $5)
-      AND ($6 = '' OR a.review_status = $6)
-      AND ($7 <> 'mine' OR $8::text IS NULL OR a.assigned_to_user_id::text = $8::text)
-      AND ($7 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $9))
-      AND ($7 <> 'review' OR a.review_status = 'pending')
-      AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
-      AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
-      AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
-      AND ($7 <> 'failed' OR w.status = 'failed')
-      AND ($10 = '' OR a.candidate_id::text = $10)
-      AND ($11 = '' OR a.ae_stage = $11)
-      AND ($15 = '' OR a.status = $15)
-      AND ($12::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($12::int * INTERVAL '1 hour'))
-      AND ($16 = '' OR j.work_mode = $16)
-      ${fitScoreFilterSql}
+  const statsSql = `
+    SELECT ${Object.entries(viewPredicates).map(([name, predicate]) =>
+      `COUNT(*) FILTER (WHERE ${predicate})::int AS "${name}"`
+    ).join(",\n      ")}
+    ${fromJoins}
+    ${fitScoreBand ? fitScoreJoin : ""}
+    WHERE ${commonWhere}
   `;
-  const countRow = await queryOne<{ total: number }>(countSql, [
-    excludeStatuses,
-    search,
-    searchParam,
-    owner,
-    priority,
-    review,
-    view,
-    queryParams.userId ?? null,
-    today,
-    queryParams.candidateId ?? "",
-    aeStageFilter,
-    timeWindowHours,
-    idSearchNumber,
-    idSearchKind,
-    statusStageFilter,
-    workMode,
+  const [items, counts] = await Promise.all([
+    query<ApplicationRow>(dataSql, [...params, (page - 1) * pageSize, pageSize]),
+    queryOne<Record<keyof typeof viewPredicates, number>>(statsSql, params),
   ]);
-
-  const stats = await buildQueueStats({
-    excludeStatuses,
-    search,
-    searchParam,
-    idSearchNumber,
-    idSearchKind,
-    owner,
-    priority,
-    review,
-    candidateId: queryParams.candidateId ?? "",
-    aeStageFilter,
-    statusStageFilter,
-    workMode,
-    fitScoreBand,
-    timeWindowHours,
-    userId: queryParams.userId ?? "",
-  });
-
   return {
     items,
-    total: countRow?.total ?? 0,
+    total: counts?.[view] ?? 0,
     page,
     pageSize,
-    stats,
+    stats: {
+      all: counts?.all ?? 0,
+      mine: counts?.mine ?? 0,
+      pendingAeReview: counts?.ae_review ?? 0,
+      pendingAeApplication: counts?.ae_application ?? 0,
+      aiPipeline: counts?.workflow ?? 0,
+      failed: counts?.failed ?? 0,
+    },
   };
 }
 
-interface QueueStatsFilters {
-  excludeStatuses: string[];
-  search: string;
-  searchParam: string;
-  idSearchNumber: number | null;
-  idSearchKind: string;
-  owner: string;
-  priority: string;
-  review: string;
-  candidateId: string;
-  aeStageFilter: string;
-  statusStageFilter: string;
-  workMode: string;
-  fitScoreBand: string;
-  timeWindowHours: number | null;
-  userId: string;
-}
-
-/**
- * Computes the 6 top-of-queue tile counts (All / Mine / AE Review pending /
- * AE Application pending / AI Pipeline / Failed).
- *
- * Every filter the caller currently has active (search incl. ID search,
- * owner, priority, review status, stage, qualification fit score, work mode,
- * and the Activity time-window picker) is applied here too, via predicates that mirror
- * listApplicationQueue's own dataSql/countSql above - so these numbers
- * always describe exactly what's currently filtered, never a fixed
- * all-time snapshot. Confirmed live: before this fix, picking "Past 7
- * days" (or any other filter) correctly narrowed the table underneath but
- * left every one of these numbers frozen at their all-time value
- * regardless of any active filter.
- *
- * Deliberately kept as its own WHERE fragment rather than extracted into a
- * shared builder with dataSql/countSql above: those are proven, currently
- * working queries, and rewriting them to share code is a larger, riskier
- * change than this fix calls for. If a new filter is ever added to this
- * queue, add it in all four places (dataSql, countSql, commonWhere, and
- * commonWhereFailed below) or this exact class of bug (a filter that
- * narrows the list but not the tile counts) will resurface.
- */
-async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueStats> {
-  const fitScorePredicate = qualificationFitScoreBandPredicate(f.fitScoreBand);
-  const fitScoreFilterSql = fitScorePredicate ? `AND (${fitScorePredicate})` : "";
-  // Every filter shared across all 5 buckets. Deliberately excludes the
-  // `view` tab itself (all/mine/ae_review/ae_application/workflow) - each
-  // bucket below defines its own membership condition instead, since that
-  // IS the distinction between the 5 tiles.
-  const commonWhere = `
-    NOT (a.status = ANY($1))
-    AND (($2 = '' AND $9::int IS NULL)
-      OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
-      OR ($9::int IS NOT NULL AND (
-        ($10 = 'any' AND (a.app_number = $9 OR c.candidate_number = $9 OR j.job_number = $9))
-        OR ($10 = 'app' AND a.app_number = $9)
-        OR ($10 = 'candidate' AND c.candidate_number = $9)
-        OR ($10 = 'job' AND j.job_number = $9)
-      )))
-    AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
-    AND ($5 = '' OR a.priority = $5)
-    AND ($6 = '' OR a.review_status = $6)
-    AND ($7 = '' OR a.candidate_id::text = $7)
-    AND ($8 = '' OR a.ae_stage = $8)
-    AND ($11::int IS NULL OR a.created_at >= NOW() - ($11::int * INTERVAL '1 hour'))
-    AND ($12 = '' OR a.status = $12)
-    AND ($13 = '' OR j.work_mode = $13)
-    ${fitScoreFilterSql}
-  `;
-  const commonParams: unknown[] = [
-    f.excludeStatuses,
-    f.search,
-    f.searchParam,
-    f.owner,
-    f.priority,
-    f.review,
-    f.candidateId,
-    f.aeStageFilter,
-    f.idSearchNumber,
-    f.idSearchKind,
-    f.timeWindowHours,
-    f.statusStageFilter,
-    f.workMode,
-  ];
-  // c/j/w are only referenced by the predicates above (w only by the
-  // failed-bucket variant below), but every bucket query needs the joins
-  // present regardless of whether that particular query uses them, since
-  // they're baked into commonWhere/commonWhereFailed.
-  const fromJoins = `
-    FROM applications a
-    LEFT JOIN candidates c ON a.candidate_id = c.id
-    LEFT JOIN jobs j ON a.job_id = j.id
-    LEFT JOIN LATERAL (
-      SELECT id, status, updated_at FROM application_ai_workflows
-      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
-      ORDER BY created_at DESC LIMIT 1
-    ) w ON true
-    ${f.fitScoreBand ? `
-      LEFT JOIN LATERAL (
-        SELECT data FROM application_ai_artifacts
-        WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
-        ORDER BY created_at DESC LIMIT 1
-      ) qf ON true
-    ` : ""}
-  `;
-
-  // Same as commonWhere, except the Activity time-window applies to the
-  // workflow's own failure timestamp (w.updated_at) rather than the
-  // ticket's creation time (a.created_at) - matches dataSql/countSql's
-  // `failed` view branch above. "Failed in the last 7 days" means the
-  // failure happened in that window, not that the ticket itself is that
-  // recent - a ticket created weeks ago can still fail today on a retry.
-  const commonWhereFailed = `
-    NOT (a.status = ANY($1))
-    AND (($2 = '' AND $9::int IS NULL)
-      OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
-      OR ($9::int IS NOT NULL AND (
-        ($10 = 'any' AND (a.app_number = $9 OR c.candidate_number = $9 OR j.job_number = $9))
-        OR ($10 = 'app' AND a.app_number = $9)
-        OR ($10 = 'candidate' AND c.candidate_number = $9)
-        OR ($10 = 'job' AND j.job_number = $9)
-      )))
-    AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
-    AND ($5 = '' OR a.priority = $5)
-    AND ($6 = '' OR a.review_status = $6)
-    AND ($7 = '' OR a.candidate_id::text = $7)
-    AND ($8 = '' OR a.ae_stage = $8)
-    AND ($11::int IS NULL OR w.updated_at >= NOW() - ($11::int * INTERVAL '1 hour'))
-    AND ($12 = '' OR a.status = $12)
-    AND ($13 = '' OR j.work_mode = $13)
-    ${fitScoreFilterSql}
-  `;
-
-  const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow, failedRow] = await Promise.all([
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere}`,
-      commonParams
-    ),
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.assigned_to_user_id::text = $14::text`,
-      [...commonParams, f.userId]
-    ),
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'ready_for_review'`,
-      commonParams
-    ),
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'ready_for_application'`,
-      commonParams
-    ),
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'in_ai_pipeline'`,
-      commonParams
-    ),
-    queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhereFailed} AND w.status = 'failed'`,
-      commonParams
-    ),
-  ]);
-
-  return {
-    all: allRow?.total ?? 0,
-    mine: mineRow?.total ?? 0,
-    pendingAeReview: reviewRow?.total ?? 0,
-    pendingAeApplication: applicationRow?.total ?? 0,
-    aiPipeline: aiPipelineRow?.total ?? 0,
-    failed: failedRow?.total ?? 0,
-  };
+export function listApplicationQueueCandidates() {
+  return query<{ id: string; name: string }>(
+    `SELECT c.id, c.name
+       FROM candidates c
+       WHERE EXISTS (SELECT 1 FROM applications a WHERE a.candidate_id = c.id)
+       ORDER BY c.name ASC, c.id ASC`
+  );
 }
 
 /**

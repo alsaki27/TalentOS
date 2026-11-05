@@ -3,7 +3,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { listApplicationQueue } from "@/server/repositories/applicationsRepository";
+import { QUEUE_ACTIVITY_WINDOWS, parseQueueSort } from "@/lib/applicationQueueFilters";
+import { listApplicationQueue, listApplicationQueueCandidates } from "@/server/repositories/applicationsRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -24,12 +25,14 @@ export async function GET(req: NextRequest) {
   const workMode = url.searchParams.get("work_mode") || "";
   const fitScoreBand = url.searchParams.get("fit_score") || "";
   const timeWindow = url.searchParams.get("time_window") || "";
-  const timeWindowHours = ({ "12h": 12, "24h": 24, "3d": 72, "7d": 168 } as Record<string, number>)[timeWindow] ?? null;
-  const requestedSort = url.searchParams.get("sort");
-  const sort = requestedSort === "final_score" || requestedSort === "average_score" ? requestedSort : "due";
+  const timeWindowMinutes = QUEUE_ACTIVITY_WINDOWS.find((window) => window.value === timeWindow)?.minutes ?? null;
+  const sort = parseQueueSort(url.searchParams.get("sort"));
   const sortDirection = url.searchParams.get("direction") === "asc" ? "asc" : "desc";
 
   try {
+    if (url.searchParams.get("options") === "candidates") {
+      return NextResponse.json(await listApplicationQueueCandidates());
+    }
     const result = await listApplicationQueue({
       page,
       pageSize,
@@ -39,20 +42,14 @@ export async function GET(req: NextRequest) {
       owner,
       priority,
       review,
-      view: view as "all" | "mine" | "ae_review" | "ae_application" | "failed",
+      view,
       workMode,
       fitScoreBand,
       userId: context!.profile.user_id,
       userEmail: context!.profile.email ?? null,
       userDisplayName: context!.profile.display_name ?? null,
       userRole: context!.profile.role,
-      // Hide terminal/archived statuses by default (see
-      // DEFAULT_EXCLUDED_STATUSES) - but never on top of an explicit Status
-      // or Stage selection, so that choice is always honored in full
-      // instead of being silently narrowed further. This is also what makes
-      // Stage -> "AE Applied" show every one of those tickets now.
-      excludeStatuses: stage ? [] : undefined,
-      timeWindowHours,
+      timeWindowMinutes,
       sort,
       sortDirection,
     });
