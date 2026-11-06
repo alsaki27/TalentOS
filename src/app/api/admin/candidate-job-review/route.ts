@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
                 q.job_id, j.title AS job_title, j.company, j.apply_url,
                 q.base_resume_id, br.name AS base_resume_name,
                 q.alternate_resumes, q.ats_score, q.ai_status, q.ai_tier, q.ai_score,
-                q.ai_reason, q.ai_failure_reason, q.hard_gates, q.status, q.priority,
+                q.ai_reason, q.ai_failure_reason, q.hard_gates, q.status, q.priority, q.match_quality,
                 q.assigned_to_user_id, assignee.display_name AS assigned_to_name,
                 q.reviewed_by_user_id, reviewer.display_name AS reviewed_by_name,
                 q.reviewed_at, q.review_note, q.application_id, q.created_at, q.updated_at

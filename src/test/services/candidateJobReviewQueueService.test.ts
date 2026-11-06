@@ -49,6 +49,27 @@ describe("candidateJobReviewQueueService", () => {
   });
 
   describe("approveReviewItem", () => {
+    it("requires the same candidate when checking duplicate applications",async()=> {
+      mocks.queryOne.mockImplementation(async(sql:string,values:unknown[])=> {
+        if(sql.includes("FROM candidate_job_review_queue WHERE id"))return pendingRow();
+        if(sql.includes("FROM jobs WHERE id"))return {is_active:true};
+        if(sql.includes("FROM candidates WHERE id"))return {status:"active",pipeline_stage:"applying"};
+        if(sql.includes("FROM applications WHERE job_id")) {
+          expect(sql).toContain("candidate_id = $2");expect(values).toEqual([jobId,candidateId]);return null;
+        }
+        return null;
+      });
+      expect(await approveReviewItem(queueId,actorId)).toEqual({applicationId});
+    });
+    it("holds a suggestion whose approved resume changed after evidence was captured",async()=> {
+      mocks.queryOne.mockImplementation(async(sql:string)=> {
+        if(sql.includes("FROM candidate_job_review_queue WHERE id"))return pendingRow({match_quality:{policyVersion:"precision-v1",reasons:[],inputHashes:{resumeContent:"old-hash",jobDescription:"jd-hash"}}});
+        if(sql.includes("FROM base_resumes WHERE id="))return {status:"approved",content:"Changed resume content"};
+        return null;
+      });
+      await expect(approveReviewItem(queueId,actorId)).rejects.toThrow(/resume changed/);
+      expect(mocks.createApplications).not.toHaveBeenCalled();
+    });
     it("re-validates eligibility, creates the application, and triggers the AI workflow", async () => {
       mocks.queryOne.mockImplementation(async (sql: string) => {
         if (sql.includes("FROM candidate_job_review_queue WHERE id")) return pendingRow();
@@ -100,7 +121,7 @@ describe("candidateJobReviewQueueService", () => {
       expect(mocks.createApplications).not.toHaveBeenCalled();
     });
 
-    it("refuses to approve when another candidate was already applied to this job since it was queued (global dedup)", async () => {
+    it("refuses duplicate approval for the same candidate-job pair", async () => {
       mocks.queryOne.mockImplementation(async (sql: string) => {
         if (sql.includes("FROM candidate_job_review_queue WHERE id")) return pendingRow();
         if (sql.includes("FROM jobs WHERE id")) return { is_active: true };
@@ -108,7 +129,7 @@ describe("candidateJobReviewQueueService", () => {
         if (sql.includes("FROM applications WHERE job_id")) return { id: "someone-elses-app" };
         return null;
       });
-      await expect(approveReviewItem(queueId, actorId)).rejects.toThrow(/Another candidate has already been applied/);
+      await expect(approveReviewItem(queueId, actorId)).rejects.toThrow(/This candidate already has an application/);
       expect(mocks.createApplications).not.toHaveBeenCalled();
     });
   });
@@ -174,12 +195,12 @@ describe("candidateJobReviewQueueService", () => {
 
       await retryAiScoring(queueId, "");
 
-      expect(mocks.execute).toHaveBeenCalledWith(
-        expect.stringContaining("ai_status = 'scored'"),
-        tier === "reject"
-          ? [queueId, null, 72, "AI assessment: not recommended. Decent fit.", JSON.stringify(["AI did not recommend this pairing; a human reviewer must decide."])]
-          : [queueId, "adjacent", 72, "Decent fit.", JSON.stringify([])],
-      );
+      const [sql, values] = mocks.execute.mock.calls[0];
+      expect(sql).toContain("match_quality = $6::jsonb");
+      expect(values[0]).toBe(queueId);expect(values[1]).toBeNull();
+      const quality=JSON.parse(values[5]);
+      expect(quality.policyVersion).toBe("precision-v1");
+      expect(quality.reasons.length).toBeGreaterThan(0);
       expect(mocks.createApplications).not.toHaveBeenCalled();
       expect(mocks.triggerAiWorkflowForApplication).not.toHaveBeenCalled();
     });

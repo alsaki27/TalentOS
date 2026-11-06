@@ -142,7 +142,8 @@ export function evaluateCandidateJob(
   if (!activeTerms.length) hardGates.push("Approved profile has no active search terms");
 
   const authorization = normalize(`${candidate.workAuthorization ?? ""} ${candidate.visaStatus ?? ""}`);
-  const requiresClearance = /(?:active |current )?(?:security |secret |top secret |ts\/sci )clearance|required security clearance/.test(wholeJob);
+  const clearanceRequirements = wholeJob.replace(/\bno (?:security )?clearance (?:is )?(?:required|needed)\b|\b(?:security )?clearance (?:is )?not (?:required|needed)\b/g, "");
+  const requiresClearance = /(?:active |current )?(?:security |secret |top secret |ts\/sci )clearance|required security clearance/.test(clearanceRequirements);
   const hasClearance = /(?:active |current )?(?:security |secret |top secret |ts\/sci )clearance/.test(resume);
   if (requiresClearance && !hasClearance) hardGates.push("Required security clearance is not proven by the resume");
   const requiresCitizen = /(?:u\.?s\.?|united states) citizen(?:ship)? (?:is )?(?:required|only)|must be (?:a )?(?:u\.?s\.?|united states) citizen/.test(wholeJob);
