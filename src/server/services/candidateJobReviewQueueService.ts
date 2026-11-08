@@ -14,6 +14,8 @@ import { applicationAutomation } from "@/lib/applicationAutomation";
 import { assessmentForHumanReview } from "@/lib/candidateReviewAssessment";
 import { scoreStage2, type ScoringJob, type ScoringCandidate, type ScoringResume } from "@/server/services/candidateJobScoring";
 import {candidateReviewFilterSql, type CandidateReviewFilters} from "@/lib/candidateReviewFilters";
+import { scheduledSuggestionQuality, type ScheduledMatchQuality } from "@/lib/scheduledMatchQuality";
+import { sha256Hex } from "@/lib/sha256";
 
 export interface ReviewQueueRow {
   id: string;
@@ -36,6 +38,7 @@ export interface ReviewQueueRow {
   assignment_note: string | null;
   assignment_due_at: string | null;
   application_id: string | null;
+  match_quality?: ScheduledMatchQuality | null;
 }
 
 async function requirePendingOrApproved(id: string): Promise<ReviewQueueRow> {
@@ -62,6 +65,14 @@ export async function approveReviewItem(id: string, actorUserId: string): Promis
   }
 
   if (!row.base_resume_id) throw new Error("No base resume is attached to this item; pick a resume before approving.");
+  if (row.source === "scheduled_logging" && row.match_quality?.inputHashes?.resumeContent) {
+    const resume = await queryOne<{content:unknown;status:string}>(
+      "SELECT content,status FROM base_resumes WHERE id=$1 AND candidate_id=$2",[row.base_resume_id,row.candidate_id]);
+    const text = typeof resume?.content === "string" ? resume.content : JSON.stringify(resume?.content ?? {});
+    if (resume?.status !== "approved" || await sha256Hex(text) !== row.match_quality.inputHashes.resumeContent) {
+      throw new Error("The approved resume changed after matching; re-score this suggestion before approval.");
+    }
+  }
 
   // Re-validate - the pair may have stopped being eligible since it was
   // queued (job went inactive, candidate dropped, or someone else already
@@ -69,14 +80,13 @@ export async function approveReviewItem(id: string, actorUserId: string): Promis
   const [job, candidate, existingApplication] = await Promise.all([
     queryOne<{ is_active: boolean }>("SELECT is_active FROM jobs WHERE id = $1", [row.job_id]),
     queryOne<{ status: string; pipeline_stage: string | null }>("SELECT status, pipeline_stage FROM candidates WHERE id = $1", [row.candidate_id]),
-    // Global dedup, same rule as queueing: a job already applied to by
-    // anyone blocks approval here too.
-    queryOne<{ id: string }>("SELECT id FROM applications WHERE job_id = $1 LIMIT 1", [row.job_id]),
+    // A different qualified candidate must not consume this candidate's opportunity.
+    queryOne<{ id: string }>("SELECT id FROM applications WHERE job_id = $1 AND candidate_id = $2 LIMIT 1", [row.job_id, row.candidate_id]),
   ]);
   if (!job) throw new Error("This job no longer exists.");
   if (!job.is_active) throw new Error("This job is no longer active.");
   if (!candidate || candidate.status !== "active") throw new Error("This candidate is no longer active.");
-  if (existingApplication) throw new Error("Another candidate has already been applied to this job since it was queued.");
+  if (existingApplication) throw new Error("This candidate already has an application for this job.");
 
   // Same automatic follow-up/due-date scheduling the extension's direct-
   // assign flow used to apply at creation time - now applied here, at
@@ -202,6 +212,7 @@ export async function retryAiScoring(id: string, customPrompt: string, crossChec
     queryOne<ScoringResume>("SELECT id, candidate_id, name, target_industry, target_roles, content, status FROM base_resumes WHERE id = $1", [row.base_resume_id]),
   ]);
   if (!job || !candidate || !resume) throw new Error("Job, candidate, or resume for this item is no longer available.");
+  if (row.source === "scheduled_logging" && resume.status !== "approved") throw new Error("Automated matching requires an approved base resume.");
 
   const scoringJob: ScoringJob = {
     job_id: job.job_id, title: job.title, company: job.company, location: job.location,
@@ -215,6 +226,7 @@ export async function retryAiScoring(id: string, customPrompt: string, crossChec
   const outcome = await scoreStage2({
     customPrompt, job: scoringJob, candidate: scoringCandidate, resume,
     description, deterministicScore: row.ats_score ?? 0, crossCheckFloor, runId: null,
+    precisionMatching: row.source === "scheduled_logging",
   });
 
   if (outcome.status === "failed") {
@@ -225,11 +237,13 @@ export async function retryAiScoring(id: string, customPrompt: string, crossChec
     throw new Error(outcome.failureReason);
   }
   const review = assessmentForHumanReview(outcome);
+  const quality = row.source === "scheduled_logging" ? scheduledSuggestionQuality(outcome) : null;
   await execute(
     `UPDATE candidate_job_review_queue
         SET ai_status = 'scored', ai_tier = $2, ai_score = $3, ai_reason = $4,
-            hard_gates = $5::jsonb, ai_failure_reason = NULL, updated_at = NOW()
+            hard_gates = $5::jsonb, ai_failure_reason = NULL, updated_at = NOW(), match_quality = $6::jsonb
       WHERE id = $1`,
-    [id, review.aiTier, outcome.score, review.aiReason, JSON.stringify([...new Set([...row.hard_gates, ...review.hardGates])])],
+    [id, quality?.reasons.length ? null : review.aiTier, outcome.score, review.aiReason,
+      JSON.stringify([...new Set(quality ? [...review.hardGates, ...quality.reasons] : [...row.hard_gates, ...review.hardGates])]), JSON.stringify(quality)],
   );
 }

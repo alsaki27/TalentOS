@@ -103,18 +103,18 @@ describe("checkStructuredEligibility", () => {
     expect(gates[0]).toMatch(/does not prove required citizenship/);
   });
 
-  test("export-control/clearance required, no recorded clearance -> gated", () => {
+  test("flagged restriction with missing requirement text is held", () => {
     const gates = checkStructuredEligibility(
       job({ export_control_restricted: true }),
       candidate(),
     );
     expect(gates).toHaveLength(1);
-    expect(gates[0]).toMatch(/no security clearance is recorded/);
+    expect(gates[0]).toMatch(/requirement text is missing/);
   });
 
-  test("export-control/clearance required, recorded clearance -> no gate from this function", () => {
+  test("recorded clearance satisfies an explicit clearance requirement", () => {
     const gates = checkStructuredEligibility(
-      job({ export_control_restricted: true }),
+      job({ export_control_restricted: true, eligibility_restriction_evidence: "Active Secret clearance required" }),
       candidate({ securityClearance: "Active Secret" }),
     );
     expect(gates).toEqual([]);

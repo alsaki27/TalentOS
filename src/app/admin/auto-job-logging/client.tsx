@@ -81,7 +81,7 @@ function runState(run: RunRow) {
 }
 function emptyRule(candidate: Candidate): CandidateRule {
   return {
-    candidate_id: candidate.id, is_enabled: candidate.status === "active", priority: "default",
+    candidate_id: candidate.id, is_enabled: false, priority: "default",
     preferences: {}, custom_requirements: "",
   };
 }
@@ -400,7 +400,7 @@ export default function AutoJobLoggingPage() {
         <div>
           <p className={styles.eyebrow}>AUTOMATED SOURCING · ADMIN ONLY</p>
           <h1>Scheduled candidate logging</h1>
-          <p className={styles.subhead}>Review scheduled-source jobs, match draft or approved base resumes, then queue matches for human approval.</p>
+          <p className={styles.subhead}>Review scheduled-source jobs, match approved base resumes, then queue matches for human approval.</p>
         </div>
         <div className={styles.headerActions}>
           <button className={styles.secondaryButton} onClick={() => setShowPasswordChange(true)}><KeyRound size={16} /> Change passphrase</button>
@@ -419,8 +419,8 @@ export default function AutoJobLoggingPage() {
       <section className={styles.summaryGrid} aria-label="Workflow summary">
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Clock3 size={18} /></span><div><small>Target schedule</small><strong>Daily · 5:00 AM BDT</strong><p>Cloudflare Cron · automatic catch-up</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><BriefcaseBusiness size={18} /></span><div><small>Scheduled jobs waiting</small><strong>{pendingJobs}</strong><p>{pageData.scheduledSources.length} source group{pageData.scheduledSources.length === 1 ? "" : "s"}</p></div></article>
-        <article className={styles.summaryCard}><span className={styles.summaryIcon}><Users size={18} /></span><div><small>Active applying candidates</small><strong>{configuredCount} / {applyingCandidateCount}</strong><p>Only active candidates in the applying stage</p></div></article>
-        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>ATS floor {config.match_threshold}% · AI tier cross-check {config.ai_match_threshold}%</p></div></article>
+        <article className={styles.summaryCard}><span className={styles.summaryIcon}><Users size={18} /></span><div><small>Active applying candidates</small><strong>{configuredCount} / {applyingCandidateCount}</strong><p>Explicitly enabled candidates with approved resumes</p></div></article>
+        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>ATS floor {config.match_threshold}% · Strong evidence only · AI ≥85</p></div></article>
       </section>
 
       {runResult && <section className={styles.runResult} aria-live="polite"><div><strong>Latest run · {runResult.status ?? (runResult.skipped ? "skipped" : "complete")}</strong><p>{runResult.reason ?? `${runResult.jobsSeen ?? 0} jobs checked · ${runResult.candidatePairsScored ?? 0} sent to Stage 2 AI · ${runResult.queuedForReview ?? 0} queued for review · ${runResult.failedCount ?? 0} failed`}</p></div><span>{runResult.aiCalls ?? 0} separate AI calls</span></section>}
@@ -436,8 +436,8 @@ export default function AutoJobLoggingPage() {
         {activeTab === "workflow" && <section id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow" className={styles.panel}>
           <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><ShieldCheck size={18} /></span><div><h2>Workflow controls</h2><p>Only scheduled ingestion events qualify. Manual, extension, and spreadsheet jobs are excluded.</p></div></div><label className={styles.toggle}><input type="checkbox" checked={config.is_enabled} onChange={(event) => updateConfig("is_enabled", event.target.checked)} /><span />{config.is_enabled ? "Schedule enabled" : "Paused"}</label></div>
           <div className={styles.controlGrid}>
-            <label>Stage 1 · keyword/ATS noise floor <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.match_threshold} onChange={(event) => updateConfig("match_threshold", Number(event.target.value))} /><b>%</b></span><small>A pure noise filter, not a fit-quality bar: a score below this is skipped before any AI call runs. Fit quality is Stage 2 and the human reviewer's job, not this number.</small></label>
-            <label>Stage 2 · AI tiering cross-check floor <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.ai_match_threshold} onChange={(event) => updateConfig("ai_match_threshold", Number(event.target.value))} /><b>%</b></span><small>Below this ATS score, an AI-claimed "Strong" tier is downgraded to "Adjacent" (the tier reflects both scores, not AI judgment alone). It does not gate whether a pair reaches review — every Strong/Adjacent/Stretch pair (and any hard-gated or AI-unavailable pair) is queued for an admin/manager to approve or reject.</small></label>
+            <label>Stage 1 · keyword/ATS noise floor <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.match_threshold} onChange={(event) => updateConfig("match_threshold", Number(event.target.value))} /><b>%</b></span><small>A pure noise filter, not a fit-quality bar: a score below this is skipped before any AI call runs. Stage 2 independently requires evidence-backed Strong fit; this score alone cannot admit a suggestion.</small></label>
+            <div><strong>Stage 2 · evidence-based matching</strong><p>Only Strong matches scoring at least 85/100, with aligned role and seniority, verified job/resume quotes and no unresolved mandatory gap reach review. Adjacent, Stretch and incomplete AI checks stay out of the suggestion queue.</p></div>
             <label>Scheduled jobs per run <input type="number" min={1} max={100} value={config.jobs_per_run} onChange={(event) => updateConfig("jobs_per_run", Number(event.target.value))} /><small>Jobs are processed oldest first, up to this many per run.</small></label>
             <label>Separate AI calls per run <input type="number" min={1} max={200} value={config.ai_calls_per_run} onChange={(event) => updateConfig("ai_calls_per_run", Number(event.target.value))} /><small>Caps this feature's matching-provider usage only.</small></label>
             <label>Queued for review per run <input type="number" min={1} max={100} value={config.max_applications_per_run} onChange={(event) => updateConfig("max_applications_per_run", Number(event.target.value))} /><small>Max pairs added to the Review Queue per run. No application is ever created automatically — this only caps how full the queue gets in one run; extras remain queued for the next batch.</small></label>
@@ -502,7 +502,7 @@ export default function AutoJobLoggingPage() {
                     <span>
                       <strong>{candidate.name}</strong>
                       <span className={styles.candidateBadges}><span className={styles.candidateBadge}>Active</span><span className={`${styles.candidateBadge} ${styles.candidateBadgeStage}`}>Applying</span></span>
-                      <small className={styles.candidateResumeMeta}>{candidate.approved_resume_count} usable base resume{candidate.approved_resume_count === 1 ? "" : "s"} (draft or approved)</small>
+                      <small className={styles.candidateResumeMeta}>{candidate.approved_resume_count} usable base resume{candidate.approved_resume_count === 1 ? "" : "s"} (approved only)</small>
                     </span>
                   </label>
                   <label className={styles.priorityField}>Priority<select value={rule.priority} onChange={(event) => updateRule(candidate.id, { priority: event.target.value as Priority })}><option value="high">High</option><option value="default">Default</option><option value="low">Low</option></select></label>
@@ -557,7 +557,7 @@ export default function AutoJobLoggingPage() {
       </section>
 
       <section className={styles.panel}>
-        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>Stage 1 is a low keyword/ATS noise floor, not a fit-quality gate; Stage 2 is the AI Strong/Adjacent/Stretch tiering that runs for Stage-1 passers. A "pending review" pair is sitting in the <Link href="/candidate-job-review">Review Queue</Link> awaiting approval by an Application Engineer, manager or admin — nothing here creates a real application automatically.</p></div></div><strong className={styles.countTag}>{visibleDecisions.length} {selectedRunId ? "for this run" : "recent"}</strong></div>
+        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>Stage 1 is a low keyword/ATS noise floor, not a fit-quality gate; Stage 2 requires a Strong result with verified requirement evidence; other results remain recorded here without entering review. A "pending review" pair is sitting in the <Link href="/candidate-job-review">Review Queue</Link> awaiting approval by an Application Engineer, manager or admin — nothing here creates a real application automatically.</p></div></div><strong className={styles.countTag}>{visibleDecisions.length} {selectedRunId ? "for this run" : "recent"}</strong></div>
         {selectedRun && <div className={styles.filterBanner}>
           <span>Showing decisions from the <strong>{selectedRun.trigger_type.replaceAll("_", " ")} · {selectedRun.status}</strong> run started {displayDate(selectedRun.started_at)}.</span>
           <button type="button" onClick={() => setSelectedRunId(null)}>Show all recent decisions</button>

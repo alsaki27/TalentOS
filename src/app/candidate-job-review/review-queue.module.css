@@ -325,3 +325,9 @@
     width: 100%;
   }
 }
+.matchEvidence { margin: 12px 0; border: 1px solid var(--border, #444); padding: 12px; border-radius: 8px; }
+.matchEvidence summary { cursor: pointer; font-weight: 600; }
+.matchEvidence section { margin-top: 14px; }
+.evidenceColumns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 8px; }
+.evidenceColumns blockquote { margin: 6px 0; padding-left: 10px; border-left: 2px solid #888; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .evidenceColumns { grid-template-columns: 1fr; } }

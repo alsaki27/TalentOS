@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { isSafeExternalUrl, fetchJobPageText } from "@/lib/ai/job-agents/fetchJobPage";
 import { query, queryOne } from "@/server/db/neon";
 import type { AiProvider as DbAiProvider } from "@/server/repositories/aiKeyRepository";
+import { SCHEDULED_MATCH_POLICY_VERSION, SCHEDULED_MATCH_MIN_SCORE, scheduledJobQualityReasons, scheduledSuggestionQuality, type ScheduledMatchQuality } from "@/lib/scheduledMatchQuality";
 import {
   scoreStage1, scoreStage2, SCHEDULED_LOGGING_AUTOMATION_ID,
   type CandidatePriority, type ScoringCandidate, type ScoringResume, type ScoringJob,
@@ -75,22 +76,24 @@ interface DecisionInput {
   deterministicScore?: number | null; score?: number | null; priority: CandidatePriority;
   status: string; reason: string; provider?: string | null; model?: string | null;
   inputTokens?: number; outputTokens?: number;
+  matchQuality?: ScheduledMatchQuality;
 }
 function decisionStatement(run: LoggingRun, input: DecisionInput) {
-  const lease = leasePredicate(run, 15);
+  const lease = leasePredicate(run, 16);
   return {
     text: `INSERT INTO scheduled_candidate_logging_decisions
       (run_id,ingestion_event_id,job_id,candidate_id,base_resume_id,deterministic_score,match_score,
-       priority,status,reason,provider,model,input_tokens,output_tokens)
-      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14 WHERE ${lease.text}
+       priority,status,reason,provider,model,input_tokens,output_tokens,match_quality)
+      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb WHERE ${lease.text}
       ON CONFLICT (ingestion_event_id,candidate_id) DO UPDATE SET
         run_id=EXCLUDED.run_id,base_resume_id=EXCLUDED.base_resume_id,deterministic_score=EXCLUDED.deterministic_score,
         match_score=EXCLUDED.match_score,priority=EXCLUDED.priority,status=EXCLUDED.status,reason=EXCLUDED.reason,
-        provider=EXCLUDED.provider,model=EXCLUDED.model,input_tokens=EXCLUDED.input_tokens,output_tokens=EXCLUDED.output_tokens,updated_at=NOW()
+        provider=EXCLUDED.provider,model=EXCLUDED.model,input_tokens=EXCLUDED.input_tokens,output_tokens=EXCLUDED.output_tokens,
+        match_quality=EXCLUDED.match_quality,updated_at=NOW()
       RETURNING id`,
     values: [run.id,input.job.event_id,input.job.job_id,input.candidateId,input.resumeId ?? null,
       input.deterministicScore ?? null,input.score ?? null,input.priority,input.status,input.reason.slice(0,2000),
-      input.provider ?? null,input.model ?? null,input.inputTokens ?? 0,input.outputTokens ?? 0,...lease.values],
+      input.provider ?? null,input.model ?? null,input.inputTokens ?? 0,input.outputTokens ?? 0,JSON.stringify(input.matchQuality ?? null),...lease.values],
   };
 }
 async function saveDecision(run: LoggingRun, input: DecisionInput) {
@@ -102,20 +105,20 @@ async function saveReviewPair(run: LoggingRun, input: DecisionInput, review: {
   aiReason: string | null; aiFailureReason: string | null; hardGates: string[];
   assignedBy: string; assignedTo: string;
 }): Promise<boolean> {
-  const lease = leasePredicate(run, 17);
+  const lease = leasePredicate(run, 18);
   const results = await leasedWrites(run, [decisionStatement(run, input), {
     text: `INSERT INTO candidate_job_review_queue
       (source,candidate_id,job_id,base_resume_id,alternate_resumes,ats_score,ai_status,ai_tier,ai_score,
-       ai_reason,ai_failure_reason,hard_gates,priority,assigned_by_user_id,assigned_to_user_id,source_decision_id)
-      SELECT 'scheduled_logging',$1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,d.id
+       ai_reason,ai_failure_reason,hard_gates,priority,assigned_by_user_id,assigned_to_user_id,source_decision_id,match_quality)
+      SELECT 'scheduled_logging',$1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,d.id,$17::jsonb
       FROM scheduled_candidate_logging_decisions d WHERE d.ingestion_event_id=$15 AND d.candidate_id=$1 AND d.run_id=$16
         AND ${lease.text}
-        AND NOT EXISTS (SELECT 1 FROM candidate_job_review_queue WHERE job_id=$2 AND status IN ('pending','approved'))
-        AND NOT EXISTS (SELECT 1 FROM applications WHERE job_id=$2)
+        AND NOT EXISTS (SELECT 1 FROM candidate_job_review_queue WHERE candidate_id=$1 AND job_id=$2)
+        AND NOT EXISTS (SELECT 1 FROM applications WHERE candidate_id=$1 AND job_id=$2)
       ON CONFLICT (candidate_id,job_id) DO NOTHING RETURNING id`,
     values: [input.candidateId,input.job.job_id,input.resumeId,JSON.stringify(review.alternateResumes),input.deterministicScore,
       review.aiStatus,review.aiTier,review.aiScore,review.aiReason,review.aiFailureReason,JSON.stringify(review.hardGates),input.priority,
-      review.assignedBy,review.assignedTo,input.job.event_id,run.id,...lease.values],
+      review.assignedBy,review.assignedTo,input.job.event_id,run.id,JSON.stringify(input.matchQuality ?? null),...lease.values],
   }, {
     text: `UPDATE scheduled_candidate_logging_decisions d SET status='existing_application',
       reason='This job was claimed for review or application while AI scoring was in progress.',updated_at=NOW()
@@ -146,7 +149,7 @@ async function loadCandidates(): Promise<CandidateRow[]> {
        LEFT JOIN scheduled_candidate_logging_candidate_rules r ON r.candidate_id = c.id
        WHERE c.status = 'active'
          AND c.pipeline_stage = 'applying'
-         AND COALESCE(r.is_enabled, true) = true
+         AND r.is_enabled = true
       ORDER BY CASE COALESCE(r.priority, 'default') WHEN 'high' THEN 0 WHEN 'default' THEN 1 ELSE 2 END,
                 c.name, c.id`,
   );
@@ -156,7 +159,7 @@ async function loadResumes(candidateIds: string[]): Promise<Map<string, ResumeRo
   if (!candidateIds.length) return new Map();
   const rows = await query<ResumeRow>(
     `SELECT id, candidate_id, name, target_industry, target_roles, content, status
-       FROM base_resumes WHERE candidate_id = ANY($1::uuid[]) AND status IN ('draft', 'approved')
+       FROM base_resumes WHERE candidate_id = ANY($1::uuid[]) AND status = 'approved'
        ORDER BY created_at DESC`,
     [candidateIds],
   );
@@ -182,16 +185,14 @@ async function resolveDescription(job: IngestedJob): Promise<string> {
       }
     }
   }
-  return description.slice(0, 20_000);
+  return description;
 }
 
 function toScoringJob(job: IngestedJob): ScoringJob {
   return {
     job_id: job.job_id, title: job.title, company: job.company, location: job.location,
     seniority_level: job.seniority_level,
-    // Freshness here means when the scheduled source entered TalentOS, not
-    // the publisher's original posting date (which can be absent or stale).
-    freshnessReferenceDate: job.ingested_at,
+    freshnessReferenceDate: job.posted_at,
     requires_citizenship: job.requires_citizenship, citizenship_countries: job.citizenship_countries,
     export_control_restricted: job.export_control_restricted, eligibility_restriction_evidence: job.eligibility_restriction_evidence,
   };
@@ -216,7 +217,7 @@ export async function enqueueScheduledCandidateLogging(options: {
   const run = await requestLoggingRun({
     runKey:options.runKey ?? `scheduled-candidate-logging:${options.triggerType}:${randomUUID()}`,
     triggerType:options.triggerType,actorUserId:options.actorUserId,jobsPerRun:config.jobs_per_run,
-    snapshot:{ threshold:config.match_threshold,aiTierCrossCheckFloor:config.ai_match_threshold,
+    snapshot:{ matchingPolicy:SCHEDULED_MATCH_POLICY_VERSION, threshold:config.match_threshold,minimumAiFitScore:SCHEDULED_MATCH_MIN_SCORE,
       jobsPerRun:config.jobs_per_run,aiCallsPerRun:config.ai_calls_per_run,maxQueuedPerRun:config.max_applications_per_run,
       jobFreshnessDays:config.job_freshness_days,provider:"opencode",model:SCHEDULED_LOGGING_AUTOMATION_ID,
       candidateEligibility:"active_applying",assignedByUserId:config.assigned_by_user_id,applicationOwnerUserId:config.application_owner_user_id,
@@ -279,19 +280,25 @@ export async function continueScheduledCandidateLogging() {
         const scoringJob=toScoringJob(job);
         for (const candidate of candidates) {
           if (Date.now() >= deadline - 3_000) break jobsLoop;
-          const resumes=resumesByCandidate.get(candidate.id) ?? [];
+          const resumes=(resumesByCandidate.get(candidate.id) ?? []).filter(resume => resume.status === "approved");
           const prior=await queryOne<{status:string}>(`SELECT status FROM scheduled_candidate_logging_decisions WHERE ingestion_event_id=$1 AND candidate_id=$2`,[job.event_id,candidate.id]);
           if (prior && ["below_threshold","ineligible","existing_application","no_approved_resume","description_unavailable","application_created","pending_review"].includes(prior.status)) continue;
           const common={job,candidateId:candidate.id,priority:candidate.priority};
-          if (!resumes.length) {await saveDecision(run,{...common,status:"no_approved_resume",reason:"No draft or approved base resume is available."});run.skipped_count++;await beat();continue;}
+          if (!resumes.length) {await saveDecision(run,{...common,status:"no_approved_resume",reason:"No approved base resume is available."});run.skipped_count++;await beat();continue;}
           const [application,review]=await Promise.all([
-            queryOne("SELECT id FROM applications WHERE job_id=$1 LIMIT 1",[job.job_id]),
-            queryOne("SELECT id FROM candidate_job_review_queue WHERE job_id=$1 AND status IN ('pending','approved') LIMIT 1",[job.job_id]),
+            queryOne("SELECT id FROM applications WHERE job_id=$1 AND candidate_id=$2 LIMIT 1",[job.job_id,candidate.id]),
+            queryOne("SELECT id FROM candidate_job_review_queue WHERE job_id=$1 AND candidate_id=$2 LIMIT 1",[job.job_id,candidate.id]),
           ]);
           if (application || review) {await saveDecision(run,{...common,status:"existing_application",reason:"This job already has an application or a pending review item."});run.skipped_count++;await beat();continue;}
-          if (description.length<250) {await saveDecision(run,{...common,status:"description_unavailable",reason:"A usable job description was not available after the safe page-fetch attempt."});run.skipped_count++;await beat();continue;}
-          const stage1=scoreStage1(candidate,resumes,description,scoringJob,config.job_freshness_days);
+          const jobReasons=scheduledJobQualityReasons(job,description,config.job_freshness_days);
+          if (![job.apply_url,job.source_url].some(url => url && isSafeExternalUrl(url))) jobReasons.push("No safe application or source link is available.");
+          if (jobReasons.length) {await saveDecision(run,{...common,status:"ineligible",reason:jobReasons.join(" "),matchQuality:{policyVersion:SCHEDULED_MATCH_POLICY_VERSION,reasons:jobReasons}});run.skipped_count++;await beat();continue;}
+          const stage1=scoreStage1(candidate,resumes,description,scoringJob,config.job_freshness_days,true);
           const decision={...common,resumeId:stage1.bestResume?.id,deterministicScore:stage1.bestScore};
+          if (stage1.hardGates.length) {
+            await saveDecision(run,{...decision,status:"ineligible",reason:stage1.hardGates.join(" "),matchQuality:{policyVersion:SCHEDULED_MATCH_POLICY_VERSION,reasons:stage1.hardGates}});
+            run.skipped_count++;await beat();continue;
+          }
           if (!stage1.bestResume || stage1.bestScore<config.match_threshold) {
             await saveDecision(run,{...decision,score:stage1.bestScore,status:"below_threshold",reason:`Keyword/ATS score ${stage1.bestScore} is below the ${config.match_threshold}% Stage 1 floor.`});
             run.skipped_count++;await beat();continue;
@@ -304,30 +311,32 @@ export async function continueScheduledCandidateLogging() {
           // Reserve before spending: a terminated chunk cannot reset the per-run AI budget.
           run.ai_calls++;run.candidate_pairs_scored++;await beat();
           const stage2=await scoreStage2({customPrompt:config.custom_prompt,job:scoringJob,candidate,resume:stage1.bestResume,
-            description,deterministicScore:stage1.bestScore,crossCheckFloor:config.ai_match_threshold,runId:run.id,
+            description,approvedResumes:resumes,deterministicScore:stage1.bestScore,runId:run.id,
             scheduledExecution:{deadlineAt:Math.min(deadline-CHUNK_FLUSH_MARGIN_MS,Date.now()+AI_CHECK_BUDGET_MS)},
           });
           await beat(); // Verify the lease again before any result can change a decision.
-          if (stage2.status==="failed" && stage2.retryAfterMs) {
-            run.failed_count++;retryAfterMs=stage2.retryAfterMs;
+          if (stage2.status==="failed") {
+            run.failed_count++;
             await saveDecision(run,{...decision,status:"ai_failed",reason:stage2.failureReason,provider:stage2.provider,model:stage2.model});
-            break jobsLoop;
+            if (stage2.retryAfterMs) { retryAfterMs=stage2.retryAfterMs; break jobsLoop; }
+            await beat();continue;
           }
-          if (stage2.status==="scored") {run.input_tokens+=stage2.inputTokens;run.output_tokens+=stage2.outputTokens;}
-          if (stage2.status==="scored" && stage2.tier==="reject") {
-            await saveDecision(run,{...decision,score:stage2.score,status:"below_threshold",reason:stage2.reason,
+          run.input_tokens+=stage2.inputTokens;run.output_tokens+=stage2.outputTokens;
+          decision.resumeId=stage2.selectedResumeId ?? decision.resumeId;
+          const quality=scheduledSuggestionQuality(stage2);
+          if (quality.reasons.length) {
+            await saveDecision(run,{...decision,matchQuality:quality,score:stage2.score,status:"below_threshold",reason:`${quality.reasons.join(" ")} ${stage2.reason}`,
               provider:stage2.provider,model:stage2.model,inputTokens:stage2.inputTokens,outputTokens:stage2.outputTokens});
             run.skipped_count++;await beat();continue;
           }
-          const failed=stage2.status==="failed";
-          const queued=await saveReviewPair(run,{...decision,status:"pending_review",score:failed?null:stage2.score,
-            reason:failed?"AI eligibility check unavailable; queued for review with the ATS score only.":stage2.reason,
-            provider:stage2.provider,model:stage2.model,inputTokens:failed?0:stage2.inputTokens,outputTokens:failed?0:stage2.outputTokens},
-          {alternateResumes:stage1.rankedResumes,aiStatus:failed?"failed":"scored",aiTier:failed?null:stage2.tier,
-            aiScore:failed?null:stage2.score,aiReason:failed?null:stage2.reason,aiFailureReason:failed?stage2.failureReason:null,
-            hardGates:failed?stage1.hardGates:[...stage1.hardGates,...stage2.hardGates],
+          const queued=await saveReviewPair(run,{...decision,matchQuality:quality,status:"pending_review",score:stage2.score,
+            reason:stage2.reason,
+            provider:stage2.provider,model:stage2.model,inputTokens:stage2.inputTokens,outputTokens:stage2.outputTokens},
+          {alternateResumes:stage1.rankedResumes,aiStatus:"scored",aiTier:stage2.tier,
+            aiScore:stage2.score,aiReason:stage2.reason,aiFailureReason:null,
+            hardGates:[],
             assignedBy:config.assigned_by_user_id!,assignedTo:config.application_owner_user_id!});
-          if (queued) {run.applications_created++;if(failed)run.failed_count++;} else run.skipped_count++;
+          if (queued) run.applications_created++; else run.skipped_count++;
           await beat();
         }
       }
