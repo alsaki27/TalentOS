@@ -170,14 +170,15 @@ export function ResumeQcDialog({
         style={{
           width: "min(900px, calc(100vw - 24px))",
           maxWidth: 900,
-          maxHeight: "calc(100vh - 24px)",
+          height: "min(816px, calc(100dvh - 24px))",
+          maxHeight: "calc(100dvh - 24px)",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
           padding: 0,
         }}
       >
-        <header style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
+        <header style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start", flexShrink: 0 }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ color: "var(--accent, #4ade80)", textTransform: "uppercase", letterSpacing: ".08em", fontSize: 11, fontWeight: 800, marginBottom: 6 }}>Resume quality check</div>
             <h2 id="resume-qc-title" style={{ margin: 0, fontSize: 20, lineHeight: 1.3 }}>QC notes &amp; activity</h2>
@@ -188,7 +189,7 @@ export function ResumeQcDialog({
           <button className="btn-compact" type="button" onClick={onClose} aria-label="Close QC dialog">✕</button>
         </header>
 
-        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ padding: "14px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
           <span style={{ color: "var(--muted)", fontSize: 12, fontWeight: 700 }}>CURRENT QC</span>
           <span style={{
             border: `1px solid ${currentMeta?.color ?? "var(--border)"}`,
@@ -200,7 +201,7 @@ export function ResumeQcDialog({
           {details && !details.eligible && <span className="text-muted" style={{ marginLeft: "auto", fontSize: 12 }}>Editing is available in In AI Pipeline, AE Review Pending, and Ready for AE Application.</span>}
         </div>
 
-        <nav role="tablist" aria-label="Resume QC notes and activity" style={{ display: "flex", gap: 6, overflowX: "auto", padding: "12px 24px 0", borderBottom: "1px solid var(--border)" }}>
+        <nav role="tablist" aria-label="Resume QC notes and activity" style={{ display: "flex", flexShrink: 0, minHeight: 53, alignItems: "end", gap: 6, overflowX: "auto", padding: "12px 24px 0", borderBottom: "1px solid var(--border)" }}>
           {[...STAGES.map((stage) => ({ value: stage.value as QcTab, label: stage.label })), { value: "activity" as QcTab, label: `Activity${details?.events?.length ? ` (${details.events.length})` : ""}` }].map((tab) => (
             <button
               key={tab.value}
@@ -218,7 +219,7 @@ export function ResumeQcDialog({
           ))}
         </nav>
 
-        <div style={{ padding: 24, overflowY: "auto", minHeight: 210 }}>
+        <div style={{ flex: "1 1 auto", minHeight: 0, padding: 24, overflowY: "auto" }}>
           {loading ? <div className="text-muted" style={{ textAlign: "center", padding: 35 }}>Loading QC history…</div> : error && !details ? (
             <div className="form-error" role="alert">{error}</div>
           ) : activeTab === "activity" ? (
@@ -298,7 +299,7 @@ export function ResumeQcDialog({
           {success && <div role="status" style={{ marginTop: 12, color: "#34d399", fontSize: 13 }}>{success}</div>}
         </div>
 
-        <footer style={{ padding: "12px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+        <footer style={{ padding: "12px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexShrink: 0 }}>
           <span className="text-muted" style={{ fontSize: 11 }}>QC changes and note edits are time-stamped and attributed.</span>
           <button type="button" className="btn-compact" onClick={onClose}>Close</button>
         </footer>
