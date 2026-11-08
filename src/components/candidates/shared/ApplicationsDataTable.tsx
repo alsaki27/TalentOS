@@ -15,14 +15,16 @@ export interface InterviewStageSummary {
   time_zone: string | null;
   interview_format: "online" | "onsite" | null;
   status: string;
+  notes?: string | null;
   rescheduled_at: string | null;
 }
 
-interface DashboardApplication {
+export interface DashboardApplication {
   application_id: string;
   candidate_id?: string;
   candidate_name?: string;
   status: string;
+  source_type?: string | null;
   applied_at: string | null;
   follow_up_at: string | null;
   job_id: string;
@@ -41,6 +43,9 @@ interface DashboardApplication {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  resume_id?: string | null;
+  application_resume_url?: string | null;
+  application_resume_filename?: string | null;
   interview_scheduled_at?: string | null;
   interview_time_zone?: string | null;
   interview_format?: "online" | "onsite" | null;
@@ -59,6 +64,8 @@ interface ApplicationsDataTableProps {
   // "Manage stages" - the table doesn't own the data, so it asks the parent
   // to refetch rather than guess how to patch the new shape into local state.
   onInterviewsChanged?: (applicationId: string) => void;
+  onCustomInterviewEdit?: (application: DashboardApplication) => void;
+  onCustomInterviewRemove?: (application: DashboardApplication) => void;
   readOnly?: boolean;
   totalCount?: number;
   page: number;
@@ -130,6 +137,7 @@ var TH_STYLE: React.CSSProperties = {
 
 export default function ApplicationsDataTable({
   applications, onStatusChange, onNotesOpen, onInterviewsChanged, readOnly,
+  onCustomInterviewEdit, onCustomInterviewRemove,
   totalCount, page, pageSize, onPageChange, sort, order, onSort,
 }: ApplicationsDataTableProps) {
   var [localStatusLoading, setLocalStatusLoading] = useState<Record<string, boolean>>({});
@@ -137,6 +145,7 @@ export default function ApplicationsDataTable({
   var [sharepointNoticeId, setSharepointNoticeId] = useState<string | null>(null);
   var [interviewModalApp, setInterviewModalApp] = useState<DashboardApplication | null>(null);
   var [manageStagesApp, setManageStagesApp] = useState<DashboardApplication | null>(null);
+  var [manageStageRound, setManageStageRound] = useState<number | null>(null);
 
   var totalPages = totalCount !== undefined ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
   var showCandidateColumn = applications.some(function (a) { return !!a.candidate_name; });
@@ -235,7 +244,9 @@ export default function ApplicationsDataTable({
                     </td>
                   )}
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    {app.company_website ? (
+                    {app.source_type === "custom_interview" ? (
+                      <span style={{ color: "var(--accent)" }}>{app.company_name || "—"}</span>
+                    ) : app.company_website ? (
                       <a href={app.company_website} target="_blank" rel="noopener noreferrer"
                         style={{ color: "var(--accent)", textDecoration: "none" }}
                         title={"Visit " + app.company_name + " website"}
@@ -280,9 +291,13 @@ export default function ApplicationsDataTable({
                       border: "1px solid var(--border)", color: "var(--ink-soft)",
                       display: "inline-flex", alignItems: "center", gap: 6,
                     }}>
-                      <a href={"/jobs/" + app.job_id} style={{ color: "var(--ink-soft)", textDecoration: "none" }}>
-                        {app.job_id.length > 8 ? app.job_id.substring(0, 8) + "..." : app.job_id}
-                      </a>
+                      {app.source_type === "custom_interview" ? (
+                        <span>{app.job_id.length > 8 ? app.job_id.substring(0, 8) + "..." : app.job_id}</span>
+                      ) : (
+                        <a href={"/jobs/" + app.job_id} style={{ color: "var(--ink-soft)", textDecoration: "none" }}>
+                          {app.job_id.length > 8 ? app.job_id.substring(0, 8) + "..." : app.job_id}
+                        </a>
+                      )}
                       <button
                         onClick={function () { copyToClipboard(app.job_id, setCopiedId); }}
                         title="Copy Job ID"
@@ -299,9 +314,13 @@ export default function ApplicationsDataTable({
                     </span>
                   </td>
                   <td style={{ padding: "10px 12px" }}>
-                    <span style={{ color: "var(--ink-soft)", fontSize: 12, fontWeight: 500 }}>{sourceLabel(app.job_source)}</span>
+                    {app.source_type === "custom_interview" ? (
+                      <span title="Custom added interview" style={{ color: "var(--accent)", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>✍️ Custom added</span>
+                    ) : (
+                      <span style={{ color: "var(--ink-soft)", fontSize: 12, fontWeight: 500 }}>{sourceLabel(app.job_source)}</span>
+                    )}
                   </td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{app.location || "—"}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{app.location || (app.source_type === "custom_interview" ? "Not provided" : "—")}</td>
                   {/* Tailored Resume Column */}
                   <td style={{ padding: "10px 12px", textAlign: "center" }}>
                     {app.tailored_resume_version_id ? (
@@ -384,8 +403,14 @@ export default function ApplicationsDataTable({
                           </span>
                         )}
                       </div>
+                    ) : app.application_resume_url ? (
+                      <a href={app.application_resume_url} target="_blank" rel="noopener noreferrer"
+                        title={app.application_resume_filename || "Open the resume attached to this application"}
+                        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4, padding: "4px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, color: "var(--accent)", border: "1px solid var(--border)", textDecoration: "none", whiteSpace: "nowrap" }}>
+                        📎 Resume
+                      </a>
                     ) : (
-                      <span style={{ fontSize: 11, color: "var(--ink-soft)", opacity: 0.35 }}>—</span>
+                      <span style={{ fontSize: 11, color: "var(--ink-soft)", opacity: 0.65 }}>{app.source_type === "custom_interview" ? "Not provided" : "—"}</span>
                     )}
                   </td>
                   <td style={{ padding: "10px 12px" }}>
@@ -411,15 +436,17 @@ export default function ApplicationsDataTable({
                         }}
                         title="Click to change status"
                       >
-                        <option value="assigned">Assigned</option>
-                        <option value="stacked">Stacked</option>
-                        <option value="in_progress">In Progress</option>
-                        <option value="applied">Applied</option>
-                        <option value="replied">Screening</option>
-                        <option value="interview">Interview</option>
-                        <option value="offer">Offer</option>
-                        <option value="rejected">Rejected</option>
-                        <option value="withdrawn">Withdrawn</option>
+                        {(app.source_type === "custom_interview"
+                          ? [
+                              ["applied", "Applied"], ["replied", "Screening"], ["interview", "Interview"],
+                              ["offer", "Offer"], ["rejected", "Rejected"], ["withdrawn", "Withdrawn"],
+                            ]
+                          : [
+                              ["assigned", "Assigned"], ["stacked", "Stacked"], ["in_progress", "In Progress"],
+                              ["applied", "Applied"], ["replied", "Screening"], ["interview", "Interview"],
+                              ["offer", "Offer"], ["rejected", "Rejected"], ["withdrawn", "Withdrawn"],
+                            ]
+                        ).map(function (option) { return <option key={option[0]} value={option[0]}>{option[1]}</option>; })}
                       </select>
                     )}
                   </td>
@@ -456,6 +483,25 @@ export default function ApplicationsDataTable({
                                   {candidateLocal} candidate&rsquo;s time
                                 </span>
                               )}
+                              {!readOnly && (
+                                <button
+                                  type="button"
+                                  className="interview-stage-notes-trigger"
+                                  onClick={function () { setManageStageRound(stage.round_number); setManageStagesApp(app); }}
+                                  title={stage.notes?.trim() ? `View or edit notes for Stage ${stage.round_number}` : `Add notes for Stage ${stage.round_number}`}
+                                  aria-label={stage.notes?.trim() ? `View or edit notes for Stage ${stage.round_number}` : `Add notes for Stage ${stage.round_number}`}
+                                  aria-haspopup="dialog"
+                                  style={{
+                                    width: 24, height: 24, marginLeft: 24, marginTop: 3,
+                                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                    borderRadius: 6,
+                                    border: "1px solid " + (stage.notes?.trim() ? "rgba(99,102,241,0.4)" : "var(--border)"),
+                                    background: stage.notes?.trim() ? "rgba(99,102,241,0.12)" : "var(--bg)",
+                                    color: stage.notes?.trim() ? "var(--accent)" : "var(--ink-soft)",
+                                    cursor: "pointer", fontSize: 12,
+                                  }}
+                                >📝</button>
+                              )}
                             </div>
                           );
                         })}
@@ -477,11 +523,11 @@ export default function ApplicationsDataTable({
                       </div>
                     ) : <span style={{ color: "var(--ink-soft)", opacity: 0.5 }}>—</span>}
                   </td>
-                  <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{formatDate(app.applied_at)}</td>
+                  <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{app.applied_at ? formatDate(app.applied_at) : app.source_type === "custom_interview" ? "Not provided" : "—"}</td>
                   {!readOnly && (
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
                       <div style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
-                        {app.source_url && (
+                        {app.source_url && app.source_type !== "custom_interview" && (
                           <button
                             onClick={function () { openCopilot(app); }}
                             title="Open this application in TalentOS Copilot"
@@ -492,6 +538,14 @@ export default function ApplicationsDataTable({
                               color: "#10b981", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
                             }}
                           >Copilot</button>
+                        )}
+                        {app.source_type === "custom_interview" && onCustomInterviewEdit && (
+                          <button type="button" onClick={function () { onCustomInterviewEdit(app); }} title="Edit custom interview details"
+                            style={{ height: 28, borderRadius: 6, cursor: "pointer", padding: "0 8px", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>Edit</button>
+                        )}
+                        {app.source_type === "custom_interview" && onCustomInterviewRemove && (
+                          <button type="button" onClick={function () { onCustomInterviewRemove(app); }} title="Remove custom interview"
+                            style={{ height: 28, borderRadius: 6, cursor: "pointer", padding: "0 8px", border: "1px solid rgba(244,63,94,0.35)", background: "rgba(244,63,94,0.08)", color: "#f43f5e", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>Remove</button>
                         )}
                         <button
                           onClick={function () { handleToggle(app, "replied"); }}
@@ -521,7 +575,7 @@ export default function ApplicationsDataTable({
                         >🎯</button>
                         {isInterview && (
                           <button
-                            onClick={function () { setManageStagesApp(app); }}
+                            onClick={function () { setManageStageRound(null); setManageStagesApp(app); }}
                             title="Manage interview stages (schedule, reschedule, notes)"
                             style={{
                               width: 28, height: 28, borderRadius: 6, cursor: "pointer",
@@ -563,10 +617,12 @@ export default function ApplicationsDataTable({
         <ManageInterviewStagesModal
           applicationId={manageStagesApp.application_id}
           applicationLabel={manageStagesApp.company_name + " · " + manageStagesApp.job_title}
-          onCancel={function () { setManageStagesApp(null); }}
+          initialStage={manageStageRound ?? undefined}
+          onCancel={function () { setManageStagesApp(null); setManageStageRound(null); }}
           onSaved={function () {
             if (onInterviewsChanged && manageStagesApp) onInterviewsChanged(manageStagesApp.application_id);
             setManageStagesApp(null);
+            setManageStageRound(null);
           }}
         />
       )}

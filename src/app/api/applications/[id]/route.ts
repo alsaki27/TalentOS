@@ -19,6 +19,14 @@ import { APPLICATION_STAGES } from "@/lib/applicationStages";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
+const CUSTOM_INTERVIEW_STATUS_STAGE: Record<string, string> = {
+  applied: "applied",
+  replied: "screening",
+  interview: "interview",
+  offer: "offer",
+  rejected: "rejected",
+  withdrawn: "withdrawn",
+};
 
 // Had no GET handler at all (only PATCH/DELETE) - same missing-method pattern
 // already found and fixed on the workflow status route. Confirmed live via
@@ -69,7 +77,34 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (f in body) updates[f] = body[f];
   }
 
-  if ("ae_stage" in updates && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
+  // Custom Interview Hub applications participate in the normal candidate
+  // lifecycle, but do not use the AI hand-off stage. Keep status, canonical
+  // stage, and audit timestamps aligned without applying the AE hand-off
+  // compatibility behavior below (which maps non-AE stages to `in_progress`).
+  const customInterviewTargetStage =
+    prefetchedApplication?.source_type === "custom_interview" && typeof updates.status === "string"
+      ? CUSTOM_INTERVIEW_STATUS_STAGE[updates.status]
+      : undefined;
+  const customInterviewStageChanged = Boolean(customInterviewTargetStage);
+  if (customInterviewTargetStage) {
+    const changedAt = new Date().toISOString();
+    const actorName = currentUser.profile.display_name || currentUser.profile.email;
+    updates.application_stage = customInterviewTargetStage;
+    updates.ae_stage = customInterviewTargetStage;
+    updates.application_stage_changed_at = changedAt;
+    updates.application_stage_changed_by_user_id = currentUser.profile.user_id;
+    updates.application_stage_changed_by_name = actorName;
+    updates.ae_stage_updated_at = changedAt;
+    updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
+    updates.ae_stage_updated_by_name = actorName;
+    updates.updated_at = changedAt;
+    if (updates.status === "applied") {
+      updates.applied_at = prefetchedApplication?.applied_at ?? changedAt;
+      updates.completed_at = prefetchedApplication?.completed_at ?? changedAt;
+    }
+  }
+
+  if ("ae_stage" in updates && !customInterviewStageChanged && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
     return NextResponse.json({ error: "Invalid AE stage." }, { status: 400 });
   }
   if ("application_stage" in updates && !APPLICATION_STAGES.includes(updates.application_stage as typeof APPLICATION_STAGES[number])) {
@@ -116,6 +151,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
   let previousAeStage: string | null = null;
+  let previousApplicationStage: string | null = null;
   let currentApplication: Awaited<ReturnType<typeof findApplicationById>> = null;
   
   if ("status" in updates || "ae_stage" in updates) {
@@ -123,6 +159,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     previousStatus = currentApplication?.status ?? null;
     previousReviewStatus = currentApplication?.review_status ?? null;
     previousAeStage = currentApplication?.ae_stage ?? null;
+    previousApplicationStage = currentApplication?.application_stage ?? null;
   }
 
   // AE hand-off stage: In AI Pipeline -> Ready for AE Review -> Ready for AE
@@ -130,7 +167,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // gate here, unlike assignmentFields above) gets stamped as the last editor.
   // The reviewer identity is captured separately and persists even after the
   // ticket moves on to "applied", so whoever applies can see who reviewed it.
-  if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+  if ("ae_stage" in updates && updates.ae_stage !== previousAeStage && !customInterviewStageChanged) {
     if (updates.ae_stage === "in_ai_pipeline" && currentApplication?.resume_generation_status === "ready") {
       return NextResponse.json(
         { error: "Cannot move back to AI Pipeline when a resume is already generated. Please use 'Regenerate' if you need a new draft." },
@@ -292,9 +329,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const backgroundTasks: Promise<unknown>[] = [];
 
     if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+      const previousStage = customInterviewStageChanged ? previousApplicationStage : previousAeStage;
       backgroundTasks.push(execute(
         'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [params.id, previousAeStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
+        [params.id, previousStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
       ));
     }
 

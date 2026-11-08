@@ -33,6 +33,9 @@ export interface PortalApplication {
   follow_up_at: string | null;
   interview: { status: "all" | "upcoming" | "completed" | "cancelled" | "not_scheduled"; scheduled_at: string | null };
   needs_attention: boolean;
+  application_date: string | null;
+  application_resume_provided: boolean | null;
+  missing_info: string[];
 }
 
 export interface PortalDashboardFilters {
@@ -203,8 +206,8 @@ export default function CandidatePortalApplications({ applications, total, page,
                     <h3 className="portal-app-title">{application.job?.title ?? "Application"}</h3>
                     <div className="portal-app-company">{application.job?.company ?? "Company unavailable"}</div>
                     <div className="portal-app-meta">
-                      {application.job?.location && <span>{application.job.location}</span>}
-                      <span>Submitted {formatDate(application.submitted_at)}</span>
+                      {application.job?.location ? <span>{application.job.location}</span> : application.missing_info.includes("Location") ? <span>Location not provided</span> : null}
+                      <span>Applied {application.missing_info.includes("Applied date") ? "date not provided" : formatDate(application.application_date ?? application.submitted_at)}</span>
                       {salaryLabel(application.job) && <span>{salaryLabel(application.job)}</span>}
                       <span>Updated {formatDate(application.updated_at)}</span>
                     </div>
@@ -223,6 +226,9 @@ export default function CandidatePortalApplications({ applications, total, page,
                   {application.needs_attention && <span className="portal-attention-pill">Needs attention</span>}
                   {application.next_action && <span className="portal-next-action">Next: {application.next_action}</span>}
                   {application.follow_up_at && <span className="portal-next-action">Follow up {formatDate(application.follow_up_at)}</span>}
+                  {application.application_resume_provided !== null && application.application_resume_provided !== undefined && <span className="portal-next-action">Resume: {application.application_resume_provided ? "Provided" : "Not provided"}</span>}
+                  {application.missing_info.includes("Job link") && <span className="portal-next-action">Job posting link not provided</span>}
+                  {application.job?.source_url && <a className="portal-btn portal-btn-small portal-btn-secondary" href={application.job.source_url} target="_blank" rel="noreferrer">View job posting</a>}
                   <a className="portal-btn portal-btn-small portal-btn-secondary" href={`/portal/applications/${application.id}`}>View details</a>
                 </div>
               </article>

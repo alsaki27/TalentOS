@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 interface DashboardRow {
   application_id: string;
   status: string;
+  source_type: string | null;
   ae_stage: string;
   priority: string | null;
   applied_at: string | null;
@@ -32,10 +33,13 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  resume_id: string | null;
+  application_resume_url: string | null;
+  application_resume_filename: string | null;
   interview_scheduled_at: string | null;
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
-  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; rescheduled_at: string | null }[] | null;
+  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; notes: string | null; rescheduled_at: string | null }[] | null;
   candidate_timezone: string | null;
 }
 
@@ -68,6 +72,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     var allRows = await query<DashboardRow>(
       `SELECT
         a.id AS application_id,
+        a.source_type,
         -- This table is editable from the candidate page. The value selected
         -- in its status dropdown is the source of truth for this view; do not
         -- mask it back to "applied" from the historical AE hand-off mirror.
@@ -78,6 +83,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         a.follow_up_at,
         a.next_action,
         a.tailored_resume_version_id,
+        a.resume_id,
+        a.resume_url AS application_resume_url,
+        a.resume_filename AS application_resume_filename,
         j.id AS job_id,
         j.title AS job_title,
         j.company AS company_name,
@@ -137,6 +145,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           'time_zone', s.time_zone,
           'interview_format', s.interview_format,
           'status', COALESCE(s.status, 'scheduled'),
+          'notes', s.notes,
           'rescheduled_at', s.rescheduled_at
         ) ORDER BY s.round_number) AS interview_stages
         FROM interview_schedules s

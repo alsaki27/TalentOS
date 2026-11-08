@@ -52,6 +52,9 @@ export interface CandidatePortalApplication {
   follow_up_at: string | null;
   interview: { status: CandidatePortalInterviewFilter; scheduled_at: string | null; time_zone: string };
   needs_attention: boolean;
+  application_date: string | null;
+  application_resume_provided: boolean | null;
+  missing_info: string[];
 }
 
 const INTERNAL_PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
@@ -90,9 +93,12 @@ export interface CandidatePortalApplicationDetail {
   status: string;
   public_status: { stage: string; label: string };
   submitted_at: string | null;
+  application_date: string | null;
   updated_at: string | null;
   job: CandidatePortalApplication["job"];
   resume: CandidatePortalApplication["resume"];
+  application_resume_provided: boolean | null;
+  missing_info: string[];
   next_action: string | null;
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
@@ -252,6 +258,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
          THEN COALESCE(a.applied_at, a.ae_applied_at, a.created_at)
          ELSE COALESCE(a.applied_at, a.created_at)
        END AS submitted_at,
+       a.applied_at AS application_date,
        a.updated_at,
        a.next_action,
        a.follow_up_at,
@@ -259,13 +266,20 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
        j.title AS job_title,
        j.company AS company_name,
        j.location,
-       j.source,
+       CASE WHEN a.source_type = 'custom_interview' THEN 'manual' ELSE j.source END AS source,
        j.salary_min,
        j.salary_max,
        j.salary_currency,
        j.salary_period,
        j.salary_range,
        COALESCE(j.apply_url, j.source_url) AS source_url,
+       CASE WHEN a.source_type = 'custom_interview' THEN array_remove(ARRAY[
+         CASE WHEN NULLIF(BTRIM(j.location), '') IS NULL THEN 'Location' END,
+         CASE WHEN a.applied_at IS NULL THEN 'Applied date' END,
+         CASE WHEN a.resume_id IS NULL AND NULLIF(a.resume_url, '') IS NULL THEN 'Resume' END,
+         CASE WHEN NULLIF(COALESCE(j.apply_url, j.source_url), '') IS NULL THEN 'Job link' END
+       ]::text[], NULL) ELSE '{}'::text[] END AS missing_info,
+       CASE WHEN a.source_type = 'custom_interview' THEN (a.resume_id IS NOT NULL OR NULLIF(a.resume_url, '') IS NOT NULL) ELSE NULL END AS application_resume_provided,
        CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
                   AND rv.application_id = a.id
                   AND rv.candidate_id = a.candidate_id
@@ -385,9 +399,12 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     public_status: publicStatus(application.status),
     submitted_at: application.submitted_at,
     updated_at: application.updated_at,
+    application_date: application.application_date,
     job: application.job_id
       ? { id: application.job_id, title: application.job_title ?? "Unknown role", company: application.company_name, location: application.location, source: application.source, source_url: application.source_url, salary_min: application.salary_min == null ? null : Number(application.salary_min), salary_max: application.salary_max == null ? null : Number(application.salary_max), salary_currency: application.salary_currency, salary_period: application.salary_period, salary_range: application.salary_range }
       : null,
+    application_resume_provided: application.application_resume_provided,
+    missing_info: Array.isArray(application.missing_info) ? application.missing_info : [],
     resume: { id: application.resume_id, status: application.resume_status, title: application.resume_title, version_label: application.resume_version_label, generated_at: application.resume_generated_at },
     next_action: application.next_action,
     follow_up_at: application.follow_up_at,
@@ -430,6 +447,7 @@ function buildBaseCte() {
           THEN COALESCE(a.applied_at, a.ae_applied_at, a.created_at)
           ELSE COALESCE(a.applied_at, a.created_at)
         END AS submitted_at,
+        a.applied_at AS application_date,
         a.updated_at,
         a.next_action,
         a.follow_up_at,
@@ -443,8 +461,15 @@ function buildBaseCte() {
         j.title AS job_title,
         j.company AS company_name,
         j.location,
-        j.source,
+        CASE WHEN a.source_type = 'custom_interview' THEN 'manual' ELSE j.source END AS source,
         COALESCE(j.apply_url, j.source_url) AS source_url,
+        CASE WHEN a.source_type = 'custom_interview' THEN array_remove(ARRAY[
+          CASE WHEN NULLIF(BTRIM(j.location), '') IS NULL THEN 'Location' END,
+          CASE WHEN a.applied_at IS NULL THEN 'Applied date' END,
+          CASE WHEN a.resume_id IS NULL AND NULLIF(a.resume_url, '') IS NULL THEN 'Resume' END,
+          CASE WHEN NULLIF(COALESCE(j.apply_url, j.source_url), '') IS NULL THEN 'Job link' END
+        ]::text[], NULL) ELSE '{}'::text[] END AS missing_info,
+        CASE WHEN a.source_type = 'custom_interview' THEN (a.resume_id IS NOT NULL OR NULLIF(a.resume_url, '') IS NOT NULL) ELSE NULL END AS application_resume_provided,
         interview.id AS interview_id,
         interview.scheduled_at AS interview_at,
         interview.time_zone AS interview_time_zone,
@@ -711,6 +736,8 @@ export async function buildCandidatePortalDashboardPage(
     status: row.status,
     public_status: publicStatus(row.status),
     submitted_at: row.submitted_at,
+    application_date: row.application_date,
+    application_resume_provided: row.application_resume_provided,
     updated_at: row.updated_at,
     job: row.job_id
       ? { id: row.job_id, title: row.job_title ?? "Unknown role", company: row.company_name, location: row.location, source: row.source, source_url: row.source_url, salary_min: row.salary_min == null ? null : Number(row.salary_min), salary_max: row.salary_max == null ? null : Number(row.salary_max), salary_currency: row.salary_currency, salary_period: row.salary_period, salary_range: row.salary_range }
@@ -726,6 +753,7 @@ export async function buildCandidatePortalDashboardPage(
     follow_up_at: row.follow_up_at,
     interview: { status: row.interview_status, scheduled_at: row.interview_at, time_zone: row.interview_time_zone || "America/New_York" },
     needs_attention: Boolean(row.needs_attention),
+    missing_info: Array.isArray(row.missing_info) ? row.missing_info : [],
   }));
 
   return {

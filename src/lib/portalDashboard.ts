@@ -30,7 +30,15 @@ function rate(count: number, total: number): number {
 export async function buildCandidatePortalDashboard(candidateId: string, candidateName: string) {
   const applications = await query<any>(
     `SELECT a.id, a.status, a.applied_at,
-        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location) as job
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location,
+          'source_url', COALESCE(j.apply_url, j.source_url)) as job,
+        CASE WHEN a.source_type = 'custom_interview' THEN array_remove(ARRAY[
+          CASE WHEN NULLIF(BTRIM(j.location), '') IS NULL THEN 'Location' END,
+          CASE WHEN a.applied_at IS NULL THEN 'Applied date' END,
+          CASE WHEN a.resume_id IS NULL AND NULLIF(a.resume_url, '') IS NULL THEN 'Resume' END,
+          CASE WHEN NULLIF(COALESCE(j.apply_url, j.source_url), '') IS NULL THEN 'Job link' END
+        ]::text[], NULL) ELSE '{}'::text[] END AS missing_info,
+        CASE WHEN a.source_type = 'custom_interview' THEN (a.resume_id IS NOT NULL OR NULLIF(a.resume_url, '') IS NOT NULL) ELSE NULL END AS application_resume_provided
      FROM applications a
      LEFT JOIN jobs j ON a.job_id = j.id
      WHERE a.candidate_id = $1
@@ -75,6 +83,8 @@ export async function buildCandidatePortalDashboard(candidateId: string, candida
       public_status: publicStatus(a.status),
       applied_at: a.applied_at,
       job: a.job,
+      missing_info: Array.isArray(a.missing_info) ? a.missing_info : [],
+      application_resume_provided: a.application_resume_provided,
       updates: commentsByApp.get(a.id) ?? [],
     })),
   };

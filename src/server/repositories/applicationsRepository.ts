@@ -4,7 +4,7 @@
 import { parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { query, queryOne, execute } from "@/server/db/neon";
 
-export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | "email_confirmation" | null;
+export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | "email_confirmation" | "custom_interview" | null;
 
 export interface ApplicationRow {
   id: string;
@@ -44,6 +44,10 @@ export interface ApplicationRow {
   updated_at: string | null;
   created_by: string | null;
   ae_stage: string;
+  application_stage?: string | null;
+  application_stage_changed_at?: string | null;
+  application_stage_changed_by_user_id?: string | null;
+  application_stage_changed_by_name?: string | null;
   ae_review_pending_since?: string | null;
   ae_stage_updated_at: string | null;
   ae_stage_updated_by_user_id: string | null;
@@ -97,6 +101,11 @@ export interface CreateApplicationInput {
 
 export interface UpdateApplicationInput {
   status?: string;
+  application_stage?: string | null;
+  application_stage_changed_at?: string | null;
+  application_stage_changed_by_user_id?: string | null;
+  application_stage_changed_by_name?: string | null;
+  updated_at?: string | null;
   applied_at?: string | null;
   notes?: string | null;
   resume_url?: string | null;
@@ -640,6 +649,8 @@ export async function listApplicationQueue(
     ) review_entry ON true
   `;
   const commonWhere = `
+    COALESCE(a.source_type, '') <> 'custom_interview'
+    AND
     NOT (${lifecycleStage} = ANY($1))
     AND (($2 = '' AND $9::bigint IS NULL)
       OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))

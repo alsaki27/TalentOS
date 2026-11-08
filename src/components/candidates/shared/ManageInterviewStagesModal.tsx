@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import InterviewTimeZoneField from "@/components/InterviewTimeZoneField";
 import {
   EASTERN_TIME_ZONE,
@@ -26,17 +27,20 @@ const STAGE_NUMBERS = [1, 2, 3, 4] as const;
 export default function ManageInterviewStagesModal({
   applicationId,
   applicationLabel,
+  initialStage,
   onCancel,
   onSaved,
 }: {
   applicationId: string;
   applicationLabel: string;
+  initialStage?: number;
   onCancel: () => void;
   onSaved: () => void;
 }) {
+  const [portalReady, setPortalReady] = useState(false);
   const [stages, setStages] = useState<InterviewStage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(1);
+  const [selected, setSelected] = useState(initialStage ?? 1);
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [timeZone, setTimeZone] = useState<InterviewTimeZone>(EASTERN_TIME_ZONE);
@@ -46,6 +50,36 @@ export default function ManageInterviewStagesModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    setPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!portalReady) return;
+    const body = document.body;
+    const root = document.documentElement;
+    const previousBodyOverflow = body.style.overflow;
+    const previousRootOverflow = root.style.overflow;
+    const previousBodyPaddingRight = body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - root.clientWidth;
+
+    body.style.overflow = "hidden";
+    root.style.overflow = "hidden";
+    if (scrollbarWidth > 0) body.style.paddingRight = `${scrollbarWidth}px`;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      body.style.overflow = previousBodyOverflow;
+      root.style.overflow = previousRootOverflow;
+      body.style.paddingRight = previousBodyPaddingRight;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [portalReady, onCancel]);
 
   function applyStage(round: number, rows: InterviewStage[]) {
     setSelected(round);
@@ -79,12 +113,15 @@ export default function ManageInterviewStagesModal({
         const rows: InterviewStage[] = data.stages || [];
         setStages(rows);
         const firstScheduled = STAGE_NUMBERS.find((n) => rows.some((s) => s.round_number === n));
-        applyStage(firstScheduled ?? 1, rows);
+        const requestedStage = initialStage && STAGE_NUMBERS.includes(initialStage as (typeof STAGE_NUMBERS)[number])
+          ? initialStage
+          : firstScheduled ?? 1;
+        applyStage(requestedStage, rows);
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applicationId]);
+    }, [applicationId, initialStage]);
 
   async function handleRemove() {
     if (!existingForSelected) return;
@@ -154,13 +191,22 @@ export default function ManageInterviewStagesModal({
     }
   }
 
-  return (
-    <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Interview Stages</h2>
-        <div style={{ fontSize: 12, color: "var(--ink-soft)", marginBottom: 14 }}>{applicationLabel}</div>
+  if (!portalReady) return null;
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+  return createPortal(
+    <div className="modal-overlay interview-stages-modal-overlay" onClick={onCancel}>
+      <div className="modal interview-stages-modal" role="dialog" aria-modal="true" aria-labelledby="interview-stages-title" onClick={(e) => e.stopPropagation()}>
+        <header className="interview-stages-modal__header">
+          <div>
+            <div className="interview-stages-modal__eyebrow">INTERVIEW SCHEDULE</div>
+            <h2 id="interview-stages-title">Interview Stages</h2>
+            <div className="interview-stages-modal__application">{applicationLabel}</div>
+          </div>
+          <button type="button" className="interview-stages-modal__close" onClick={onCancel} aria-label="Close interview stages">×</button>
+        </header>
+
+        <div className="interview-stages-modal__body">
+        <div className="interview-stages-modal__stage-picker" role="group" aria-label="Select interview stage">
           {STAGE_NUMBERS.map((n) => {
             const stage = stages.find((s) => s.round_number === n);
             const active = selected === n;
@@ -171,8 +217,9 @@ export default function ManageInterviewStagesModal({
                 onClick={() => applyStage(n, stages)}
                 disabled={loading}
                 title={stage?.rescheduled_at ? "Rescheduled" : undefined}
+                aria-pressed={active}
                 style={{
-                  flex: 1, padding: "8px 4px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  flex: 1, minWidth: 0, padding: "8px 4px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
                   border: "1px solid " + (active ? "var(--accent)" : "var(--border)"),
                   background: active ? "var(--accent)" : stage ? "rgba(16,185,129,0.10)" : "var(--bg)",
                   color: active ? "#fff" : stage ? "#10b981" : "var(--ink-soft)",
@@ -189,12 +236,12 @@ export default function ManageInterviewStagesModal({
         ) : (
           <>
             <div className="field-group">
-              <label>Date</label>
-              <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              <label htmlFor="interview-stage-date">Date</label>
+              <input id="interview-stage-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
             <div className="field-group">
-              <label>Time in selected zone</label>
-              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+              <label htmlFor="interview-stage-time">Time in selected zone</label>
+              <input id="interview-stage-time" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
             </div>
             <InterviewTimeZoneField
               id={`manage-stage-${selected}-time-zone`}
@@ -204,28 +251,31 @@ export default function ManageInterviewStagesModal({
               onUseArizonaTimeChange={setUseArizonaTime}
             />
             <div className="field-group">
-              <label>Format</label>
-              <select value={format} onChange={(e) => setFormat(e.target.value as "online" | "onsite" | "")}>
+              <label htmlFor="interview-stage-format">Format</label>
+              <select id="interview-stage-format" value={format} onChange={(e) => setFormat(e.target.value as "online" | "onsite" | "")}>
                 <option value="">Select format…</option>
                 <option value="online">Online</option>
                 <option value="onsite">Onsite</option>
               </select>
-            </div>
-            <div className="field-group">
-              <label>Notes (internal only, not shown to the candidate)</label>
-              <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Panel availability, reschedule reason, prep notes…" />
             </div>
             {existingForSelected?.rescheduled_at && (
               <div style={{ fontSize: 11, color: "#f59e0b", marginBottom: 4 }}>
                 ↻ This stage was rescheduled from its original time.
               </div>
             )}
+            <div className="field-group interview-stages-modal__notes">
+              <label htmlFor="interview-stage-notes">Stage notes <span>(internal only)</span></label>
+              <textarea id="interview-stage-notes" rows={4} maxLength={5000} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Add panel details, preparation notes, or a reschedule reason…" />
+              <div className="interview-stages-modal__hint">Candidates won’t see these notes.</div>
+              <div className="interview-stages-modal__counter">{notes.length.toLocaleString()} / 5,000</div>
+            </div>
           </>
         )}
 
-        {error && <div style={{ color: "var(--danger, #ef4444)", fontSize: 12, marginTop: 4 }}>{error}</div>}
+        {error && <div role="alert" style={{ color: "var(--danger, #ef4444)", fontSize: 12, marginTop: 4 }}>{error}</div>}
+        </div>
 
-        <div className="modal-actions">
+        <div className="modal-actions interview-stages-modal__actions">
           {existingForSelected && (
             <button
               className="btn"
@@ -243,6 +293,7 @@ export default function ManageInterviewStagesModal({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

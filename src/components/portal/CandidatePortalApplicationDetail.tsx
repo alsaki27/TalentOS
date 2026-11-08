@@ -129,7 +129,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
         <div>
           <div className="portal-eyebrow" style={{ color: "rgba(255,255,255,0.75)" }}>Application details</div>
           <h1>{application.job?.title || "Application"}</h1>
-          <p>{application.job?.company || "Company unavailable"}{application.job?.location ? ` · ${application.job.location}` : ""}</p>
+          <p>{application.job?.company || "Company unavailable"}{application.job?.location ? ` · ${application.job.location}` : application.missing_info?.includes("Location") ? " · Location not provided" : ""}</p>
         </div>
         <span className="portal-detail-status">{application.public_status.label}</span>
       </div>
@@ -138,11 +138,15 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
         <div className="portal-detail-main">
           <CollapsibleCard title="Application overview">
             <dl className="portal-detail-facts">
-              <div><dt>Submitted</dt><dd>{formatDate(application.submitted_at)}</dd></div>
+              <div><dt>Applied date</dt><dd>{application.missing_info?.includes("Applied date") ? "Not provided" : formatDate(application.application_date ?? application.submitted_at)}</dd></div>
+              {application.application_resume_provided !== null && application.application_resume_provided !== undefined && (
+                <div><dt>Resume</dt><dd>{application.application_resume_provided ? "Provided" : "Not provided"}</dd></div>
+              )}
               <div><dt>Next action</dt><dd>{application.next_action || "No action scheduled"}</dd></div>
               <div><dt>Follow-up</dt><dd>{formatDate(application.follow_up_at)}</dd></div>
             </dl>
             {application.job?.source_url && <a className="portal-btn portal-btn-secondary" href={application.job.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} style={{ marginRight: 4 }} />View job posting</a>}
+            {!application.job?.source_url && application.missing_info?.includes("Job link") && <p className="portal-greeting-sub">Job posting link: Not provided.</p>}
           </CollapsibleCard>
 
           <CollapsibleCard title="Progress">

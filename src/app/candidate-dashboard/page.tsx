@@ -20,6 +20,7 @@ interface CandidateOption {
 interface DashboardRow {
   application_id: string;
   status: string;
+  source_type?: string | null;
   priority: string | null;
   applied_at: string | null;
   follow_up_at: string | null;
@@ -40,6 +41,9 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  resume_id?: string | null;
+  application_resume_url?: string | null;
+  application_resume_filename?: string | null;
   interview_scheduled_at: string | null;
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
@@ -210,7 +214,7 @@ function CandidateDashboardInner() {
   var candidates = data?.candidates ?? [];
 
   var statusChartData = ["Applied", "In Progress", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
-  var sourceChartData = Object.keys(sourceCounts).sort().map(function (k) { return { label: k === "company_site" ? "Company Site" : k.charAt(0).toUpperCase() + k.slice(1), count: sourceCounts[k] }; });
+  var sourceChartData = Object.keys(sourceCounts).sort().map(function (k) { return { label: k === "company_site" ? "Company Site" : k === "custom_interview" ? "Custom added" : k.charAt(0).toUpperCase() + k.slice(1), count: sourceCounts[k] }; });
 
   if (error) return <div style={{ color: "var(--danger)", padding: 20, background: "rgba(244,63,94,0.08)", borderRadius: 10, fontSize: 13, border: "1px solid var(--danger-soft, rgba(244,63,94,0.25))" }}>Failed to load dashboard: {error}. <button onClick={fetchData} style={{ color: "var(--danger)", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Retry</button></div>;
 
@@ -349,7 +353,7 @@ function CandidateDashboardInner() {
           <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--ink-soft)" }}>Source</label>
           <select value={source} onChange={function (e) { setParamMultiple({ source: e.target.value, statusGroup: "" }); }} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none", cursor: "pointer", minWidth: 130 }}>
             <option value="">All Sources</option>
-            <option value="linkedin">LinkedIn</option><option value="indeed">Indeed</option><option value="hiringcafe">HiringCafe</option><option value="glassdoor">Glassdoor</option><option value="openjobdata">OpenJobData</option><option value="extension">Extension</option><option value="company_site">Company Site</option>
+            <option value="linkedin">LinkedIn</option><option value="indeed">Indeed</option><option value="hiringcafe">HiringCafe</option><option value="glassdoor">Glassdoor</option><option value="openjobdata">OpenJobData</option><option value="extension">Extension</option><option value="company_site">Company Site</option><option value="custom_interview">Custom added</option>
           </select>
         </div>
       </div>

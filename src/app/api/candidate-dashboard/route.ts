@@ -22,6 +22,7 @@ function escapeLikeTerm(term: string): string {
 interface DashboardRow {
   application_id: string;
   status: string;
+  source_type: string | null;
   ae_stage: string;
   priority: string | null;
   applied_at: string | null;
@@ -49,10 +50,13 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  resume_id: string | null;
+  application_resume_url: string | null;
+  application_resume_filename: string | null;
   interview_scheduled_at: string | null;
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
-  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; rescheduled_at: string | null }[] | null;
+  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; notes: string | null; rescheduled_at: string | null }[] | null;
 }
 
 interface CandidateOption {
@@ -184,10 +188,12 @@ export async function GET(req: NextRequest) {
       `SELECT
         a.id AS application_id,
         ${EDITABLE_STATUS_EXPR} AS status,
+        a.source_type,
         a.ae_stage,
         a.priority,
         COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,
         a.follow_up_at, a.next_action, a.tailored_resume_version_id,
+        a.resume_id, a.resume_url AS application_resume_url, a.resume_filename AS application_resume_filename,
         a.candidate_id, c.name AS candidate_name, c.timezone AS candidate_timezone,
         j.id AS job_id, j.title AS job_title, j.company AS company_name,
         j.company_website,
@@ -247,6 +253,7 @@ export async function GET(req: NextRequest) {
           'time_zone', to_jsonb(s)->>'time_zone',
           'interview_format', to_jsonb(s)->>'interview_format',
           'status', COALESCE(s.status, 'scheduled'),
+          'notes', to_jsonb(s)->>'notes',
           'rescheduled_at', to_jsonb(s)->>'rescheduled_at'
         ) ORDER BY s.round_number) AS interview_stages
         FROM interview_schedules s

@@ -89,7 +89,8 @@ export async function GET(req: NextRequest) {
         '[]'::jsonb
       ) as applications
     FROM jobs j
-    WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
+    WHERE COALESCE(j.source, '') <> 'custom_interview'
+      AND ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
       AND ($2 = '' OR j.source = $2)
       AND ($3 = '' OR j.role_tier = $3)
       AND ($4 = '' OR j.is_active = ($4 = 'active'))
@@ -113,7 +114,8 @@ export async function GET(req: NextRequest) {
   const countSql = `
     SELECT COUNT(*)::int as total
     FROM jobs j
-    WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
+    WHERE COALESCE(j.source, '') <> 'custom_interview'
+      AND ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
       AND ($2 = '' OR j.source = $2)
       AND ($3 = '' OR j.role_tier = $3)
       AND ($4 = '' OR j.is_active = ($4 = 'active'))

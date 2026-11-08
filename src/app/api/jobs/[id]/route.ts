@@ -30,7 +30,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
           '[]'::jsonb
         ) as applications
       FROM jobs j
-      WHERE j.id = $1
+      WHERE j.id = $1 AND COALESCE(j.source, '') <> 'custom_interview'
     `;
     const job = await queryOne<Record<string, any>>(jobSql, [params.id]);
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });

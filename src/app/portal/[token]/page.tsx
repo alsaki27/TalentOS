@@ -18,7 +18,9 @@ interface PortalApplication {
   status: string;
   public_status: { stage: string; label: string };
   applied_at: string;
-  job: { id: string; title: string; company: string | null; location: string | null } | null;
+  job: { id: string; title: string; company: string | null; location: string | null; source_url?: string | null } | null;
+  missing_info: string[];
+  application_resume_provided: boolean | null;
   updates: Update[];
 }
 
@@ -210,14 +212,25 @@ export default function CandidatePortalPage() {
                 <div>
                   <strong style={{ fontSize: 16 }}>{app.job?.title ?? "Job no longer listed"}</strong>
                   <div className="muted" style={{ fontSize: 13 }}>
-                    {app.job?.company || "—"} {app.job?.location ? `• ${app.job.location}` : ""}
+                    {app.job?.company || "Company not provided"} {app.job?.location ? `• ${app.job.location}` : app.missing_info.includes("Location") ? "• Location not provided" : ""}
                   </div>
                 </div>
                 <span className={`badge badge-${app.public_status.stage}`}>{app.public_status.label}</span>
               </div>
               <div className="muted" style={{ fontSize: 12, marginBottom: app.updates.length ? 12 : 0 }}>
-                Applied {formatAppliedDate(app.applied_at)}
+                Applied {app.missing_info.includes("Applied date") ? "date not provided" : formatAppliedDate(app.applied_at)}
               </div>
+
+              {app.application_resume_provided !== null && app.application_resume_provided !== undefined && (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                  Resume: {app.application_resume_provided ? "Provided" : "Not provided"}
+                </div>
+              )}
+              {app.job?.source_url ? (
+                <a href={app.job.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>View job posting</a>
+              ) : app.missing_info.includes("Job link") ? (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>Job posting link: Not provided.</div>
+              ) : null}
 
               {app.updates.length > 0 && (
                 <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
