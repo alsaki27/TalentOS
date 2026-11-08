@@ -50,7 +50,7 @@ export async function getApplicationResumeQcDetails(applicationId: string) {
   return {
     applicationId: application.id,
     applicationStage: application.stage,
-    eligible: application.stage === "in_ai_pipeline" || application.stage === "ready_for_review",
+    eligible: application.stage === "in_ai_pipeline" || application.stage === "ready_for_review" || application.stage === "ready_for_application",
     state,
     notes,
     events,
@@ -68,7 +68,7 @@ export async function setApplicationResumeQcStatus(input: {
        SELECT a.id
          FROM applications a
         WHERE a.id = $1::uuid
-          AND COALESCE(a.application_stage, a.ae_stage) IN ('in_ai_pipeline', 'ready_for_review')
+          AND COALESCE(a.application_stage, a.ae_stage) IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application')
         FOR UPDATE
      ), previous_status AS (
        SELECT qc.status
@@ -153,7 +153,7 @@ export async function updateApplicationResumeQcNote(input: {
        SELECT a.id
          FROM applications a
         WHERE a.id = $1::uuid
-          AND COALESCE(a.application_stage, a.ae_stage) IN ('in_ai_pipeline', 'ready_for_review')
+          AND COALESCE(a.application_stage, a.ae_stage) IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application')
         FOR UPDATE
      ), current_status AS (
        SELECT qc.status

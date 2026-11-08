@@ -67,6 +67,26 @@ describe("application queue query", () => {
     }
   });
 
+  it.each(["qualified", "not_checked"] as const)("filters QC state across all editable AE stages (%s)", async (qcStatus) => {
+    await listApplicationQueue({ page: 1, pageSize: 25, qcStatus });
+
+    const [dataSql, dataParams] = vi.mocked(query).mock.calls[0];
+    const [statsSql, statsParams] = vi.mocked(queryOne).mock.calls[0];
+    const editableStages = "COALESCE(a.application_stage, a.ae_stage) IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application')";
+    expect(dataSql).toContain(editableStages);
+    expect(statsSql).toContain(editableStages);
+
+    if (qcStatus === "not_checked") {
+      expect(dataSql).toContain("rq.application_id IS NULL");
+      expect(dataParams?.slice(-2)).toEqual([0, 25]);
+      expect(statsParams).toHaveLength(15);
+    } else {
+      expect(dataSql).toContain("rq.status = $16");
+      expect(dataParams?.slice(-3)).toEqual(["qualified", 0, 25]);
+      expect(statsParams?.at(-1)).toBe("qualified");
+    }
+  });
+
   it("can isolate queue rows without a numeric fit score", async () => {
     await listApplicationQueue({ page: 1, pageSize: 25, fitScoreBand: "no_score" });
 

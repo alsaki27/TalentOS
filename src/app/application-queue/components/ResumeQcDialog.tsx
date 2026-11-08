@@ -197,7 +197,7 @@ export function ResumeQcDialog({
             borderRadius: 999, padding: "4px 10px", fontSize: 12, fontWeight: 800,
           }}>{currentMeta ? `${currentMeta.icon} ${currentMeta.label}` : "Not checked"}</span>
           {details?.state && <span className="text-muted" style={{ fontSize: 12 }}>Set by {details.state.changed_by_name} · {formatTime(details.state.changed_at)}</span>}
-          {details && !details.eligible && <span className="text-muted" style={{ marginLeft: "auto", fontSize: 12 }}>Editing is available in In AI Pipeline and AE Review Pending.</span>}
+          {details && !details.eligible && <span className="text-muted" style={{ marginLeft: "auto", fontSize: 12 }}>Editing is available in In AI Pipeline, AE Review Pending, and Ready for AE Application.</span>}
         </div>
 
         <nav role="tablist" aria-label="Resume QC notes and activity" style={{ display: "flex", gap: 6, overflowX: "auto", padding: "12px 24px 0", borderBottom: "1px solid var(--border)" }}>

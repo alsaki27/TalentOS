@@ -679,7 +679,7 @@ export async function listApplicationQueue(
     AND ($8 = '' OR ${effectiveStage} = $8)
     AND ($11 = '' OR ${lifecycleStage} = $11)
     AND ($12 = '' OR j.work_mode = $12)
-    ${qcStatus ? `AND ${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review') AND ${qcStatus === "not_checked" ? "rq.application_id IS NULL" : "rq.status = $16"}` : ""}
+    ${qcStatus ? `AND ${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application') AND ${qcStatus === "not_checked" ? "rq.application_id IS NULL" : "rq.status = $16"}` : ""}
     ${fitScorePredicate ? `AND (${fitScorePredicate})` : ""}
   `;
   const activity = (timestamp: string) => `(settings.cutoff IS NULL OR ${timestamp} >= settings.cutoff)`;
@@ -710,7 +710,7 @@ export async function listApplicationQueue(
       a.ae_stage, a.ae_stage_updated_at, a.ae_stage_updated_by_user_id, a.ae_stage_updated_by_name,
       rq.status AS resume_qc_status, rq.changed_at AS resume_qc_changed_at,
       rq.changed_by_name AS resume_qc_changed_by_name,
-      (${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review')) AS resume_qc_eligible,
+      (${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application')) AS resume_qc_eligible,
       EXISTS (SELECT 1 FROM application_resume_qc_notes rqn WHERE rqn.application_id = a.id) AS resume_qc_has_notes,
       review_entry.pending_since as ae_review_pending_since,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
@@ -764,7 +764,7 @@ export async function listApplicationQueue(
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
     WHERE ${commonWhere} AND (${viewPredicates[view]})
     ORDER BY ${orderBy}
-    OFFSET ${offsetParam} LIMIT ${pageSizeParam}
+    OFFSET $${offsetParam} LIMIT $${pageSizeParam}
   `;
   const statsSql = `
     SELECT ${Object.entries(viewPredicates).map(([name, predicate]) =>

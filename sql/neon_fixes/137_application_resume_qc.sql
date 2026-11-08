@@ -1,5 +1,5 @@
--- Human QC for resumes while an application is in the AI pipeline or waiting
--- for AE review. Current state is kept separately from editable per-stage
+-- Human QC for resumes while an application is in the AI pipeline, in AE
+-- review, or ready for AE application. Current state is kept separately from editable per-stage
 -- notes and the append-only history so every decision and note edit is auditable.
 
 CREATE TABLE IF NOT EXISTS application_resume_qc (
@@ -44,7 +44,7 @@ CREATE INDEX IF NOT EXISTS application_resume_qc_status_idx
   ON application_resume_qc(status, changed_at DESC);
 
 COMMENT ON TABLE application_resume_qc IS
-  'Current admin-entered resume QC status for applications in the AI pipeline or AE review stage.';
+  'Current admin-entered resume QC status for applications in the AI pipeline, AE review, or AE application stage.';
 COMMENT ON TABLE application_resume_qc_notes IS
   'Editable latest note per application and QC stage; prior text is retained in application_resume_qc_events.';
 COMMENT ON TABLE application_resume_qc_events IS

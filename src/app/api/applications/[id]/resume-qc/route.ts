@@ -70,7 +70,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (!saved) {
         const existing = await getApplicationResumeQcDetails(params.id);
         if (!existing) return NextResponse.json({ error: "Application not found." }, { status: 404 });
-        return NextResponse.json({ error: "QC can only be changed during In AI Pipeline or AE Review Pending." }, { status: 409 });
+        return NextResponse.json({ error: "QC can only be changed during In AI Pipeline, AE Review Pending, or Ready for AE Application." }, { status: 409 });
       }
     } else if (body?.action === "update_note") {
       if (!isResumeQcStatus(body.stage)) {
@@ -92,7 +92,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       if (!saved) {
         const existing = await getApplicationResumeQcDetails(params.id);
         if (!existing) return NextResponse.json({ error: "Application not found." }, { status: 404 });
-        return NextResponse.json({ error: "QC notes can only be changed during In AI Pipeline or AE Review Pending." }, { status: 409 });
+        return NextResponse.json({ error: "QC notes can only be changed during In AI Pipeline, AE Review Pending, or Ready for AE Application." }, { status: 409 });
       }
     } else {
       return NextResponse.json({ error: "Unknown QC action." }, { status: 400 });
