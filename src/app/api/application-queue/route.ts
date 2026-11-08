@@ -20,6 +20,10 @@ export async function GET(req: NextRequest) {
   const owner = url.searchParams.get("owner") || "";
   const priority = url.searchParams.get("priority") || "";
   const review = url.searchParams.get("review") || "";
+  const requestedQcStatus = url.searchParams.get("qc_status") || "";
+  const qcStatus = ["not_checked", "qualified", "doubt", "unqualified"].includes(requestedQcStatus)
+    ? requestedQcStatus
+    : "";
   const view = url.searchParams.get("view") || "all";
   const candidateId = url.searchParams.get("candidate_id") || "";
   const workMode = url.searchParams.get("work_mode") || "";
@@ -42,6 +46,7 @@ export async function GET(req: NextRequest) {
       owner,
       priority,
       review,
+      qcStatus,
       view,
       workMode,
       fitScoreBand,

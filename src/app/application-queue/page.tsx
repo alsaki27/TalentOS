@@ -9,6 +9,7 @@ import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
 import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
+import { ResumeQcDialog } from "./components/ResumeQcDialog";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -71,6 +72,11 @@ interface QueueItem {
   workflow_resume_title?: string | null;
   base_resume_id?: string | null;
   resume_generation_status?: string | null;
+  resume_qc_status?: "qualified" | "doubt" | "unqualified" | null;
+  resume_qc_changed_at?: string | null;
+  resume_qc_changed_by_name?: string | null;
+  resume_qc_eligible?: boolean;
+  resume_qc_has_notes?: boolean;
 }
 
 interface TeamUser {
@@ -136,6 +142,12 @@ const AE_STAGE_STYLES: Record<string, { background: string; border: string; colo
   applied: { background: "rgba(16,185,129,0.16)", border: "rgba(16,185,129,0.55)", color: "#6ee7b7" },
 };
 
+const RESUME_QC_STYLES: Record<"qualified" | "doubt" | "unqualified", { background: string; border: string; color: string; label: string }> = {
+  qualified: { background: "rgba(16,185,129,0.14)", border: "rgba(16,185,129,0.5)", color: "#6ee7b7", label: "Qualified" },
+  doubt: { background: "rgba(245,158,11,0.14)", border: "rgba(245,158,11,0.5)", color: "#fbbf24", label: "Doubt" },
+  unqualified: { background: "rgba(244,63,94,0.14)", border: "rgba(244,63,94,0.5)", color: "#fda4af", label: "Unqualified" },
+};
+
 // Drag-to-resize column widths (persisted to localStorage) — order here
 // must match the <colgroup>/<th> order in the table below.
 // v3: widen Scores so Avg, ATS, Fit, and Final are readable together, and
@@ -148,6 +160,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   job: 205,
   aiPipeline: 158,
   score: 200,
+  resumeQc: 150,
   stage: 200,
   owner: 120,
   due: 78,
@@ -156,7 +169,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   actions: 208,
 };
 const COLUMN_ORDER = [
-  "checkbox", "candidate", "job", "aiPipeline", "score", "stage", "owner", "due",
+  "checkbox", "candidate", "job", "aiPipeline", "score", "resumeQc", "stage", "owner", "due",
   "ticketJobIds", "resumeIds", "actions",
 ];
 
@@ -270,6 +283,7 @@ export default function ApplicationQueuePage() {
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
+  const [qcStatusFilter, setQcStatusFilter] = useState("");
   const [workModeFilter, setWorkModeFilter] = useState("");
   const [viewFilter, setViewFilter] = useState<TabView>("all");
   const [candidateFilter, setCandidateFilter] = useState("");
@@ -286,6 +300,7 @@ export default function ApplicationQueuePage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
+  const [resumeQcItem, setResumeQcItem] = useState<QueueItem | null>(null);
 
   // Transfer can target candidates who have no tickets in the queue yet.
   const [transferQuery, setTransferQuery] = useState("");
@@ -331,6 +346,7 @@ export default function ApplicationQueuePage() {
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
     if (reviewFilter) p.set("review", reviewFilter);
+    if (qcStatusFilter) p.set("qc_status", qcStatusFilter);
     if (workModeFilter) p.set("work_mode", workModeFilter);
     if (viewFilter !== "all") p.set("view", viewFilter);
     if (timeWindow) p.set("time_window", timeWindow);
@@ -432,7 +448,7 @@ export default function ApplicationQueuePage() {
     return load(requestedPageRef.current, false, true);
   }
 
-  const hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || fitScoreFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
+  const hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || fitScoreFilter || ownerFilter || priorityFilter || reviewFilter || qcStatusFilter || workModeFilter);
   const hasActiveFilters = hasOtherActiveFilters || Boolean(timeWindow) || viewFilter !== "all";
   const activityWindow = QUEUE_ACTIVITY_WINDOWS.find((window) => window.value === timeWindow);
   const activityEvent = viewFilter === "failed" ? "workflow failure time"
@@ -447,6 +463,7 @@ export default function ApplicationQueuePage() {
     setOwnerFilter("");
     setPriorityFilter("");
     setReviewFilter("");
+    setQcStatusFilter("");
     setWorkModeFilter("");
     setTimeWindow("");
     setViewFilter("all");
@@ -475,7 +492,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, fitScoreFilter, ownerFilter, priorityFilter, reviewFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, fitScoreFilter, ownerFilter, priorityFilter, reviewFilter, qcStatusFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -686,6 +703,7 @@ export default function ApplicationQueuePage() {
   const selectedItems = items.filter(i => selected.has(i.id));
   const today = new Date().toISOString().slice(0, 10);
   const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
+  const isAdmin = me?.profile?.role === "admin";
 
   function toggleOne(id: string) {
     setSelected(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -1189,6 +1207,16 @@ export default function ApplicationQueuePage() {
             </select>
           </div>
           <div className="filter-field">
+            <span className="filter-label">Resume QC</span>
+            <select className="input" value={qcStatusFilter} onChange={e => setQcStatusFilter(e.target.value)} aria-label="Filter by resume QC status">
+              <option value="">All QC states</option>
+              <option value="not_checked">Not checked</option>
+              <option value="qualified">Qualified</option>
+              <option value="doubt">Doubt</option>
+              <option value="unqualified">Unqualified</option>
+            </select>
+          </div>
+          <div className="filter-field">
             <span className="filter-label">Work Mode</span>
             <select className="input" value={workModeFilter} onChange={e => setWorkModeFilter(e.target.value)} aria-label="Filter by work mode">
               <option value="">All modes</option>
@@ -1340,6 +1368,7 @@ export default function ApplicationQueuePage() {
                   { id: "job", label: "Job" },
                   { id: "aiPipeline", label: "AI Pipeline" },
                   { id: "score", label: "Scores" },
+                  { id: "resumeQc", label: "Resume QC" },
                   { id: "stage", label: "Stage" },
                   { id: "owner", label: "Owner" },
                   { id: "due", label: "Due" },
@@ -1481,6 +1510,29 @@ export default function ApplicationQueuePage() {
 
                   <td className="queue-score-column">
                     <QueueScoreCell item={item} />
+                  </td>
+
+                  <td>
+                    <div style={{ display: "grid", gap: 6, justifyItems: "start" }}>
+                      {item.resume_qc_status ? (
+                        <span
+                          className="badge"
+                          title={item.resume_qc_changed_at ? `Last changed by ${item.resume_qc_changed_by_name || "staff"} on ${new Date(item.resume_qc_changed_at).toLocaleString()}` : undefined}
+                          style={{ background: RESUME_QC_STYLES[item.resume_qc_status].background, border: `1px solid ${RESUME_QC_STYLES[item.resume_qc_status].border}`, color: RESUME_QC_STYLES[item.resume_qc_status].color }}
+                        >{RESUME_QC_STYLES[item.resume_qc_status].label}</span>
+                      ) : <span className="badge" style={{ background: "var(--surface-2)", border: "1px solid var(--border)", color: "var(--muted)" }}>Not checked</span>}
+                      {item.resume_qc_changed_at && (
+                        <span className="text-muted" style={{ fontSize: 10, lineHeight: 1.3 }}>
+                          {item.resume_qc_changed_by_name ? `${item.resume_qc_changed_by_name} · ` : ""}{new Date(item.resume_qc_changed_at).toLocaleDateString()}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-compact btn-sm"
+                        onClick={() => setResumeQcItem(item)}
+                        title={isAdmin && item.resume_qc_eligible ? "Set QC status, review notes, and activity" : "View QC notes and activity"}
+                      >{isAdmin && item.resume_qc_eligible ? "🛡 Manage QC" : item.resume_qc_has_notes ? "📝 Notes" : "📝 QC details"}</button>
+                    </div>
                   </td>
 
                   <td>
@@ -1660,6 +1712,16 @@ export default function ApplicationQueuePage() {
             </div>
           </div>
         </div>
+      )}
+      {resumeQcItem && (
+        <ResumeQcDialog
+          applicationId={resumeQcItem.id}
+          candidateName={resumeQcItem.candidates?.name || "Candidate"}
+          jobTitle={resumeQcItem.jobs?.title || "Resume review"}
+          company={resumeQcItem.jobs?.company ?? null}
+          onClose={() => setResumeQcItem(null)}
+          onSaved={() => { void refreshQueueInPlace(); }}
+        />
       )}
     </div>
   );

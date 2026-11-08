@@ -59,6 +59,11 @@ export interface ApplicationRow {
   ae_applied_by_name: string | null;
   ae_applied_at: string | null;
   resume_generation_status?: string | null;
+  resume_qc_status?: "qualified" | "doubt" | "unqualified" | null;
+  resume_qc_changed_at?: string | null;
+  resume_qc_changed_by_name?: string | null;
+  resume_qc_eligible?: boolean;
+  resume_qc_has_notes?: boolean;
 }
 
 export interface ApplicationEventRow {
@@ -172,6 +177,8 @@ export interface ListApplicationsQuery {
   sortDirection?: "asc" | "desc";
   /** Filters on jobs.work_mode: "remote" | "hybrid" | "onsite". Empty/omitted = no filter. */
   workMode?: string;
+  /** Resume-QC filter, scoped to applications currently in AI or AE review. */
+  qcStatus?: string;
 }
 
 export interface PaginatedApplicationsResult {
@@ -586,6 +593,10 @@ export async function listApplicationQueue(
   const requestedFitScoreBand = queryParams.fitScoreBand || "";
   const fitScoreBand = QUALIFICATION_FIT_SCORE_BANDS.has(requestedFitScoreBand) ? requestedFitScoreBand : "";
   const fitScorePredicate = qualificationFitScoreBandPredicate(fitScoreBand);
+  const requestedQcStatus = queryParams.qcStatus || "";
+  const qcStatus = ["not_checked", "qualified", "doubt", "unqualified"].includes(requestedQcStatus)
+    ? requestedQcStatus
+    : "";
   const fitScoreJoin = `
     LEFT JOIN LATERAL (
       SELECT data FROM application_ai_artifacts
@@ -647,6 +658,7 @@ export async function listApplicationQueue(
       ) AS pending_since
       WHERE ${effectiveStage} = 'ready_for_review'
     ) review_entry ON true
+    LEFT JOIN application_resume_qc rq ON rq.application_id = a.id
   `;
   const commonWhere = `
     COALESCE(a.source_type, '') <> 'custom_interview'
@@ -667,6 +679,7 @@ export async function listApplicationQueue(
     AND ($8 = '' OR ${effectiveStage} = $8)
     AND ($11 = '' OR ${lifecycleStage} = $11)
     AND ($12 = '' OR j.work_mode = $12)
+    ${qcStatus ? `AND ${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review') AND ${qcStatus === "not_checked" ? "rq.application_id IS NULL" : "rq.status = $16"}` : ""}
     ${fitScorePredicate ? `AND (${fitScorePredicate})` : ""}
   `;
   const activity = (timestamp: string) => `(settings.cutoff IS NULL OR ${timestamp} >= settings.cutoff)`;
@@ -686,12 +699,19 @@ export async function listApplicationQueue(
   const view = Object.prototype.hasOwnProperty.call(viewPredicates, requestedView)
     ? requestedView as keyof typeof viewPredicates
     : "all";
+  if (qcStatus && qcStatus !== "not_checked") params.push(qcStatus);
+  const offsetParam = params.length + 1;
+  const pageSizeParam = params.length + 2;
 
   const dataSql = `
     SELECT a.id, a.app_number, a.status, a.assigned_by, a.assigned_to, a.assigned_by_user_id, a.assigned_to_user_id,
       a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
       a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
       a.ae_stage, a.ae_stage_updated_at, a.ae_stage_updated_by_user_id, a.ae_stage_updated_by_name,
+      rq.status AS resume_qc_status, rq.changed_at AS resume_qc_changed_at,
+      rq.changed_by_name AS resume_qc_changed_by_name,
+      (${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review')) AS resume_qc_eligible,
+      EXISTS (SELECT 1 FROM application_resume_qc_notes rqn WHERE rqn.application_id = a.id) AS resume_qc_has_notes,
       review_entry.pending_since as ae_review_pending_since,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
       a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,
@@ -744,7 +764,7 @@ export async function listApplicationQueue(
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
     WHERE ${commonWhere} AND (${viewPredicates[view]})
     ORDER BY ${orderBy}
-    OFFSET $16 LIMIT $17
+    OFFSET ${offsetParam} LIMIT ${pageSizeParam}
   `;
   const statsSql = `
     SELECT ${Object.entries(viewPredicates).map(([name, predicate]) =>
