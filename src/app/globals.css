@@ -3105,121 +3105,126 @@ label {
   --muted-foreground: var(--ink-soft);
 }
 
-/* ─── Print styles for resume PDF export ─── */
+/* Resume Studio measures and prints the same sheets at physical paper width. */
+.resume-pagination-source {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: clip;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.resume-pagination-measurement,
+.resume-sheet {
+  box-sizing: border-box;
+  width: var(--resume-page-width);
+  padding-inline: var(--resume-page-padding);
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+.resume-pagination-measurement > div,
+.resume-sheet-clip,
+.resume-sheet-clip > div {
+  display: flow-root;
+  width: var(--resume-content-width);
+}
+
+.resume-sheet-stack {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.resume-sheet-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: clip;
+  border-radius: 6px;
+  background: white;
+}
+
+.resume-sheet-label {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 5px;
+  padding: 2px 7px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: white;
+  color: #475569;
+  font-size: 10px;
+}
+
+.resume-sheet {
+  height: var(--resume-page-height);
+  padding-block: var(--resume-page-padding);
+  background: white;
+  transform-origin: top left;
+}
+
+.resume-sheet-clip {
+  overflow: hidden;
+}
+
 @media print {
-  /* Assign the page size and zero margins to the document. The positioned
-     preview cannot set the first page's margins, which Chromium otherwise
-     uses to print its own title, date, URL, and page number. */
-  html:has(#resume-print-area) {
-    page: resume-a4;
-  }
+  html:has(#resume-print-area) { page: resume-studio; }
 
-  html:has(#resume-print-area[data-page-format="letter"]) {
-    page: resume-letter;
-  }
-
-  /* Hide everything except the resume */
-  .topnav,
-  .print\:hidden,
-  button,
-  .modal-overlay {
+  /* Remove the application shell from print layout entirely. */
+  body:has(#resume-print-area) *:not(#resume-print-area, #resume-print-area *, :has(#resume-print-area)) {
     display: none !important;
   }
 
-  html, body, #__next, main, [style*="minHeight: 100vh"], [style*="min-height: 100vh"] {
-    margin: 0 !important;
-    padding: 0 !important;
-    background: white !important;
-    overflow: visible !important;
-    width: auto !important;
-    height: auto !important;
-    min-height: 0 !important;
-  }
-
-  /* Hide all elements, then selectively show resume */
-  body * {
-    visibility: hidden;
-  }
-
+  html:has(#resume-print-area),
+  body:has(#resume-print-area),
+  body :has(#resume-print-area),
   #resume-print-area,
-  #resume-print-area * {
-    visibility: visible;
-  }
-
-  #resume-print-area {
-    position: absolute !important;
-    left: 0 !important;
-    top: 0 !important;
-    overflow: visible !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    background: white !important;
-  }
-
-  #resume-print-area[data-page-format="a4"] {
-    width: 210mm !important;
-    height: auto !important;
-    min-height: 0 !important;
-  }
-
-  #resume-print-area[data-page-format="letter"] {
-    width: 8.5in !important;
-    height: auto !important;
-    min-height: 0 !important;
-  }
-
-  /* The preview wrapper uses small inline pixel dimensions — override to full page */
-  .resume-paper {
+  #resume-print-area .resume-preview-container,
+  #resume-print-area .resume-sheet-stack,
+  #resume-print-area .resume-sheet-wrap {
+    position: static !important;
+    display: block !important;
+    width: auto !important;
     max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
     max-height: none !important;
     overflow: visible !important;
-    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
     border-radius: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-  }
-
-  #resume-print-area[data-page-format="a4"] .resume-paper,
-  #resume-print-area[data-page-format="a4"] #resume-content,
-  #resume-print-area[data-page-format="a4"] .resume-preview-container {
-    width: 210mm !important;
-    height: auto !important;
-    min-height: 0 !important;
-  }
-
-  #resume-print-area[data-page-format="letter"] .resume-paper,
-  #resume-print-area[data-page-format="letter"] #resume-content,
-  #resume-print-area[data-page-format="letter"] .resume-preview-container {
-    width: 8.5in !important;
-    height: auto !important;
-    min-height: 0 !important;
-  }
-
-  /* Keep the resume at its normal layout size; the outer print area applies the scale. */
-  #resume-content {
     transform: none !important;
-    height: auto !important;
-    overflow: visible !important;
-    box-shadow: none !important;
-    margin: 0 !important;
+    background: white !important;
   }
 
-  /* The preview container */
-  .resume-preview-container {
-    display: block !important;
-    padding: 0 !important;
-    height: auto !important;
+  #resume-print-area .resume-pagination-source,
+  #resume-print-area .resume-sheet-label {
+    display: none !important;
   }
 
-  @page resume-a4 {
-    size: A4 portrait;
-    margin: 0;
+  #resume-print-area .resume-sheet-wrap {
+    break-after: page;
+    break-inside: avoid;
   }
 
-  @page resume-letter {
-    size: letter portrait;
-    margin: 0;
+  #resume-print-area .resume-sheet-wrap:last-child {
+    break-after: auto;
   }
+
+  #resume-print-area .resume-sheet {
+    height: calc(var(--resume-page-height) - 1px);
+    overflow: hidden;
+    transform: none !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
 }
 
 /* Override Tailwind text sizing for resume templates to use ems for
@@ -3266,6 +3271,14 @@ label {
 .portal-resume-doc-inner,
 .portal-resume-doc-inner * {
   line-height: var(--resume-line-height, 1.625) !important;
+}
+
+/* Keep fractional line-height rounding consistent across browser engines. */
+@supports (line-height: round(nearest, 16.25px, 1px)) {
+  .resume-paper,
+  .resume-paper * {
+    line-height: round(nearest, calc(1em * var(--resume-line-height, 1.625)), 1px) !important;
+  }
 }
 
 /* ── Global utility animations ── */

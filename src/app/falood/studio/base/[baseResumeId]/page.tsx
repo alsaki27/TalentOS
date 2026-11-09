@@ -4,13 +4,14 @@ import React, { useState, useRef, Suspense, useEffect, useCallback } from 'react
 import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
+import { printStudioResume } from '@/components/falood/resumify/components/preview/resumePagination';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDown, Sparkles, Save, ArrowLeft, Briefcase, X } from 'lucide-react';
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
-import { getPageSizePx, PAGE_OVERFLOW_TOLERANCE_PX, ResumeData } from '@/components/falood/resumify/types/resume';
+import { ResumeData } from '@/components/falood/resumify/types/resume';
 import { readResumePresentation } from '@/lib/falood/resumePresentation';
 import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
 import { useParams, useRouter } from 'next/navigation';
@@ -274,23 +275,8 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [baseResumeId, isNew]);
 
-    // Page overflow detection. Measured against the same derived page
-    // geometry the preview paginates with, so this banner and the page
-    // separators drawn in the preview can never disagree.
-    React.useEffect(() => {
-        const checkOverflow = () => {
-            const element = document.getElementById('resume-content');
-            if (element) {
-                const { height: pageHeight } = getPageSizePx(state.resumeData.pageFormat);
-                setPageOverflow(element.offsetHeight - PAGE_OVERFLOW_TOLERANCE_PX > pageHeight);
-            }
-        };
-        const timeoutId = setTimeout(checkOverflow, 500);
-        return () => clearTimeout(timeoutId);
-    }, [state.resumeData, state.resumeData.pageFormat]);
-
-    const handleDownloadPDF = () => {
-        window.print();
+    const handleDownloadPDF = async () => {
+        if (!(await printStudioResume())) showToast('The resume preview is still loading. Try again in a moment.');
     };
 
     const handleExportJSON = () => {
@@ -546,7 +532,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                             data-page-format={state.resumeData.pageFormat}
                             style={{ flex: 1, overflow: 'auto', background: 'var(--bg-secondary, #f9fafb)' }}
                         >
-                            <ResumePreview />
+                            <ResumePreview onPageCountChange={(count) => setPageOverflow(count > 1)} />
                         </div>
                     </div>
 

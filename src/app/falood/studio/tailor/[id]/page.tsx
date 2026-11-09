@@ -4,6 +4,7 @@ import React, { useCallback, useState, useRef, useEffect, Suspense } from 'react
 import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
+import { printStudioResume } from '@/components/falood/resumify/components/preview/resumePagination';
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, ArrowLeft, Download, FileDown, Palette, Save, Settings, Sparkles, Upload } from 'lucide-react';
@@ -13,6 +14,7 @@ import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/re
 import { generateResumePdfBlob, resumifyResumeDataToExportDocument, uploadResumeExport } from '@/lib/falood/clientExport';
 import { isResumeDataEffectivelyEmpty } from '@/lib/falood/resumeEmptyCheck';
 import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
+import { STUDIO_PAGE_FIT_CHANNEL } from '@/lib/falood/studioPageFit';
 import type { ResumeData } from '@/components/falood/resumify/types/resume';
 import type { ResumeVersion } from '@/components/falood/resumify/contexts/ResumeContext';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -40,6 +42,40 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const [loadError, setLoadError] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
     const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
+    const layoutRef = useRef<{ resumeData: ResumeData; pageUtilizations: number[] | null } | null>(null);
+    const recordPageLayout = useCallback((resumeData: ResumeData, pageUtilizations: number[] | null) => {
+        layoutRef.current = { resumeData, pageUtilizations };
+    }, []);
+
+    const pageUtilizationsFor = (resumeData: ResumeData) => {
+        const layout = layoutRef.current;
+        return layout?.resumeData === resumeData ? layout.pageUtilizations : null;
+    };
+
+    const saveBody = (snapshot: TailorSnapshot, versions?: ResumeVersion[]) => JSON.stringify({
+        jobDescription: snapshot.jobDescription,
+        companyName: company || null,
+        resumeData: snapshot.resumeData,
+        chatHistory: snapshot.chatHistory,
+        pageUtilizations: pageUtilizationsFor(snapshot.resumeData),
+        versions,
+    });
+
+    const saveSnapshot = async (snapshot: TailorSnapshot, versions?: ResumeVersion[]) => {
+        if (!pageUtilizationsFor(snapshot.resumeData)) await document.fonts.ready;
+        const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: saveBody(snapshot, versions),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (res.ok && json?.success && json.data?.resumeVersionId && typeof BroadcastChannel !== 'undefined') {
+            const channel = new BroadcastChannel(STUDIO_PAGE_FIT_CHANNEL);
+            channel.postMessage(json.data.resumeVersionId);
+            channel.close();
+        }
+        return { ok: res.ok && !!json?.success, error: json?.error };
+    };
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -50,27 +86,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         enabled: true,
         snapshot: { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions },
         getResumeData: (snapshot) => snapshot.resumeData,
-        save: async (snapshot) => {
-            const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jobDescription: snapshot.jobDescription,
-                    companyName: company || null,
-                    resumeData: snapshot.resumeData,
-                    chatHistory: snapshot.chatHistory,
-                }),
-            });
-            const json = await res.json().catch(() => ({}));
-            return res.ok && !!json?.success;
-        },
+        save: async (snapshot) => (await saveSnapshot(snapshot).catch(() => ({ ok: false }))).ok,
         flush: (snapshot) => {
-            const body = JSON.stringify({
-                jobDescription: snapshot.jobDescription,
-                companyName: company || null,
-                resumeData: snapshot.resumeData,
-                chatHistory: snapshot.chatHistory,
-            });
+            const body = saveBody(snapshot);
             // Browsers cap in-flight keepalive bodies at 64KB total and reject
             // anything over it outright. Use keepalive only when it fits;
             // otherwise a plain fetch (still completes on in-app navigation,
@@ -163,7 +181,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     }, [applicationId]);
 
     const handleSave = async () => {
-        const ok = await studio.persist();
+        const ok = await studio.persist({ force: true });
         if (ok) {
             showToast('Tailored resume saved!');
         } else if (studio.lastBlockReason === 'not_loaded') {
@@ -176,12 +194,6 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     };
 
     const handleSaveVersion = async () => {
-        // Same guard shouldPersistResumeSnapshot encodes for the shared
-        // studio hook, applied directly here since this is its own
-        // independent PATCH (including overwriting `versions`, which the
-        // hook's regular save/flush deliberately never sends - see the save/
-        // flush functions above) and so needs its own check rather than
-        // relying on the hook's guard, which only wraps its own persist().
         if (!studio.hasLoadedInitialData) {
             showToast('Still loading this resume - please wait a moment and try again.');
             return;
@@ -208,23 +220,21 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             chatHistory: state.chatHistory,
         };
         const updatedVersions = [newVersion, ...(state.versions || [])];
-        dispatch({ type: 'SET_VERSIONS', payload: updatedVersions });
-
         setIsSavingVersion(true);
         try {
-            const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    versions: updatedVersions,
-                    resumeData: state.resumeData,
-                    chatHistory: state.chatHistory,
-                    jobDescription: state.jobDescription,
-                    companyName: company || null,
-                }),
+            let saveError: string | undefined;
+            const saved = await studio.persist({
+                versionSave: {
+                    snapshot: { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: updatedVersions },
+                    save: async (snapshot) => {
+                        const result = await saveSnapshot(snapshot, snapshot.versions);
+                        saveError = result.error;
+                        return result.ok;
+                    },
+                },
             });
-            const saveJson = await saveRes.json().catch(() => ({}));
-            if (!saveRes.ok || !saveJson?.success) throw new Error(saveJson?.error || 'Failed to save version');
+            if (!saved) throw new Error(saveError || 'Failed to save version');
+            dispatch({ type: 'SET_VERSIONS', payload: updatedVersions });
 
             if (archiveContext) {
                 const pdfBlob = await generateResumePdfBlob(resumifyResumeDataToExportDocument(state.resumeData));
@@ -240,16 +250,6 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             } else {
                 showToast(`Saved version: ${versionName} (no linked application archive)`);
             }
-            // Fast-forward the shared hook's notion of "last known saved
-            // snapshot" to include the versions this just persisted out of
-            // band, so the regular autosave/exit-flush paths don't treat the
-            // version bump alone as still-dirty content to re-send.
-            studio.markLoaded({
-                resumeData: state.resumeData,
-                chatHistory: state.chatHistory,
-                jobDescription: state.jobDescription,
-                versions: updatedVersions,
-            });
         } catch (error) {
             showToast(error instanceof Error ? error.message : 'Failed to save version');
         } finally {
@@ -257,7 +257,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         }
     };
 
-    const handleDownloadPDF = () => window.print();
+    const handleDownloadPDF = async () => {
+        if (!(await printStudioResume())) showToast('The resume preview is still loading. Try again in a moment.');
+    };
 
     const handleExportJSON = () => {
         const success = exportResumeAsJSON(state.resumeData);
@@ -445,7 +447,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                             style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}
                             className="print:overflow-visible print:bg-white"
                         >
-                            <ResumePreview />
+                            <ResumePreview onPageLayoutChange={recordPageLayout} />
                         </div>
                     </div>
 

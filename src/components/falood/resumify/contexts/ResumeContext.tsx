@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
-import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_TITLE_SPACING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE, normalizeTitleSpacing } from '@/components/falood/resumify/types/resume';
+import { type ResumeData, normalizeTitleSpacing } from '@/components/falood/resumify/types/resume';
+import { INITIAL_RESUME_DATA as initialResumeData, normalizeImportedResumeData } from '@/components/falood/resumify/utils/importedResumeData';
 
 export interface ResumeVersion {
   id: string;
@@ -45,40 +46,6 @@ type ResumeAction =
   | { type: 'SET_PREVIEW_SUGGESTION'; payload: any | null }
   | { type: 'SET_VERSIONS'; payload: ResumeVersion[] }
   | { type: 'RESTORE_VERSION'; payload: ResumeVersion };
-
-const initialResumeData: ResumeData = {
-  personalInfo: {
-    fullName: '',
-    jobTitle: '',
-    email: '',
-    phone: '',
-    location: '',
-    website: '',
-    linkedin: '',
-    github: '',
-    profileImage: '',
-    birthDate: ''
-  },
-  summary: '',
-  experience: [],
-  education: [],
-  projects: [],
-  skills: {
-    mode: 'simple',
-    simple: [],
-    categorized: []
-  },
-  customSections: [],
-  sections: DEFAULT_SECTIONS,
-  colors: DEFAULT_COLORS,
-  template: 'business-professional',
-  pageFormat: 'a4',
-  fontSize: DEFAULT_FONT_SIZE,
-  fontFamily: 'Inter',
-  pagePadding: DEFAULT_PAGE_PADDING,
-  lineSpacing: DEFAULT_LINE_SPACING,
-  titleSpacing: DEFAULT_TITLE_SPACING,
-};
 
 const initialState: ResumeState = {
   resumeData: initialResumeData,
@@ -187,26 +154,8 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...state, selectedSection: action.payload };
     case 'RESET_RESUME':
       return { ...initialState, resumeData: initialResumeData };
-    case 'IMPORT_RESUME_DATA': {
-      const newData = { ...initialResumeData, ...action.payload };
-      // Normalize at the single funnel every load path goes through (base
-      // resume fetch, JSON import, AI-tailored seed data): a fontSize that
-      // isn't a valid number - e.g. a legacy named size like "medium" from
-      // before this field was point-based, or a hand-edited JSON import -
-      // would otherwise silently persist as-is and never coerce back to a
-      // usable value on its own.
-      if (typeof newData.fontSize !== 'number' || !Number.isFinite(newData.fontSize)) {
-        newData.fontSize = DEFAULT_FONT_SIZE;
-      }
-      newData.titleSpacing = normalizeTitleSpacing(newData.titleSpacing);
-      if (newData.skills?.categorized) {
-        newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
-          ...cat,
-          id: cat.id || `import-cat-${Date.now()}-${idx}`
-        }));
-      }
-      return { ...state, resumeData: newData };
-    }
+    case 'IMPORT_RESUME_DATA':
+      return { ...state, resumeData: normalizeImportedResumeData(action.payload) };
     case 'SET_CHAT_HISTORY':
       return { ...state, chatHistory: action.payload };
     case 'SET_JOB_DESCRIPTION':

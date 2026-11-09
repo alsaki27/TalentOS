@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
+import { LEGACY_PAGE_FIT_BATCH_SIZE, STUDIO_PAGE_FIT_CHANNEL } from "@/lib/falood/studioPageFit";
 import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { ShieldAlert } from "lucide-react";
@@ -10,6 +11,7 @@ import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestricti
 import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
 import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { ResumeQcDialog } from "./components/ResumeQcDialog";
+import { LegacyPageFitBatch, type LegacyPageFitResult } from "./components/LegacyPageFitBatch";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -17,6 +19,7 @@ interface PageFitMetrics {
   bottomWhitespaceInches: number;
   overflow: boolean;
   readable: boolean;
+  pageUtilizations?: number[];
   recommendation: "pass" | "trim" | "expand" | "manual_review";
 }
 
@@ -68,6 +71,8 @@ interface QueueItem {
   average_score?: number | null;
   one_page_fit_score?: number | null;
   page_fit_metrics?: PageFitMetrics | null;
+  page_fit_read_at?: string;
+  page_fit_resume_updated_at?: string | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
   base_resume_id?: string | null;
@@ -266,6 +271,21 @@ export default function ApplicationQueuePage() {
   const requestedPageRef = useRef(1);
   const currentQueryRef = useRef("");
   const [items, setItems] = useState<QueueItem[]>([]);
+  const [legacyPageFit, setLegacyPageFit] = useState<Record<string, LegacyPageFitResult>>({});
+  const recordLegacyPageFit = useCallback((results: LegacyPageFitResult[]) => {
+    setLegacyPageFit((previous) => ({
+      ...previous,
+      ...Object.fromEntries(results.map((result) => [result.target.id, result])),
+    }));
+  }, []);
+  const legacyBatch = items.flatMap((item) => {
+    const versionId = item.workflow_resume_version_id;
+    if (!versionId || item.page_fit_metrics?.pageUtilizations?.length) return [];
+    const key = legacyPageFitKey(item);
+    return legacyPageFit[item.id]?.target.key === key ? [] : [{
+      id: item.id, versionId, updatedAt: item.page_fit_resume_updated_at, key,
+    }];
+  }).slice(0, LEGACY_PAGE_FIT_BATCH_SIZE);
   // Mirrors `items` for the page-fit poller below, which needs the current
   // list of resume-bearing ids inside a long-lived setInterval closure
   // without re-registering the interval on every items change.
@@ -396,7 +416,21 @@ export default function ApplicationQueuePage() {
       const newTotal = data.total ?? 0;
       const tp = Math.max(1, Math.ceil(newTotal / pageSize));
       if (pn > tp && pn > 1) return load(tp, clearFeedback, isBackgroundPoll);
-      setItems(data.items ?? []);
+      setItems((previous) => {
+        const byId = new Map(previous.map((item) => [item.id, item]));
+        return ((data.items ?? []) as QueueItem[]).map((item) => {
+          const current = byId.get(item.id);
+          if (!current || current.workflow_resume_version_id !== item.workflow_resume_version_id ||
+              !isNewerPageFitRead(current.page_fit_read_at, item.page_fit_read_at)) return item;
+          return {
+            ...item,
+            one_page_fit_score: current.one_page_fit_score,
+            page_fit_metrics: current.page_fit_metrics,
+            page_fit_read_at: current.page_fit_read_at,
+            page_fit_resume_updated_at: current.page_fit_resume_updated_at,
+          };
+        });
+      });
       setTotal(newTotal);
       setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
       if (nextUsers) setUsers(nextUsers);
@@ -580,6 +614,9 @@ export default function ApplicationQueuePage() {
                         ...it,
                         resume_generation_status: fresh.resume_generation_status,
                         workflow_resume_version_id: fresh.tailored_resume_version_id ?? it.workflow_resume_version_id,
+                        ...(fresh.tailored_resume_version_id && fresh.tailored_resume_version_id !== it.workflow_resume_version_id
+                          ? { page_fit_metrics: null, one_page_fit_score: null, page_fit_read_at: undefined, page_fit_resume_updated_at: undefined }
+                          : {}),
                       }
                     : it
                 )
@@ -593,38 +630,64 @@ export default function ApplicationQueuePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Lightweight live-update for resume page-fit: a manual edit saved from
-  // Falood Studio recomputes page_fit_metrics server-side immediately (see
-  // resumePageFitMeasurement.ts), but nothing told an already-open Queue
-  // page about it - the poller above only ever patches workflow-status
-  // fields. Same "poll a small endpoint, patch rows in place" shape as that
-  // poller, so this stays live without resetting scroll/selection.
+  // Refresh immediately after a save in another tab. Polling also covers
+  // changes by other users and saves made while a tab is closing.
   useEffect(() => {
-    const interval = setInterval(async () => {
+    let request: AbortController | null = null;
+    const refresh = async (supersede = false) => {
+      if (request && !supersede) return;
       const ids = itemsRef.current
         .filter((it) => it.workflow_resume_version_id)
         .map((it) => it.id);
       if (ids.length === 0) return;
+      request?.abort();
+      const current = new AbortController();
+      request = current;
+      const loadId = loadRequestRef.current;
       try {
-        const res = await fetch(`/api/application-queue/page-fit?ids=${ids.join(",")}`, { cache: "no-store" });
+        const res = await fetch(`/api/application-queue/page-fit?ids=${ids.join(",")}`, {
+          cache: "no-store",
+          signal: current.signal,
+        });
         if (!res.ok) return;
-        const data = await res.json();
-        const byId = new Map((data.items ?? []).map((row: any) => [row.id, row]));
+        const data: { items: Array<Pick<QueueItem, "id" | "one_page_fit_score" | "page_fit_metrics" | "page_fit_read_at" | "page_fit_resume_updated_at"> & {
+          resume_version_id: string | null;
+        }> } = await res.json();
+        if (current.signal.aborted || loadId !== loadRequestRef.current) return;
+        const byId = new Map((data.items ?? []).map((row) => [row.id, row]));
         setItems((prev) =>
           prev.map((item) => {
-            const fresh: any = byId.get(item.id);
-            if (!fresh) return item;
-            if (fresh.one_page_fit_score === item.one_page_fit_score &&
-                JSON.stringify(fresh.page_fit_metrics) === JSON.stringify(item.page_fit_metrics)) {
-              return item;
-            }
-            return { ...item, one_page_fit_score: fresh.one_page_fit_score, page_fit_metrics: fresh.page_fit_metrics };
+            const fresh = byId.get(item.id);
+            if (!fresh || fresh.resume_version_id !== item.workflow_resume_version_id ||
+                isNewerPageFitRead(item.page_fit_read_at, fresh.page_fit_read_at)) return item;
+            return {
+              ...item,
+              one_page_fit_score: fresh.one_page_fit_score,
+              page_fit_metrics: fresh.page_fit_metrics,
+              page_fit_read_at: fresh.page_fit_read_at,
+              page_fit_resume_updated_at: fresh.page_fit_resume_updated_at,
+            };
           })
         );
-      } catch {}
-    }, 6000);
-
-    return () => clearInterval(interval);
+      } catch {
+        // The next refresh retries transient failures.
+      } finally {
+        if (request === current) request = null;
+      }
+    };
+    const interval = setInterval(() => void refresh(), 6000);
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(STUDIO_PAGE_FIT_CHANNEL);
+    if (channel) channel.onmessage = ({ data }) => {
+      if (itemsRef.current.some((item) => item.workflow_resume_version_id === data)) void refresh(true);
+    };
+    return () => {
+      request?.abort();
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      channel?.close();
+    };
   }, []);
 
   const userMap = new Map(users.map((u) => [u.user_id, u]));
@@ -1449,6 +1512,9 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <PipelineActions item={item} actionLoading={actionLoading}
+                      pageFitMetrics={item.page_fit_metrics?.pageUtilizations?.length
+                        ? item.page_fit_metrics
+                        : legacyPageFit[item.id]?.target.key === legacyPageFitKey(item) ? legacyPageFit[item.id].metrics : null}
                       onStartWorkflow={startWorkflow}
                       onRegenerate={regenerateWorkflow}
                       onFetchDetails={fetchWorkflowDetails}
@@ -1713,6 +1779,11 @@ export default function ApplicationQueuePage() {
           </div>
         </div>
       )}
+      {legacyBatch.length > 0 && (
+        <LegacyPageFitBatch key={JSON.stringify(legacyBatch.map((target) => target.key))}
+          targets={legacyBatch} onMeasured={recordLegacyPageFit} />
+      )}
+
       {resumeQcItem && (
         <ResumeQcDialog
           applicationId={resumeQcItem.id}
@@ -1914,7 +1985,7 @@ function QueueFindingsPanel({ details }: { details: any }) {
           )}
           {(finalPolish?.pageFit || hiringPanel?.pageFit) && (
             <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>Page fit</div>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Page fit at AI review</div>
               <div>{formatPageFitSummary(finalPolish?.pageFit ?? hiringPanel?.pageFit)}</div>
             </div>
           )}
@@ -1933,12 +2004,36 @@ function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: Queu
   );
 }
 
+function legacyPageFitKey(item: QueueItem) {
+  return JSON.stringify([item.id, item.workflow_resume_version_id, item.page_fit_resume_updated_at ?? null]);
+}
+
+function isNewerPageFitRead(current?: string, incoming?: string) {
+  return Boolean(current && incoming && Date.parse(current) > Date.parse(incoming));
+}
+
+function PageFitBadge({ metrics }: { metrics?: PageFitMetrics | null }) {
+  const pageFills = metrics?.pageUtilizations?.map((fill, index) =>
+    `Page ${index + 1}: ${Math.round(fill * 100)}% filled`,
+  ).join(" · ");
+  return (
+    <span
+      style={{ fontSize: 11 }}
+      className={metrics && (metrics.overflow || !metrics.readable) ? "text-danger" : "text-muted"}
+      title={pageFills}
+    >
+      {formatPageFitSummary(metrics)}
+    </span>
+  );
+}
+
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
-  item, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
+  item, pageFitMetrics, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
   expandedWorkflow, workflowDetails, workflowStageLabel
 }: {
   item: QueueItem;
+  pageFitMetrics: PageFitMetrics | null;
   actionLoading: string | null;
   onStartWorkflow: (item: QueueItem) => void;
   onRegenerate: (item: QueueItem) => void;
@@ -1972,11 +2067,7 @@ function PipelineActions({
         {formattedWorkflowScore !== null && (
           <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
-        {item.page_fit_metrics && (
-          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
-            {formatPageFitSummary(item.page_fit_metrics)}
-          </span>
-        )}
+        <PageFitBadge metrics={pageFitMetrics} />
         <button className="btn-primary btn-sm"
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
           ✏️ Open in Studio
@@ -2020,11 +2111,7 @@ function PipelineActions({
         {formattedWorkflowScore !== null && (
           <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
-        {item.page_fit_metrics && (
-          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
-            {formatPageFitSummary(item.page_fit_metrics)}
-          </span>
-        )}
+        {(item.workflow_resume_version_id || pageFitMetrics) && <PageFitBadge metrics={pageFitMetrics} />}
         {item.workflow_id && (
           <>
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>

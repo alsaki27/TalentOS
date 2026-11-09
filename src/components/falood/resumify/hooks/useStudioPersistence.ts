@@ -24,6 +24,11 @@ import type { ResumeData } from "@/components/falood/resumify/types/resume";
 
 export type StudioSaveStatus = "idle" | "saving" | "saved" | "error";
 
+interface StudioPersistOptions<T> {
+  force?: boolean;
+  versionSave?: { snapshot: T; save: (snapshot: T) => Promise<boolean> };
+}
+
 export interface UseStudioPersistenceOptions<T> {
   /** False while there is nothing persistable yet (e.g. a not-yet-created resume) - the hook does nothing at all while disabled. */
   enabled: boolean;
@@ -59,7 +64,7 @@ export interface UseStudioPersistenceResult<T> {
    * Resolves true once the snapshot is persisted (including "already
    * up to date," a no-op save), false if blocked or failed.
    */
-  persist: () => Promise<boolean>;
+  persist: (options?: StudioPersistOptions<T>) => Promise<boolean>;
 }
 
 export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>): UseStudioPersistenceResult<T> {
@@ -93,7 +98,7 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
   // dropped - retried the instant the in-flight one clears, with the
   // freshest snapshot at that moment (not the stale one from when it was
   // queued).
-  const pendingSaveRef = useRef(false);
+  const pendingSaveRef = useRef<boolean | null>(null);
 
   const guardSnapshot = useCallback((snapshot: T): PersistGuardResult => {
     const last = lastSavedSnapshotRef.current;
@@ -110,14 +115,14 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
     setHasLoadedInitialData(true);
   }, []);
 
-  const persist = useCallback(async (): Promise<boolean> => {
+  const persist = useCallback(async ({ force = false, versionSave }: StudioPersistOptions<T> = {}): Promise<boolean> => {
     if (!enabled) return false;
     if (isSavingRef.current) {
-      pendingSaveRef.current = true;
+      if (!versionSave) pendingSaveRef.current = force || pendingSaveRef.current === true;
       return false;
     }
 
-    const snapshot = snapshotRef.current;
+    const snapshot = versionSave?.snapshot ?? snapshotRef.current;
     const guard = guardSnapshot(snapshot);
     if (!guard.allow) {
       setSaveStatus("error");
@@ -126,7 +131,7 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
     }
 
     const last = lastSavedSnapshotRef.current;
-    if (last !== null && JSON.stringify(snapshot) === JSON.stringify(last)) {
+    if (!force && last !== null && JSON.stringify(snapshot) === JSON.stringify(last)) {
       setSaveStatus("saved");
       setLastBlockReason(null);
       return true;
@@ -136,7 +141,7 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
     setIsSaving(true);
     setSaveStatus("saving");
     try {
-      const ok = await saveRef.current(snapshot);
+      const ok = await (versionSave?.save ?? saveRef.current)(snapshot);
       if (ok) {
         lastSavedSnapshotRef.current = snapshot;
         setSaveStatus("saved");
@@ -148,9 +153,10 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
-      if (pendingSaveRef.current) {
-        pendingSaveRef.current = false;
-        window.setTimeout(() => { void persistRef.current(); }, 0);
+      const pending = pendingSaveRef.current;
+      if (pending !== null) {
+        pendingSaveRef.current = null;
+        window.setTimeout(() => { void persistRef.current({ force: pending }); }, 0);
       }
     }
     // guardSnapshot is stable (empty deps); enabled is the only real input.

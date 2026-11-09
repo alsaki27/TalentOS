@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { getPageSizePx, getPageSizeCss, CSS_PX_PER_INCH } from "@/components/falood/resumify/types/resume";
+import { paginateResume } from "@/components/falood/resumify/components/preview/resumePagination";
 
 describe("resume page geometry", () => {
   it("derives A4 in CSS pixels", () => {
@@ -33,5 +34,28 @@ describe("resume page geometry", () => {
 
   it("falls back to A4 for an unrecognised page format", () => {
     expect(getPageSizePx("tabloid" as any)).toEqual(getPageSizePx("a4"));
+  });
+});
+
+describe("resume page breaks", () => {
+  it("keeps a resume that exactly fits on a single sheet", () => {
+    expect(paginateResume(960, 960, [])).toEqual([{ start: 0, end: 960 }]);
+  });
+
+  it("does not add a blank sheet for space after the last line", () => {
+    expect(paginateResume(968, 960, [{ start: 940, end: 953 }])).toEqual([{ start: 0, end: 960 }]);
+  });
+
+  it("moves a line crossing the edge to the next sheet without losing any content", () => {
+    expect(paginateResume(1010, 960, [{ start: 951, end: 966 }])).toEqual([
+      { start: 0, end: 951 },
+      { start: 951, end: 1010 },
+    ]);
+  });
+
+  it("moves overlapping lines in separate columns together", () => {
+    expect(paginateResume(1010, 960, [
+      { start: 950, end: 961 }, { start: 944, end: 954 },
+    ])).toEqual([{ start: 0, end: 944 }, { start: 944, end: 1010 }]);
   });
 });

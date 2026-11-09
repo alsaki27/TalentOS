@@ -1,5 +1,6 @@
 import React from 'react';
-import { ResumeData } from '@/components/falood/resumify/types/resume';
+import { ResumeData, TEMPLATE_CONFIGS } from '@/components/falood/resumify/types/resume';
+import './resumeFonts.css';
 import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
 import { BusinessProfessionalTemplate } from './templates/BusinessProfessionalTemplate';
 import { ModernMinimalTemplate } from './templates/ModernMinimalTemplate';
@@ -12,7 +13,20 @@ import { BJetProfessionalTemplate } from './templates/BJetProfessionalTemplate';
 // resume through exactly the same templates the studio does - if a template
 // is added or its mapping changes, both surfaces pick it up from here rather
 // than drifting apart behind two copies of the same switch.
-export const ResumeTemplateSwitch: React.FC<{ data: ResumeData }> = ({ data }) => {
+const studioFonts: Readonly<Record<string, string>> = {
+  Inter: 'var(--font-inter), "Resume Arimo", sans-serif',
+  Arial: '"Resume Arimo", sans-serif',
+  Helvetica: '"Resume Arimo", sans-serif',
+  Georgia: '"Resume Libre Baskerville", serif',
+  'Times New Roman': '"Resume Tinos", serif',
+  Poppins: '"Resume Poppins", sans-serif',
+  Lato: '"Resume Lato", sans-serif',
+  'Source Sans Pro': '"Resume Source Sans 3", sans-serif',
+};
+
+export const ResumeTemplateSwitch: React.FC<{ data: ResumeData }> = ({ data: resume }) => {
+  const font = resume.fontFamily || TEMPLATE_CONFIGS.find((template) => template.id === resume.template)?.fontFamily || 'Inter';
+  const data = { ...resume, fontFamily: Object.hasOwn(studioFonts, font) ? studioFonts[font] : studioFonts.Inter };
   let template: React.ReactNode;
   switch (data.template) {
     case 'tech-sidebar':

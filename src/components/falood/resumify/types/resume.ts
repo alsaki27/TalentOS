@@ -157,30 +157,27 @@ export const DEFAULT_FONT_SIZE = 10;
 export const CSS_PX_PER_INCH = 96;
 const MM_PER_INCH = 25.4;
 
-const PAGE_SIZE_INCHES: Record<ResumeData['pageFormat'], { width: number; height: number }> = {
-  a4: { width: 210 / MM_PER_INCH, height: 297 / MM_PER_INCH },
-  letter: { width: 8.5, height: 11 },
-};
+const PAGE_SIZES = {
+  a4: { width: 210, height: 297, unit: 'mm' },
+  letter: { width: 8.5, height: 11, unit: 'in' },
+} satisfies Record<ResumeData['pageFormat'], { width: number; height: number; unit: 'mm' | 'in' }>;
+
+function getPageSize(pageFormat: ResumeData['pageFormat']) {
+  return Object.hasOwn(PAGE_SIZES, pageFormat) ? PAGE_SIZES[pageFormat] : PAGE_SIZES.a4;
+}
 
 /** Page size in CSS pixels — used for scale maths and page-boundary offsets. */
 export function getPageSizePx(pageFormat: ResumeData['pageFormat']) {
-  const { width, height } = PAGE_SIZE_INCHES[pageFormat] ?? PAGE_SIZE_INCHES.a4;
-  return { width: width * CSS_PX_PER_INCH, height: height * CSS_PX_PER_INCH };
+  const { width, height, unit } = getPageSize(pageFormat);
+  const pixelsPerUnit = unit === 'mm' ? CSS_PX_PER_INCH / MM_PER_INCH : CSS_PX_PER_INCH;
+  return { width: width * pixelsPerUnit, height: height * pixelsPerUnit };
 }
 
 /** Page size as CSS length strings — used for the paper element's own box. */
 export function getPageSizeCss(pageFormat: ResumeData['pageFormat']) {
-  return pageFormat === 'letter'
-    ? { width: '8.5in', height: '11in' }
-    : { width: '210mm', height: '297mm' };
+  const { width, height, unit } = getPageSize(pageFormat);
+  return { width: `${width}${unit}`, height: `${height}${unit}` };
 }
-
-// Slack before content counts as having spilled onto another page. A page is
-// a fractional pixel height (A4 is 1122.52px), while offsetHeight is a
-// rounded integer, so an exactly-one-page resume measures a hair "taller"
-// than the page it fits on. Shared so the preview's page count and the
-// editors' overflow banner can never disagree by a rounding error.
-export const PAGE_OVERFLOW_TOLERANCE_PX = 1;
 
 export const DEFAULT_SECTIONS: ResumeSection[] = [
   { id: 'summary', title: 'Professional Summary', visible: true, order: 1 },

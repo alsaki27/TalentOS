@@ -1,17 +1,18 @@
 import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import {
-  DEFAULT_PAGE_PADDING,
-  DEFAULT_LINE_SPACING,
-  getPageSizePx,
   getPageSizeCss,
-  PAGE_OVERFLOW_TOLERANCE_PX,
+  type ResumeData,
 } from '@/components/falood/resumify/types/resume';
 import { ResumeTemplateSwitch } from './ResumeTemplateSwitch';
 import { applySuggestionToResumeData } from './AiSuggestions';
 import { Skeleton } from '@/components/ui/skeleton';
+import { getResumePageArea, getResumePaperStyle, getResumePageUtilizations, measureResumePages, type ResumePageSlice } from './resumePagination';
 
-export const ResumePreview: React.FC = () => {
+export const ResumePreview: React.FC<{
+  onPageCountChange?: (count: number) => void;
+  onPageLayoutChange?: (data: ResumeData, pageUtilizations: number[] | null) => void;
+}> = ({ onPageCountChange, onPageLayoutChange }) => {
   const { state } = useResume();
   const { resumeData, previewSuggestion } = state;
   const previewData = useMemo(() => {
@@ -21,14 +22,11 @@ export const ResumePreview: React.FC = () => {
     return resumeData;
   }, [resumeData, previewSuggestion]);
 
-  const pagePadding = previewData.pagePadding ?? DEFAULT_PAGE_PADDING;
-  const lineSpacing = previewData.lineSpacing ?? DEFAULT_LINE_SPACING;
-
-  const renderTemplate = () => <ResumeTemplateSwitch data={previewData} />;
+  const { size: pageSizePx, usableHeight } = getResumePageArea(previewData);
 
   const [containerRef, setContainerRef] = React.useState<HTMLDivElement | null>(null);
-  const [scale, setScale] = React.useState(0.8);
   const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+  const [slices, setSlices] = React.useState<ResumePageSlice[]>([]);
 
   useLayoutEffect(() => {
     if (!containerRef) return;
@@ -111,7 +109,7 @@ export const ResumePreview: React.FC = () => {
             el.classList.remove(...classes);
         });
     };
-  }, [previewSuggestion, previewData, containerRef, state.chatHistory]);
+  }, [previewSuggestion, previewData, containerRef, state.chatHistory, slices.length]);
 
   React.useEffect(() => {
     if (!containerRef) return;
@@ -139,121 +137,85 @@ export const ResumePreview: React.FC = () => {
     };
   }, [containerRef]);
 
-  const pageSizePx = getPageSizePx(previewData.pageFormat);
   const pageSizeCss = getPageSizeCss(previewData.pageFormat);
+  const scale = Math.max(0.01, Math.min(
+    (dimensions.width - 32) / pageSizePx.width,
+    (dimensions.height - 32) / pageSizePx.height,
+  ));
 
-  React.useEffect(() => {
-    if (dimensions.width === 0 || dimensions.height === 0) return;
-
-    // Add padding to container calculation
-    const padding = 32;
-    const availableWidth = dimensions.width - padding;
-    const availableHeight = dimensions.height - padding;
-
-    const scaleWidth = availableWidth / pageSizePx.width;
-    // Deliberately still fits a SINGLE page to the viewport, so a one-page
-    // resume looks exactly as it always has. Extra pages are reached by
-    // scrolling rather than by shrinking every resume to fit them all.
-    const scaleHeight = availableHeight / pageSizePx.height;
-
-    // Use the smaller scale to fit entirely, but don't go too small
-    const newScale = Math.min(scaleWidth, scaleHeight);
-    setScale(newScale);
-  }, [dimensions, pageSizePx.width, pageSizePx.height]);
-
-  // The rendered height of the resume at 100% scale. Measured rather than
-  // estimated, because it depends on the template, typography, and page
-  // padding all together. transform: scale() does not affect layout metrics,
-  // so this stays correct at any zoom level.
-  const [contentEl, setContentEl] = React.useState<HTMLDivElement | null>(null);
-  const [contentHeight, setContentHeight] = React.useState(0);
-
-  React.useEffect(() => {
-    if (!contentEl) return;
-    const measure = () => setContentHeight(contentEl.offsetHeight);
+  const [source, setSource] = React.useState<HTMLDivElement | null>(null);
+  const committedSource = React.useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!source) return;
+    let active = true;
+    const measure = () => {
+      if (!active || !source.getClientRects().length) return;
+      if (document.fonts.status === 'loading') {
+        onPageLayoutChange?.(resumeData, null);
+        setSlices((previous) => previous.length ? [] : previous);
+        return;
+      }
+      const next = measureResumePages(source, usableHeight);
+      if (onPageLayoutChange) {
+        const committed = committedSource.current;
+        const committedPages = committed ? measureResumePages(committed, usableHeight) : next;
+        onPageLayoutChange(resumeData, getResumePageUtilizations(committedPages, usableHeight));
+      }
+      setSlices((previous) => previous.length === next.length && previous.every(
+        (slice, index) => slice.start === next[index].start && slice.end === next[index].end,
+      ) ? previous : next);
+    };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(contentEl);
-    return () => observer.disconnect();
-  }, [contentEl]);
+    observer.observe(source);
+    if (committedSource.current) observer.observe(committedSource.current);
+    void document.fonts.ready.then(measure);
+    document.fonts.addEventListener('loadingdone', measure);
+    document.fonts.addEventListener('loadingerror', measure);
+    return () => {
+      active = false;
+      observer.disconnect();
+      document.fonts.removeEventListener('loadingdone', measure);
+      document.fonts.removeEventListener('loadingerror', measure);
+    };
+  }, [source, usableHeight, previewData, resumeData, onPageLayoutChange]);
 
-  // How many pages the content actually occupies. The paper grows to match,
-  // instead of being clipped to the first page.
-  const pageCount = Math.max(
-    1,
-    Math.ceil((contentHeight - PAGE_OVERFLOW_TOLERANCE_PX) / pageSizePx.height) || 1,
-  );
-  const pageBreaks = Array.from({ length: pageCount - 1 }, (_, index) => index + 1);
+  React.useEffect(() => {
+    if (slices.length) onPageCountChange?.(slices.length);
+  }, [slices.length, onPageCountChange]);
 
   return (
     <div
-      className="resume-preview-container w-full h-full flex justify-center p-2 overflow-auto print:p-0 print:block print:w-full print:h-auto print:overflow-visible"
-      // A single page stays vertically centred exactly as before; once the
-      // resume spills over, it anchors to the top so page one is what you see
-      // first and the rest is a scroll away.
-      style={{ alignItems: pageCount > 1 ? 'flex-start' : 'center' }}
+      className="resume-preview-container relative w-full h-full flex justify-center p-2 overflow-auto"
+      style={{ ...getResumePaperStyle(previewData), alignItems: slices.length > 1 ? 'flex-start' : 'center' }}
       ref={setContainerRef}
     >
-      {dimensions.width === 0 ? (
-        <div className="flex flex-col items-center gap-4">
-          <Skeleton className="h-[600px] w-[400px]" />
+      <style>{`@page resume-studio { size: ${pageSizeCss.width} ${pageSizeCss.height}; margin: 0; }`}</style>
+      <div className="resume-pagination-source" aria-hidden="true">
+        <div className="resume-paper resume-pagination-measurement">
+          <div ref={setSource}><ResumeTemplateSwitch data={previewData} /></div>
+          {onPageLayoutChange && previewSuggestion && (
+            <div ref={committedSource}><ResumeTemplateSwitch data={resumeData} /></div>
+          )}
         </div>
+      </div>
+      {!dimensions.width || !slices.length ? (
+        <Skeleton className="h-[600px] w-[400px]" />
       ) : (
-        <div
-          className="resume-paper relative bg-white rounded-lg shadow-xl overflow-visible origin-center shrink-0 print:shadow-none print:m-0 print:w-full print:h-auto print:max-w-full"
-          style={{
-            width: pageSizePx.width * scale,
-            height: pageSizePx.height * pageCount * scale,
-          }}
-        >
-          <div
-            id="resume-content"
-            ref={setContentEl}
-            className="relative print:shadow-none print:rounded-none"
-            style={{
-              width: pageSizeCss.width,
-              // minHeight, not height: the paper is always at least one page
-              // tall but is free to grow with the content. A fixed height
-              // here (paired with overflow: hidden) was what silently hid
-              // everything past page one.
-              minHeight: pageSizeCss.height,
-              fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-              padding: `${pagePadding}in`,
-              lineHeight: lineSpacing,
-              // Tailwind's own text-xs/text-sm/... utility classes each bake
-              // in their own line-height, which - being set directly on the
-              // element, not just inherited - always wins over the plain
-              // lineHeight above for any text using one of those classes
-              // (nearly all resume text, in every template). The
-              // --resume-line-height custom property plus the matching
-              // `.resume-paper *` rule in globals.css is what actually makes
-              // every descendant defer to this control; see that rule for
-              // the full explanation. Keep both: this plain property is the
-              // sane default for anything with no Tailwind size class at
-              // all, the variable is what overrides everything else.
-              ['--resume-line-height' as string]: String(lineSpacing),
-              color: '#050505ff',
-              boxSizing: 'border-box',
-              transform: `scale(${scale})`,
-              transformOrigin: 'top left'
-            }}
-          >
-            {renderTemplate()}
-          </div>
-
-          {/* Where each new sheet of paper starts. Screen-only: printing is
-              paginated by the browser itself, which draws no such markers. */}
-          {pageBreaks.map((pageIndex) => (
-            <div
-              key={pageIndex}
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 right-0 flex items-center justify-end print:hidden"
-              style={{ top: pageSizePx.height * pageIndex * scale, transform: 'translateY(-50%)' }}
-            >
-              <div className="absolute left-0 right-0 border-t border-dashed border-slate-400/70" />
-              <span className="relative mr-2 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-medium leading-none text-slate-500 shadow-sm">
-                Page {pageIndex + 1}
-              </span>
+        <div className="resume-sheet-stack">
+          {slices.map((slice, index) => (
+            <div key={index} className="resume-sheet-wrap" style={{
+              width: pageSizePx.width * scale,
+              height: pageSizePx.height * scale,
+            }}>
+              {index > 0 && <span className="resume-sheet-label">Page {index + 1}</span>}
+              <div className="resume-paper resume-sheet" style={{ transform: 'scale(' + scale + ')' }}>
+                <div className="resume-sheet-clip" style={{ height: slice.end - slice.start }}>
+                  <div style={{ transform: 'translateY(' + (-slice.start) + 'px)' }}>
+                    <ResumeTemplateSwitch data={previewData} />
+                  </div>
+                </div>
+              </div>
             </div>
           ))}
         </div>

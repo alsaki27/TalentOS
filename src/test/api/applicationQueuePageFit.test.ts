@@ -47,10 +47,45 @@ describe("GET /api/application-queue/page-fit", () => {
     const json = await res.json();
 
     expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(json.items).toEqual(rows);
     const [sql, params] = mocks.query.mock.calls[0];
     expect(sql).toContain("= ANY($1::uuid[])");
+    expect(sql).toContain("a.tailored_resume_version_id AS resume_version_id");
+    expect(sql).toContain("NOW() AS page_fit_read_at");
     expect(params).toEqual([["app-1", "app-2"]]);
+  });
+
+  it("returns the saved Studio draft for legacy rows and falls back to canonical content", async () => {
+    const draftId = "00000000-0000-4000-8000-000000000001";
+    const canonicalId = "00000000-0000-4000-8000-000000000002";
+    const versionId = "00000000-0000-4000-8000-000000000003";
+    const updatedAt = "2026-11-09T10:00:00.000Z";
+    mocks.query.mockResolvedValue([
+      {
+        id: draftId, resume_version_id: versionId, page_fit_resume_updated_at: updatedAt,
+        studio_data: { personalInfo: { fullName: "Saved Draft" }, summary: "Updated content", pageFormat: "letter" },
+        canonical_data: { header: { fullName: "Previous Version" } },
+      },
+      {
+        id: canonicalId, resume_version_id: versionId, page_fit_resume_updated_at: updatedAt,
+        studio_data: "{invalid", canonical_data: { header: { fullName: "Canonical Version" } },
+      },
+    ]);
+
+    const res = await GET(req(`${draftId},${canonicalId}&layout=legacy`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect((await res.json()).items).toEqual([
+      expect.objectContaining({ id: draftId, data: expect.objectContaining({
+        personalInfo: expect.objectContaining({ fullName: "Saved Draft" }), pageFormat: "letter", summary: "Updated content",
+      }) }),
+      expect.objectContaining({ id: canonicalId, data: expect.objectContaining({
+        personalInfo: expect.objectContaining({ fullName: "Canonical Version" }),
+      }) }),
+    ]);
+    const [sql, params] = mocks.query.mock.calls[0];
+    expect(sql).toContain("jsonb_array_length(rv.page_fit_metrics->'pageUtilizations') = 0");
+    expect(params).toEqual([[draftId, canonicalId]]);
   });
 
   it("returns an empty list without querying the database when no ids are given", async () => {

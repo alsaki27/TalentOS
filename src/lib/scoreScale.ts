@@ -29,11 +29,16 @@ export function formatScoreOutOfTen(value: unknown): string | null {
  * PageFitV1 object satisfies this shape automatically.
  */
 export function formatPageFitSummary(
-  m: { pageCount: number; contentUtilization: number; overflow: boolean; readable: boolean } | null | undefined
+  m: { pageCount: number; contentUtilization: number; overflow: boolean; readable: boolean; pageUtilizations?: number[] } | null | undefined
 ): string {
   if (!m) return "Page fit not measured";
-  if (!m.readable) return "Readable font floor failed";
   const pageLabel = `${m.pageCount} page${m.pageCount === 1 ? "" : "s"}`;
+  if (m.pageUtilizations?.length) {
+    const pct = Math.round(m.pageUtilizations[m.pageUtilizations.length - 1] * 100);
+    const fill = m.overflow ? `last page ${pct}% filled` : `${pct}% filled`;
+    return [pageLabel, fill, m.overflow && "overflow", !m.readable && "small font"].filter(Boolean).join(" · ");
+  }
+  if (!m.readable) return "Readable font floor failed";
   if (m.overflow) return `${pageLabel} · overflow`;
   const pct = Math.round(m.contentUtilization * 100);
   const fullness = m.contentUtilization < MIN_UTILIZATION ? "too much whitespace" : m.contentUtilization > MAX_UTILIZATION ? "very tight" : "readable";

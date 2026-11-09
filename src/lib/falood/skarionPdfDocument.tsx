@@ -28,16 +28,13 @@
 
 import { jsPDF } from "jspdf";
 import { ResumeDocument } from "@/lib/falood/types";
+import { READABILITY_FLOOR_FONT_SIZE } from "@/lib/falood/pageFitThresholds";
+export { READABILITY_FLOOR_FONT_SIZE } from "@/lib/falood/pageFitThresholds";
 
 const PAGE_WIDTH_IN = 8.5;
 const PAGE_HEIGHT_IN = 11;
 const A4_WIDTH_IN = 8.27;
 const A4_HEIGHT_IN = 11.69;
-
-// The one source of truth for "is this font size still readable when
-// rendered" - shared with autoFit.ts's formatting-reduction floor so the two
-// can never silently disagree about what "readable" means.
-export const READABILITY_FLOOR_FONT_SIZE = 9;
 
 export interface ResumePageMetrics {
   pageCount: number;

@@ -40,6 +40,7 @@ function req(id: string, body: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.queryOne.mockResolvedValue(null);
 });
 
 describe("PATCH /api/falood/applications - blank-overwrite guard", () => {
@@ -66,6 +67,7 @@ describe("PATCH /api/falood/applications - blank-overwrite guard", () => {
       if (sql.includes("SELECT resume_data FROM falood_saved_applications")) {
         return Promise.resolve({ resume_data: JSON.stringify(BLANK_RESUME) });
       }
+      if (sql.includes("SELECT rv.id, rv.content")) return Promise.resolve(null);
       if (sql.includes("UPDATE falood_saved_applications")) {
         return Promise.resolve({ id: "app-1", createdAt: "2026-01-01", updatedAt: "2026-01-02", name: null });
       }
@@ -81,6 +83,7 @@ describe("PATCH /api/falood/applications - blank-overwrite guard", () => {
 
   it("allows saving non-empty resumeData regardless of what was there before", async () => {
     mocks.queryOne.mockImplementation((sql: string) => {
+      if (sql.includes("SELECT rv.id, rv.content")) return Promise.resolve(null);
       if (sql.includes("UPDATE falood_saved_applications")) {
         return Promise.resolve({ id: "app-1", createdAt: "2026-01-01", updatedAt: "2026-01-02", name: null });
       }
@@ -118,6 +121,7 @@ describe("PATCH /api/falood/applications - blank-overwrite guard", () => {
       if (sql.includes("SELECT resume_data FROM falood_saved_applications")) {
         return Promise.resolve(null);
       }
+      if (sql.includes("SELECT rv.id, rv.content")) return Promise.resolve(null);
       if (sql.includes("UPDATE falood_saved_applications")) {
         return Promise.resolve(null); // no row matched WHERE id = $N
       }

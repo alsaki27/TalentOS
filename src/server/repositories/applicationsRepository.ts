@@ -737,6 +737,8 @@ export async function listApplicationQueue(
       rv.base_resume_id as base_resume_id,
       rv.one_page_fit_score,
       rv.page_fit_metrics,
+      NOW() AS page_fit_read_at,
+      rv.updated_at AS page_fit_resume_updated_at,
       a.resume_generation_status
     ${fromJoins}
     ${fitScoreJoin}

@@ -10,7 +10,8 @@ import {
 } from "@/lib/falood/resumeDocumentAdapters";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
-import { updateApplicationResumeVersion } from "@/server/repositories/applicationResumeVersionsRepository";
+import { measureResumePageFitMetrics } from "@/lib/falood/resumePageFitMeasurement";
+import { studioPageFit } from "@/lib/falood/studioPageFit";
 
 export const runtime = "nodejs";
 
@@ -216,13 +217,57 @@ export async function PATCH(req: NextRequest) {
 
     updates.push(`updated_at = NOW()`);
 
-    const row = await queryOne<any>(
-      `UPDATE falood_saved_applications
+    const linked = "resumeData" in body ? await queryOne<{ id: string; content: unknown }>(
+      `SELECT rv.id, rv.content
+       FROM falood_saved_applications s
+       JOIN application_resume_versions rv ON rv.id = CASE
+         WHEN trim(s.name) ~* '^application_resume_version:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+         THEN split_part(trim(s.name), ':', 2)::uuid END
+       WHERE s.id = $1`,
+      [id]
+    ) : null;
+    const studioUpdate = `UPDATE falood_saved_applications
        SET ${updates.join(", ")}
        WHERE id = $${values.length + 1}
-       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt", name`,
-      [...values, id]
-    );
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt", name`;
+    values.push(id);
+    let row: { id: string; createdAt: string; updatedAt: string; name: string | null; resumeVersionId?: string } | null;
+
+    if (linked) {
+      const merged = mergeResumifyEditorIntoBaseResume(safeParseJson(linked.content), body.resumeData);
+      // Preserve the server fallback for older clients. If Studio explicitly
+      // reports that its layout is unavailable, clear the previous badge.
+      const metrics = "pageUtilizations" in body
+        ? studioPageFit(body.resumeData, body.pageUtilizations)
+        : measureResumePageFitMetrics(merged) ?? null;
+      const score = typeof metrics?.contentUtilization === "number"
+        ? Math.round(metrics.contentUtilization * 1000) / 10 : null;
+      const editor = await getCurrentUserContext().catch(() => null);
+      const first = values.length + 1;
+      // Both copies and the badge commit together. A failed sync rolls back
+      // the draft write too, so Save can be retried without reporting success.
+      row = await queryOne(
+        `WITH saved AS (${studioUpdate}), synced AS (
+           UPDATE application_resume_versions rv
+              SET content = $${first}::jsonb,
+                  page_fit_metrics = $${first + 1}::jsonb,
+                  one_page_fit_score = $${first + 2},
+                  updated_by_user_id = $${first + 3},
+                  updated_source = $${first + 4},
+                  updated_at = NOW()
+             FROM saved
+            WHERE rv.id = $${first + 5}
+              AND lower(trim(saved.name)) = 'application_resume_version:' || rv.id::text
+           RETURNING rv.id
+         )
+         SELECT saved.*, synced.id AS "resumeVersionId" FROM saved LEFT JOIN synced ON TRUE`,
+        [...values, JSON.stringify(merged), metrics && JSON.stringify(metrics), score,
+          editor?.profile.user_id ?? null,
+          editor ? "human_falood_studio_save" : "falood_studio_save_unattributed", linked.id],
+      );
+    } else {
+      row = await queryOne(studioUpdate, values);
+    }
 
     if (!row) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
@@ -244,8 +289,6 @@ export async function PATCH(req: NextRequest) {
     if ("resumeData" in body && typeof row.name === "string") {
       const trimmedName = row.name.trim();
       const baseResumeMatch = /^base_resume:([0-9a-f-]{36})$/i.exec(trimmedName);
-      const applicationResumeMatch = /^application_resume_version:([0-9a-f-]{36})$/i.exec(trimmedName);
-
       if (baseResumeMatch) {
         const baseResumeId = baseResumeMatch[1];
 
@@ -277,56 +320,12 @@ export async function PATCH(req: NextRequest) {
             }
           })()
         );
-      } else if (applicationResumeMatch) {
-        const resumeVersionId = applicationResumeMatch[1];
-        // Falood Studio supports anonymous saved sessions, so keep this lookup
-        // optional. When the request has a valid TalentOS session, capture the
-        // signed-in editor; never accept an actor ID from the client payload.
-        const editorContext = await getCurrentUserContext().catch(() => null);
-
-        // Tailor Studio ("Open in Studio" from the Application Queue) edits
-        // this bridge row, not application_resume_versions directly - without
-        // this sync, nothing an AE does here ever reaches the record the
-        // Queue actually reads from, so a resume fixed down to one page here
-        // kept showing its original (now stale) page count there forever.
-        // Mirrors the base_resume sync above: best-effort, non-blocking,
-        // never fails the Tailor Studio's own save. updateApplicationResumeVersion
-        // re-measures page_fit_metrics itself whenever content changes (see
-        // resumePageFitMeasurement.ts), so this one write keeps both the
-        // content and the Queue's page-fit badge in sync.
-        await backgroundDispatch(
-          (async () => {
-            try {
-              const existingRow = await queryOne<{ content: any }>(
-                "SELECT content FROM application_resume_versions WHERE id = $1",
-                [resumeVersionId]
-              );
-              if (!existingRow) return;
-
-              const existingContent = safeParseJson(existingRow.content);
-              const mergedContent = mergeResumifyEditorIntoBaseResume(
-                existingContent,
-                body.resumeData,
-              );
-              await updateApplicationResumeVersion(resumeVersionId, {
-                content: mergedContent,
-                updated_by_user_id: editorContext?.profile.user_id ?? null,
-                updated_source: editorContext ? "human_falood_studio_save" : "falood_studio_save_unattributed",
-              });
-            } catch (syncErr: any) {
-              console.error(
-                "[Falood Applications PATCH] Application resume version sync failed (non-critical):",
-                syncErr?.message || syncErr
-              );
-            }
-          })()
-        );
       }
     }
 
     return NextResponse.json({
       success: true,
-      data: { id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt },
+      data: { id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt, resumeVersionId: row.resumeVersionId },
     });
   } catch (e: any) {
     console.error("[Falood Applications PATCH]", e);
