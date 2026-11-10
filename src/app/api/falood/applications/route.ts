@@ -73,6 +73,29 @@ async function resolveArchiveContext(name: unknown) {
   return applicationId ? { applicationId, resumeVersionId } : null;
 }
 
+async function resolveJobLocation(name: unknown): Promise<{ enabled: boolean; location: string | null; issue: string | null }> {
+  if (typeof name !== "string") return { enabled: false, location: null, issue: null };
+  const match = /^application_resume_version:([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.exec(name.trim());
+  if (!match) return { enabled: false, location: null, issue: null };
+
+  const row = await queryOne<{ linked_job_id: string | null; job_id: string | null; location: string | null }>(
+    `SELECT COALESCE(arv.job_id, a.job_id, tj.job_id) AS linked_job_id,
+            j.id AS job_id,
+            NULLIF(BTRIM(j.location), '') AS location
+       FROM application_resume_versions arv
+       LEFT JOIN applications a ON a.id = arv.application_id
+       LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id
+       LEFT JOIN jobs j ON j.id = COALESCE(arv.job_id, a.job_id, tj.job_id)
+      WHERE arv.id = $1`,
+    [match[1]]
+  );
+  if (!row) return { enabled: true, location: null, issue: "Resume Studio couldn't find the linked TalentOS job record. No changes were made." };
+  if (!row.linked_job_id) return { enabled: true, location: null, issue: "This resume isn't linked to a TalentOS job, so there is no job location to apply." };
+  if (!row.job_id) return { enabled: true, location: null, issue: "TalentOS couldn't find the job record linked to this resume. No changes were made." };
+  if (!row.location) return { enabled: true, location: null, issue: "This TalentOS job has no saved location. Add a location to the job record, then reload Resume Studio." };
+  return { enabled: true, location: row.location.trim(), issue: null };
+}
+
 // GET — list all, or get one by ?id=
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
@@ -92,6 +115,17 @@ export async function GET(req: NextRequest) {
       }
       const data = normalizeRow(row);
       data.archiveContext = await resolveArchiveContext(row.name);
+      try {
+        const jobLocation = await resolveJobLocation(row.name);
+        data.jobLocation = jobLocation.location;
+        data.jobLocationSyncEnabled = jobLocation.enabled;
+        data.jobLocationLookupError = jobLocation.issue;
+      } catch (error) {
+        console.error("[Falood Applications GET] Failed to load linked job location", error);
+        data.jobLocation = null;
+        data.jobLocationSyncEnabled = typeof row.name === "string" && /^application_resume_version:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(row.name.trim());
+        data.jobLocationLookupError = "TalentOS could not load the saved location for this job. Refresh Resume Studio and try again.";
+      }
       return NextResponse.json({ success: true, data });
     }
 

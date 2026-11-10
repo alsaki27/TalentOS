@@ -13,15 +13,33 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface ResumeFormProps {
   activePanel: 'form' | 'customize' | 'settings';
+  jobLocation?: string | null;
+  jobLocationSyncEnabled?: boolean;
+  jobLocationLookupError?: string | null;
+  resolveJobLocation?: () => Promise<string>;
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
 }
 
-export const ResumeForm: React.FC<ResumeFormProps> = ({ activePanel }) => {
+export const ResumeForm: React.FC<ResumeFormProps> = ({
+  activePanel,
+  jobLocation,
+  jobLocationSyncEnabled = false,
+  jobLocationLookupError,
+  resolveJobLocation,
+  saveStatus,
+}) => {
   const renderPanel = () => {
     switch (activePanel) {
       case 'form':
         return (
           <div className="space-y-6 p-6">
-            <PersonalInfoForm />
+            <PersonalInfoForm
+              jobLocation={jobLocation}
+              jobLocationSyncEnabled={jobLocationSyncEnabled}
+              jobLocationLookupError={jobLocationLookupError}
+              resolveJobLocation={resolveJobLocation}
+              saveStatus={saveStatus}
+            />
             <SummaryForm />
             <ExperienceForm />
             <ProjectsForm />

@@ -41,11 +41,26 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
+    const [jobLocation, setJobLocation] = useState<string | null>(null);
+    const [jobLocationSyncEnabled, setJobLocationSyncEnabled] = useState(false);
+    const [jobLocationLookupError, setJobLocationLookupError] = useState<string | null>(null);
     const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
     const layoutRef = useRef<{ resumeData: ResumeData; pageUtilizations: number[] | null } | null>(null);
     const recordPageLayout = useCallback((resumeData: ResumeData, pageUtilizations: number[] | null) => {
         layoutRef.current = { resumeData, pageUtilizations };
     }, []);
+
+    const resolveJobLocation = useCallback(async () => {
+        const res = await fetch(`/api/falood/applications/${encodeURIComponent(applicationId)}/job-location`, { method: 'POST' });
+        const json = await res.json().catch(() => ({}));
+        const location = typeof json?.data?.location === 'string' ? json.data.location.trim() : '';
+        if (!res.ok || !json?.success || !location) {
+            throw new Error(typeof json?.error === 'string' ? json.error : 'TalentOS could not verify a location from the job links. No resume changes were made.');
+        }
+        setJobLocation(location);
+        setJobLocationLookupError(null);
+        return location;
+    }, [applicationId]);
 
     const pageUtilizationsFor = (resumeData: ResumeData) => {
         const layout = layoutRef.current;
@@ -108,6 +123,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const load = useCallback(async () => {
                 setIsLoading(true);
                 setLoadError(null);
+                setJobLocation(null);
+                setJobLocationSyncEnabled(false);
+                setJobLocationLookupError(null);
             try {
                 const res = await fetch(`/api/falood/applications?id=${applicationId}`);
                 const json = await res.json();
@@ -134,6 +152,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                         ? json.data.chatHistory.find((m: any) => m?.id === 'meta-candidate')?.candidateId
                         : null;
                     setCandidateId(json.data.candidateId || legacyCandidateId || null);
+                    setJobLocation(typeof json.data.jobLocation === 'string' ? json.data.jobLocation : null);
+                    setJobLocationSyncEnabled(json.data.jobLocationSyncEnabled === true);
+                    setJobLocationLookupError(typeof json.data.jobLocationLookupError === 'string' ? json.data.jobLocationLookupError : null);
                     setArchiveContext(json.data.archiveContext || null);
 
                     // Pre-seed the chat with a system message about the job
@@ -434,7 +455,14 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                                 </div>
                             </div>
                             <div style={{ flex: 1, overflow: 'hidden' }}>
-                                <ResumeForm activePanel={activePanel} />
+                                <ResumeForm
+                                    activePanel={activePanel}
+                                    jobLocation={jobLocation}
+                                    jobLocationSyncEnabled={jobLocationSyncEnabled}
+                                    jobLocationLookupError={jobLocationLookupError}
+                                    resolveJobLocation={resolveJobLocation}
+                                    saveStatus={studio.saveStatus}
+                                />
                             </div>
                         </div>
                     )}

@@ -1,17 +1,110 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Upload, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Loader2, MapPin, Upload, X } from 'lucide-react';
 
-export const PersonalInfoForm: React.FC = () => {
+type LocationNotice = { kind: 'success' | 'error'; message: string } | null;
+
+interface PersonalInfoFormProps {
+  jobLocation?: string | null;
+  jobLocationSyncEnabled?: boolean;
+  jobLocationLookupError?: string | null;
+  resolveJobLocation?: () => Promise<string>;
+  saveStatus?: 'idle' | 'saving' | 'saved' | 'error';
+}
+
+export const PersonalInfoForm: React.FC<PersonalInfoFormProps> = ({
+  jobLocation,
+  jobLocationSyncEnabled = false,
+  jobLocationLookupError,
+  resolveJobLocation,
+  saveStatus,
+}) => {
   const { state, updatePersonalInfo } = useResume();
   const { personalInfo } = state.resumeData;
+  const [locationNotice, setLocationNotice] = useState<LocationNotice>(null);
+  const [waitingForLocationSave, setWaitingForLocationSave] = useState(false);
+  const [isResolvingJobLocation, setIsResolvingJobLocation] = useState(false);
+  const locationSaveStarted = useRef(false);
+  const waitForNextSaveAfterCurrent = useRef(false);
+
+  useEffect(() => {
+    if (!waitingForLocationSave) return;
+    if (waitForNextSaveAfterCurrent.current) {
+      if (saveStatus !== 'saving') waitForNextSaveAfterCurrent.current = false;
+      return;
+    }
+    if (saveStatus === 'saving') {
+      locationSaveStarted.current = true;
+      setLocationNotice({ kind: 'success', message: 'Job location applied. Saving the resume…' });
+    } else if (locationSaveStarted.current && saveStatus === 'saved') {
+      setLocationNotice({ kind: 'success', message: 'Job location applied and saved.' });
+      setWaitingForLocationSave(false);
+      locationSaveStarted.current = false;
+    } else if (locationSaveStarted.current && saveStatus === 'error') {
+      setLocationNotice({ kind: 'error', message: 'The location changed in the editor, but autosave failed. Use Save to retry.' });
+      setWaitingForLocationSave(false);
+      locationSaveStarted.current = false;
+    }
+  }, [saveStatus, waitingForLocationSave]);
 
   const handleInputChange = (field: keyof typeof personalInfo, value: string) => {
+    if (field === 'location') {
+      setLocationNotice(null);
+      setWaitingForLocationSave(false);
+      locationSaveStarted.current = false;
+      waitForNextSaveAfterCurrent.current = false;
+    }
     updatePersonalInfo({ [field]: value });
+  };
+
+  const applyJobLocation = (location: string) => {
+    const exactJobLocation = location.trim();
+    if (!exactJobLocation) {
+      setLocationNotice({ kind: 'error', message: 'TalentOS returned an empty location. No resume changes were made.' });
+      return;
+    }
+    if (personalInfo.location.trim() === exactJobLocation) {
+      setLocationNotice({ kind: 'success', message: 'The resume location already matches the job location.' });
+      return;
+    }
+
+    locationSaveStarted.current = false;
+    waitForNextSaveAfterCurrent.current = saveStatus === 'saving';
+    setWaitingForLocationSave(true);
+    setLocationNotice({ kind: 'success', message: 'Job location applied. Saving the resume…' });
+    updatePersonalInfo({ location: exactJobLocation });
+  };
+
+  const handleUseJobLocation = async () => {
+    const existingJobLocation = jobLocation?.trim();
+    if (existingJobLocation) {
+      applyJobLocation(existingJobLocation);
+      return;
+    }
+    if (!resolveJobLocation) {
+      setLocationNotice({
+        kind: 'error',
+        message: jobLocationLookupError || 'This TalentOS job has no saved location, and its posting links could not be checked here.',
+      });
+      return;
+    }
+
+    setIsResolvingJobLocation(true);
+    setLocationNotice({ kind: 'success', message: 'Checking the saved posting and apply links for an explicit location…' });
+    try {
+      applyJobLocation(await resolveJobLocation());
+    } catch (error) {
+      setLocationNotice({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'TalentOS could not verify a location from the job links. No resume changes were made.',
+      });
+    } finally {
+      setIsResolvingJobLocation(false);
+    }
   };
 
   const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -72,13 +165,42 @@ export const PersonalInfoForm: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="location">Location *</Label>
+            <div className="flex min-h-7 items-center justify-between gap-2">
+              <Label htmlFor="location">Location *</Label>
+              {jobLocationSyncEnabled && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 shrink-0 gap-1 px-2 text-xs"
+                  onClick={handleUseJobLocation}
+                  disabled={isResolvingJobLocation}
+                  aria-label="Use the location saved for this TalentOS job"
+                >
+                  {isResolvingJobLocation
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <MapPin className="h-3.5 w-3.5" />}
+                  {isResolvingJobLocation ? 'Checking links…' : 'Use job location'}
+                </Button>
+              )}
+            </div>
             <Input
               id="location"
               placeholder="New York, NY"
               value={personalInfo.location}
               onChange={(e) => handleInputChange('location', e.target.value)}
             />
+            {locationNotice && (
+              <p
+                role={locationNotice.kind === 'error' ? 'alert' : 'status'}
+                className={`flex items-start gap-1.5 text-xs ${locationNotice.kind === 'error' ? 'text-destructive' : 'text-emerald-600'}`}
+              >
+                {locationNotice.kind === 'error'
+                  ? <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  : <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+                <span>{locationNotice.message}</span>
+              </p>
+            )}
           </div>
         </div>
 
