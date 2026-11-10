@@ -7,6 +7,7 @@ export interface AuthProfileRow {
   email: string;
   display_name: string;
   role: UserRole;
+  role_variant?: string | null;
   is_active: boolean;
   password_hash: string | null;
 }
@@ -22,10 +23,15 @@ export async function findProfileByEmail(email: string) {
     email: string;
     display_name: string;
     role: string;
+    role_variant?: string | null;
     is_active: boolean;
     password_hash: string | null;
   }>(
-    "SELECT user_id, email, display_name, role, is_active, password_hash FROM profiles WHERE LOWER(email) = $1",
+    `SELECT p.user_id, p.email, p.display_name, p.role,
+            to_jsonb(p)->>'role_variant' AS role_variant,
+            p.is_active, p.password_hash
+       FROM profiles p
+      WHERE LOWER(p.email) = $1`,
     [email.toLowerCase()]
   );
 
