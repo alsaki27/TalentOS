@@ -19,13 +19,16 @@ describe("auth profile schema compatibility", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.cookieValue = "test-token";
-    mocks.queryOne.mockResolvedValue({
-      user_id: "admin-id",
-      email: "admin@talentos.local",
-      display_name: "Admin",
-      role: "admin",
-      is_active: true,
-      password_hash: "hash",
+    mocks.queryOne.mockImplementation(async (sql: string) => {
+      if (!/\bFROM\s+profiles(?:\s+p)?\s+WHERE\b/i.test(sql)) return null;
+      return {
+        user_id: "admin-id",
+        email: "admin@talentos.local",
+        display_name: "Admin",
+        role: "admin",
+        is_active: true,
+        password_hash: "hash",
+      };
     });
     mocks.verifyJWT.mockResolvedValue({ user_id: "admin-id", email: "admin@talentos.local" });
   });

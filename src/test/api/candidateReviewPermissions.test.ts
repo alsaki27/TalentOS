@@ -42,7 +42,7 @@ describe("Review Queue permissions for admin, manager and Application Engineer",
     vi.resetAllMocks();role="application_engineer";active=true;
     mocks.cookie.mockReturnValue({value:"fixture-session"});mocks.jwt.mockResolvedValue({user_id:actor,email:"staff@example.test"});
     mocks.queryOne.mockImplementation(async(sql:string)=>{
-      if(sql.includes("FROM profiles WHERE"))return {user_id:actor,role,is_active:active,display_name:"Fixture staff",email:"staff@example.test"};
+      if(/\bFROM\s+profiles(?:\s+p)?\s+WHERE\b/i.test(sql))return {user_id:actor,role,is_active:active,display_name:"Fixture staff",email:"staff@example.test"};
       if(sql.includes("SELECT source FROM candidate_job_review_queue"))return {source:"extension"};
       if(sql.includes("COUNT(*)::int AS count FROM candidate_job_review_queue"))return {count:7};
       if(sql.includes("pending_approvals"))return {pending_approvals:0,needs_reply:0};
