@@ -34,6 +34,7 @@ export async function POST(
         error: result.reason,
         workflowId: existing?.id,
         status: existing?.status,
+        currentStage: existing?.current_stage,
       }, { status: 409 });
     }
     if (result.reason === "Application not found") {

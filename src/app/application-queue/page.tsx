@@ -100,6 +100,14 @@ interface QueueStats {
   failed: number;
 }
 
+interface LiveQueueWorkflow {
+  id: string;
+  application_id: string;
+  status: string;
+  current_stage: number;
+  match_score: number | null;
+}
+
 type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow" | "failed";
 
 const STATUS_ICONS: Record<string, string> = {
@@ -530,7 +538,7 @@ export default function ApplicationQueuePage() {
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
-  // active-workflows list and patch matching rows in place by workflow_id.
+  // latest workflows and patch matching rows in place by application ID.
   // This is also what nudges genuinely stuck workflows forward — see
   // /api/application-ai-workflows/active's own opportunistic-dispatch
   // comment: a burst of tickets created together can sit at
@@ -541,7 +549,13 @@ export default function ApplicationQueuePage() {
   // page open becomes a much faster safety net than the cron gap.
 
   useEffect(() => {
+    let polling = false;
+    let stopped = false;
     const interval = setInterval(async () => {
+      if (polling) return;
+      polling = true;
+      const visibleRows = new Map(itemsRef.current.map((item) => [item.id, item]));
+      const loadId = loadRequestRef.current;
       // Previously gated on itemsRef already showing an active
       // workflow_status before even asking the server - a stale/incomplete
       // initial snapshot (e.g. applications created via a different flow,
@@ -549,9 +563,10 @@ export default function ApplicationQueuePage() {
       // the poller silently never checked at all. Always poll instead; the
       // request is cheap and this is what actually finds newly-queued work.
       try {
-        const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
+        const res = await fetch("/api/application-ai-workflows/active?view=application-queue", { cache: "no-store" });
         if (!res.ok) return;
-        const data = await res.json();
+        const data: { workflows?: LiveQueueWorkflow[]; needsDispatch?: boolean } = await res.json();
+        if (stopped || loadId !== loadRequestRef.current) return;
 
         // Server-side self-dispatch (the Worker fetching its own URL from
         // within this same GET request) is unreliable in production -
@@ -563,36 +578,32 @@ export default function ApplicationQueuePage() {
           fetch("/api/application-ai-workflows/dispatch", { method: "POST" }).catch(() => {});
         }
 
-        const byWorkflowId = new Map((data.workflows ?? []).map((w: any) => [w.id, w]));
+        const byApplicationId = new Map((data.workflows ?? []).map((workflow) => [workflow.application_id, workflow]));
+        const needsAppRefresh: LiveQueueWorkflow[] = [];
+        for (const [id, item] of visibleRows) {
+          const workflow = byApplicationId.get(id);
+          if (!workflow) continue;
+          const wasActive = item.workflow_status === "queued" || item.workflow_status === "running";
+          const terminal = ["completed", "failed", "cancelled"].includes(workflow.status);
+          // Retry reading completion data if the resume link has yet to arrive.
+          const missingCompletionData = workflow.status === "completed" &&
+            (item.workflow_id !== workflow.id || item.resume_generation_status !== "ready" || !item.workflow_resume_version_id);
+          if ((wasActive && terminal) || missingCompletionData) needsAppRefresh.push(workflow);
+        }
 
-        const needsAppRefresh: QueueItem[] = [];
         setItems((prev) =>
           prev.map((item) => {
-            if (!item.workflow_id) return item;
-            const wf: any = byWorkflowId.get(item.workflow_id);
-            if (!wf) return item;
-            const wasActive = item.workflow_status === "queued" || item.workflow_status === "running";
-            const nowTerminal = wf.status === "completed" || wf.status === "failed" || wf.status === "cancelled";
-            const justTransitionedToTerminal = wasActive && nowTerminal;
-            // "completed" specifically also needs a retry-until-it-lands check
-            // on every tick, not just the transition tick: the one-shot fetch
-            // below has no retry, and PipelineActions has a "Completed" badge
-            // fallback (meant only for the genuinely-shouldn't-happen case of
-            // a finished workflow with no resume at all) that silently becomes
-            // the resting state - no "Open in Studio", no "Regenerate" button -
-            // whenever resume_generation_status/workflow_resume_version_id
-            // haven't landed yet. Confirmed live: a card can sit stuck on the
-            // bare "Completed" badge indefinitely until a manual page reload
-            // if that one fetch attempt fails silently (network blip, etc.).
-            // Re-checking every tick self-heals instead of giving up after one try.
-            const stillMissingCompletionData =
-              wf.status === "completed" && (item.resume_generation_status !== "ready" || !item.workflow_resume_version_id);
-            if (justTransitionedToTerminal || stillMissingCompletionData) needsAppRefresh.push(item);
+            const wf = byApplicationId.get(item.id);
+            const before = visibleRows.get(item.id);
+            // A workflow action may have updated the row while the poll was in flight.
+            if (!wf || !before || before.workflow_id !== item.workflow_id ||
+                before.workflow_status !== item.workflow_status || before.workflow_stage !== item.workflow_stage) return item;
             return {
               ...item,
+              workflow_id: wf.id,
               workflow_status: wf.status,
               workflow_stage: wf.current_stage,
-              workflow_score: wf.match_score ?? item.workflow_score,
+              workflow_score: wf.match_score ?? (item.workflow_id === wf.id ? item.workflow_score : null),
             };
           })
         );
@@ -602,14 +613,14 @@ export default function ApplicationQueuePage() {
         // re-read (resume_generation_status, tailored_resume_version_id, proof
         // fields aren't on the active-workflows list) - fetched per-row so
         // only that card updates, not the whole grid.
-        for (const item of needsAppRefresh) {
-          fetch(`/api/applications/${item.id}`, { cache: "no-store" })
+        for (const workflow of needsAppRefresh) {
+          fetch(`/api/applications/${workflow.application_id}`, { cache: "no-store" })
             .then((r) => (r.ok ? r.json() : null))
             .then((fresh) => {
-              if (!fresh) return;
+              if (!fresh || stopped || loadId !== loadRequestRef.current) return;
               setItems((prev) =>
                 prev.map((it) =>
-                  it.id === item.id
+                  it.id === workflow.application_id && it.workflow_id === workflow.id && it.workflow_status === workflow.status
                     ? {
                         ...it,
                         resume_generation_status: fresh.resume_generation_status,
@@ -624,10 +635,15 @@ export default function ApplicationQueuePage() {
             })
             .catch(() => {});
         }
-      } catch {}
+      } catch {} finally {
+        polling = false;
+      }
     }, 6000);
 
-    return () => clearInterval(interval);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
   }, []);
 
   // Refresh immediately after a save in another tab. Polling also covers
@@ -829,13 +845,21 @@ export default function ApplicationQueuePage() {
       const res = await fetch(`/api/applications/${item.id}/ai-workflow`, { method: "POST", credentials: "include" });
       if (!res.ok) {
         const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        if (res.status === 409 && typeof d.workflowId === "string" && ["queued", "running", "waiting"].includes(d.status)) {
+          setItems((rows) => rows.map((row) =>
+            row.id === item.id && row.workflow_id === item.workflow_id && row.workflow_status === item.workflow_status
+              ? { ...row, workflow_id: d.workflowId, workflow_status: d.status, workflow_stage: d.currentStage ?? null }
+              : row
+          ));
+          return;
+        }
         setFeedback({ kind: "error", text: d.error || "Workflow start failed." });
         return;
       }
       const data = await res.json();
       // Patch in place rather than reloading: seeds workflow_id/status
       // immediately so the row shows "Queued" right away, and so the
-      // existing 6s active-workflows poller (which patches by workflow_id)
+      // existing 6s active-workflows poller
       // picks this row up on its very next tick without a full refetch.
       patchItemLocally(item.id, {
         workflow_id: data.workflowId,
@@ -2047,6 +2071,27 @@ function PipelineActions({
   const wfStatus = item.workflow_status;
   const formattedWorkflowScore = formatScoreOutOfTen(item.workflow_score);
 
+  // The current workflow controls the row while generation is active.
+  if (wfStatus === "queued" || wfStatus === "running") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, transition: "opacity 0.2s ease" }}>
+        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"} pipeline-live-badge`}>
+          <span className={`pipeline-live-dot ${wfStatus === "running" ? "pipeline-live-dot-running" : ""}`} />
+          {wfStatus === "running" ? "Running" : "Queued"}
+        </span>
+        {item.workflow_stage !== null && item.workflow_stage !== undefined && (
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{workflowStageLabel(item.workflow_stage)}</span>
+        )}
+        {item.workflow_id && (
+          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+            {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+          </button>
+        )}
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+      </div>
+    );
+  }
+
   // Ready — show the tailored resume link. Gated on the real resume link
   // itself, not only resume_generation_status: an application can carry
   // more than one application_ai_workflows row over time (retries,
@@ -2084,7 +2129,7 @@ function PipelineActions({
   }
 
   // Failed
-  if (genStatus === "failed" || wfStatus === "failed") {
+  if (wfStatus === "failed" || (!wfStatus && genStatus === "failed")) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-danger">❌ Failed</span>
@@ -2137,28 +2182,6 @@ function PipelineActions({
             <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
           </>
         )}
-      </div>
-    );
-  }
-
-  // Active (queued or running) — live pulse so a page left open visibly
-  // shows progress instead of looking frozen while polling updates it.
-  if (wfStatus === "queued" || wfStatus === "running") {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, transition: "opacity 0.2s ease" }}>
-        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"} pipeline-live-badge`}>
-          <span className={`pipeline-live-dot ${wfStatus === "running" ? "pipeline-live-dot-running" : ""}`} />
-          {wfStatus === "running" ? "Running" : "Queued"}
-        </span>
-        {item.workflow_stage !== null && item.workflow_stage !== undefined && (
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{workflowStageLabel(item.workflow_stage)}</span>
-        )}
-        {item.workflow_id && (
-          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-            {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
-          </button>
-        )}
-        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }

@@ -23,8 +23,10 @@ export async function GET(request: NextRequest) {
   if (response) return response;
 
   try {
-    const requestedDays = Number.parseInt(new URL(request.url).searchParams.get("days") ?? "3", 10);
+    const params = new URL(request.url).searchParams;
+    const requestedDays = Number.parseInt(params.get("days") ?? "3", 10);
     const days = Number.isFinite(requestedDays) ? Math.min(7, Math.max(1, requestedDays)) : 3;
+    const queueView = params.get("view") === "application-queue";
 
     const rows = await neonQuery<any>(
       `SELECT w.id, w.status, w.current_stage, w.last_error, w.updated_at, w.match_score, w.match_reason,
@@ -45,6 +47,14 @@ export async function GET(request: NextRequest) {
          ORDER BY created_at DESC LIMIT 1
        ) hp ON true
        WHERE w.updated_at >= NOW() - ($1::int * INTERVAL '1 day')
+       ${queueView ? `
+         AND w.status IN ('queued','running','waiting','completed','failed')
+         AND NOT EXISTS (
+           SELECT 1 FROM application_ai_workflows newer
+           WHERE newer.application_id = w.application_id
+             AND newer.status IN ('queued','running','waiting','completed','failed')
+             AND (newer.created_at, newer.id) > (w.created_at, w.id)
+         )` : ""}
        ORDER BY w.updated_at DESC`,
       [days]
     );
