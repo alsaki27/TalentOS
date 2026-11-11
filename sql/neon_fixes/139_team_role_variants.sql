@@ -1,4 +1,4 @@
--- 137: Preserve staff sub-role labels independently from their current
+-- 139: Preserve staff sub-role labels independently from their current
 -- permission profile. Existing profiles keep their current role and access.
 BEGIN;
 
