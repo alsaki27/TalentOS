@@ -264,18 +264,21 @@ export function renderTeamActivityEmail(options: {
       { label: "Reviews", value: group.applications_reviewed, color: "#156082" },
     ].map(({ label, value, color }) => {
       const width = Math.min(100, Math.max(0, (value / scale) * 100));
+      const trackCells = width === 0
+        ? `<td class="chart-track-empty" width="100%" bgcolor="#e7edf3" style="height:10px;background:#e7edf3;border-radius:5px;"></td>`
+        : `<td class="chart-track-value" width="${width}%" bgcolor="${color}" style="height:10px;background:${color};border-radius:5px 0 0 5px;"></td><td class="chart-track-rest" style="height:10px;"></td>`;
       return `<tr>
-        <td style="width:13%;padding:4px 5px;border-bottom:1px solid #eef1f5;font:10px Arial,sans-serif;color:#52647d;">${label}</td>
-        <td style="width:74%;padding:4px 5px;border-bottom:1px solid #eef1f5;">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#e7edf3" style="height:10px;border-radius:5px;"><tr><td width="${width}%" bgcolor="${color}" style="height:10px;background:${color};border-radius:5px;"></td><td></td></tr></table>
+        <td class="chart-measure-label" style="width:13%;padding:4px 5px;border-bottom:1px solid #eef1f5;font:10px Arial,sans-serif;color:#52647d;">${label}</td>
+        <td class="chart-track-cell" style="width:74%;padding:4px 5px;border-bottom:1px solid #eef1f5;">
+          <table class="chart-track" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#e7edf3" style="width:100%;height:10px;table-layout:fixed;border-radius:5px;"><tr>${trackCells}</tr></table>
         </td>
-        <td align="right" style="width:13%;padding:4px 4px 4px 2px;border-bottom:1px solid #eef1f5;font:700 11px Arial,sans-serif;color:#17243c;">${number(value)}</td>
+        <td class="chart-measure-value" align="right" style="width:13%;padding:4px 4px 4px 2px;border-bottom:1px solid #eef1f5;font:700 11px Arial,sans-serif;color:#17243c;">${number(value)}</td>
       </tr>`;
     }).join("");
-    return `<tr><td style="padding:6px 4px;border-bottom:1px solid #dfe6ed;vertical-align:middle;">
-      <div style="font:700 12px/1.35 Arial,sans-serif;color:#17243c;">${escapeHtml(reviewerName)}</div>
-      <div style="padding-top:2px;font:10px/1.35 Arial,sans-serif;color:#52647d;">${escapeHtml(grunterLabel)}</div>
-    </td><td style="padding:0;border-bottom:1px solid #dfe6ed;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${bars}</table></td></tr>`;
+    return `<tr><td class="chart-member" style="width:32%;padding:6px 4px;border-bottom:1px solid #dfe6ed;vertical-align:middle;">
+      <div class="chart-member-name" style="font:700 12px/1.35 Arial,sans-serif;color:#17243c;overflow-wrap:anywhere;">${escapeHtml(reviewerName)}</div>
+      <div class="chart-grunter-names" style="padding-top:2px;font:10px/1.35 Arial,sans-serif;color:#52647d;overflow-wrap:anywhere;">${escapeHtml(grunterLabel)}</div>
+    </td><td class="chart-metrics" style="width:68%;padding:0;border-bottom:1px solid #dfe6ed;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${bars}</table></td></tr>`;
   }).join("");
 
   const totalCells = actionDefinitions.map(({ key, label }) => `
@@ -284,26 +287,43 @@ export function renderTeamActivityEmail(options: {
         <div style="margin-top:5px;font:700 21px/1 Arial,sans-serif;color:#ffffff;">${number(totals[key])}</div>
       </td>`).join("");
 
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <style type="text/css">
+    @media only screen and (max-width:600px) {
+      .email-gutter { padding:8px !important; }
+      .email-shell { width:100% !important; max-width:100% !important; }
+      .email-section { padding-left:10px !important; padding-right:10px !important; }
+      .report-table th { padding:7px 3px !important; font-size:9px !important; }
+      .report-table td { padding:7px 3px !important; font-size:10px !important; }
+      .chart-member, .chart-metrics { display:block !important; width:100% !important; max-width:100% !important; box-sizing:border-box !important; }
+      .chart-member { padding:9px 8px 3px !important; border-bottom:0 !important; }
+      .chart-metrics { padding:0 6px 8px !important; }
+      .chart-member-name { font-size:13px !important; }
+      .chart-grunter-names { font-size:11px !important; }
+      .chart-measure-label { width:15% !important; }
+      .chart-track-cell { width:73% !important; }
+      .chart-measure-value { width:12% !important; }
+    }
+  </style></head>
 <body style="margin:0;padding:0;background:#f2f4f8;color:#17213b;font-family:Arial,Helvetica,sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f2f4f8;"><tr><td align="center" style="padding:24px 12px;">
-    <table role="presentation" width="980" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:980px;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f2f4f8;"><tr><td class="email-gutter" align="center" style="padding:24px 12px;">
+    <table class="email-shell" role="presentation" width="980" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:980px;">
       <tr><td style="padding:20px 22px;background:#f7f8fc;border:1px solid #e4e8f0;border-bottom:0;border-radius:14px 14px 0 0;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
           <td width="52" valign="middle"><img src="https://www.skarion.com/logo.svg" width="40" height="32" alt="Skarion" style="display:block;border:0;outline:none;text-decoration:none;"></td>
           <td valign="middle"><div style="font:700 16px/1.1 Arial,sans-serif;letter-spacing:1.4px;color:${brandBlue};">SKARION</div><div style="margin-top:5px;font:12px/1.2 Arial,sans-serif;color:#58647c;">TalentOS · Team operations</div></td>
         </tr></table>
       </td></tr>
-      <tr><td style="padding:24px 22px 20px;background:#ffffff;">
+      <tr><td class="email-section" style="padding:24px 22px 20px;background:#ffffff;">
         <div style="font:700 23px/1.25 Arial,sans-serif;color:#17213b;">${title}</div>
         <div style="margin-top:7px;font:14px/1.5 Arial,sans-serif;color:#65708a;">${description}</div>
         <div style="margin-top:12px;display:inline-block;padding:7px 10px;border-radius:6px;background:#eef5ff;font:600 12px/1.4 Arial,sans-serif;color:${brandBlue};">${escapeHtml(window.label)}</div>
       </td></tr>
-      <tr><td style="padding:0 18px 16px;background:#ffffff;">
+      <tr><td class="email-section" style="padding:0 18px 16px;background:#ffffff;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:${brandBlue};border-radius:10px;"><tr>${totalCells}</tr></table>
       </td></tr>
       <tr><td style="padding:4px 22px 10px;background:#ffffff;font:700 14px/1.4 Arial,sans-serif;color:#17213b;">Application Engineer activity</td></tr>
-      <tr><td style="padding:0 18px 18px;background:#ffffff;">
+      <tr><td class="email-section" style="padding:0 18px 18px;background:#ffffff;">
         <table class="report-table" role="table" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;table-layout:fixed;border:1px solid #dce3ec;border-collapse:collapse;">
           <thead><tr style="background:#16275f;color:#ffffff;">
             <th align="left" style="width:19%;padding:10px 8px;font:700 11px/1.3 Arial,sans-serif;">Reviewer</th>
@@ -316,7 +336,7 @@ export function renderTeamActivityEmail(options: {
           <tbody>${tableRows || `<tr><td colspan="6" style="padding:18px;font:14px/1.5 Arial,sans-serif;color:#65708a;">No Application Engineer activity was recorded for this period.</td></tr>`}</tbody>
         </table>
       </td></tr>
-      <tr><td style="padding:8px 22px 10px;background:#ffffff;font:700 14px/1.4 Arial,sans-serif;color:#17213b;">Team comparison · scale 0–${scale}</td></tr>
+      <tr><td class="email-section" style="padding:8px 22px 10px;background:#ffffff;font:700 14px/1.4 Arial,sans-serif;color:#17213b;">Team comparison · scale 0–${scale}</td></tr>
       <tr><td style="padding:0 18px 18px;background:#ffffff;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border:1px solid #dce3ec;border-collapse:collapse;">
           <thead><tr><th align="left" style="width:32%;padding:9px 6px;background:#f3f6fa;font:700 10px Arial,sans-serif;color:#52647d;">Reviewer · grunter</th><th style="padding:9px 6px;background:#f3f6fa;"><span style="font:700 10px Arial,sans-serif;color:#e97132;">■ Marked applied</span><span style="padding-left:12px;font:700 10px Arial,sans-serif;color:#156082;">■ Reviews completed</span></th></tr></thead>

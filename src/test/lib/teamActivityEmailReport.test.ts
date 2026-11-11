@@ -101,6 +101,22 @@ describe("team activity report email helpers", () => {
     expect(html).not.toMatch(/duplicate/i);
     expect(html).toContain("Open TalentOS activity report");
   });
+
+  it("renders zero chart values as empty tracks and gives names full width on mobile", () => {
+    const zeroActivityMember = { ...member, applications_applied: 0, applications_reviewed: 0 };
+    const html = renderTeamActivityEmail({
+      period: "daily",
+      window: getTeamActivityReportWindow("daily", new Date("2026-10-23T21:00:00.000Z")),
+      members: [zeroActivityMember],
+      reportUrl: "https://talent.skarion.com/admin/extension-reports",
+    });
+
+    expect(html).toContain('class="chart-track-empty" width="100%" bgcolor="#e7edf3"');
+    expect(html).not.toContain('width="0%"');
+    expect(html).toContain(".chart-member, .chart-metrics { display:block !important; width:100% !important;");
+    expect(html).toContain('class="chart-member-name"');
+    expect(html).toContain('class="chart-grunter-names"');
+  });
 });
 
 describe("team activity report cron endpoint", () => {
