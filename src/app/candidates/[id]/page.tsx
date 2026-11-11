@@ -16,6 +16,7 @@ import { CandidateOptCountdownCard } from "@/components/candidates/CandidateOptC
 import { CandidateTimezoneCard } from "@/components/candidates/CandidateTimezoneCard";
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
+import { CandidateApplicationFactsPanel } from "@/components/candidates/CandidateApplicationFactsPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 import CustomInterviewHub from "@/components/candidates/CustomInterviewHub";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
@@ -1108,6 +1109,16 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Profile Overview" && (
         <>
+          <CandidateApplicationFactsPanel
+            key={candidate.id}
+            candidateId={candidate.id}
+            canManage={isManager}
+            profile={candidate}
+            hasPrimaryResume={Boolean(primaryResume)}
+            jobs={[...new Map(
+              candidate.applications.flatMap(({ jobs }) => jobs ? [[jobs.id, jobs] as const] : []),
+            ).values()]}
+          />
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
               {candidate.avatar_url ? (

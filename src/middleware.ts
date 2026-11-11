@@ -81,6 +81,13 @@ function isMcpApiPath(pathname: string) {
   return pathname === "/api/mcp";
 }
 
+// Only these prepare-only machine endpoints use scoped worker credentials in
+// their handlers. Enrollment/revocation remain behind staff session auth.
+function isBrowserWorkerPreparePath(pathname: string) {
+  return pathname === "/api/browser-worker/v2/claims" ||
+    /^\/api\/browser-worker\/v2\/runs\/[a-f0-9-]+\/(artifact|facts|result)$/.test(pathname);
+}
+
 // CRM calls these machine-to-machine endpoints with CRM_INTEGRATION_SECRET.
 // Let only those exact paths through the session gate after validating that
 // credential here; each route handler repeats the check as defense in depth.
@@ -253,6 +260,7 @@ export async function middleware(req: NextRequest) {
   // via withExtensionCors(). Intercepting here drops CORS headers on Cloudflare Workers.
   if (isExtensionApiPath(pathname)) return NextResponse.next();
   if (isMcpApiPath(pathname)) return NextResponse.next();
+  if (isBrowserWorkerPreparePath(pathname)) return NextResponse.next();
   if (isCrmIntegrationAuthorized(req, pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
