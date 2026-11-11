@@ -7,6 +7,7 @@ interface MeResponse {
     display_name: string;
     email: string | null;
     role: string;
+    role_label?: string;
   };
 }
 
@@ -101,7 +102,7 @@ export default function AccountPage() {
         <h2 className="section-title">Profile</h2>
         <p style={{ margin: 0 }}>{me?.profile.display_name || "Signed-in user"}</p>
         <p className="muted" style={{ margin: "4px 0 0" }}>{me?.profile.email}</p>
-        {me?.profile.role && <span className="badge">{me.profile.role.replaceAll("_", " ")}</span>}
+        {me?.profile.role && <span className="badge">{me.profile.role_label || me.profile.role.replaceAll("_", " ")}</span>}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>

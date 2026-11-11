@@ -5,8 +5,10 @@ import {
   AlertCircle,
   AlertTriangle,
   Briefcase,
+  ChevronDown,
   Code2,
   MoreHorizontal,
+  Search,
   Shield,
   Trash2,
   Users,
@@ -22,12 +24,17 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { cn } from "../../lib/utils";
+import { TEAM_ROLE_DEFINITIONS, TEAM_ROLE_KEYS } from "@/lib/auth-edge";
+import { matchesTeamMemberFilters, type TeamRoleGroupFilter, type TeamStatusFilter } from "@/lib/teamMemberFilters";
+import styles from "./team.module.css";
 
 interface TeamMember {
   user_id: string;
   display_name: string;
   email: string | null;
   role: string;
+  role_key?: string;
+  role_label?: string;
   is_active: boolean;
 }
 
@@ -38,11 +45,11 @@ interface MeResponse {
   };
 }
 
-const roleOptions = [
-  { value: "admin", label: "Admin", icon: Shield },
-  { value: "manager", label: "Manager", icon: Briefcase },
-  { value: "application_engineer", label: "Application Engineer", icon: Code2 },
-];
+const roleOptions = TEAM_ROLE_KEYS.map((value) => {
+  const definition = TEAM_ROLE_DEFINITIONS[value];
+  const icon = definition.accessRole === "admin" ? Shield : definition.accessRole === "manager" ? Briefcase : Code2;
+  return { value, label: definition.label, icon };
+});
 
 function roleLabel(role: string) {
   return roleOptions.find((r) => r.value === role)?.label || role;
@@ -51,6 +58,12 @@ function roleLabel(role: string) {
 function roleIcon(role: string) {
   const Icon = roleOptions.find((r) => r.value === role)?.icon || Users;
   return Icon;
+}
+
+function roleRank(role: string) {
+  if (role === "admin") return 0;
+  if (["manager", "co_manager", "application_engineer_manager_reviewer"].includes(role)) return 1;
+  return 2;
 }
 
 function initials(name: string) {
@@ -80,6 +93,9 @@ export default function TeamPage() {
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [search, setSearch] = useState("");
+  const [roleGroup, setRoleGroup] = useState<TeamRoleGroupFilter>("all");
+  const [statusFilter, setStatusFilter] = useState<TeamStatusFilter>("all");
 
   useEffect(() => {
     load();
@@ -112,15 +128,16 @@ export default function TeamPage() {
     }
   }
 
-  const sortedMembers = useMemo(
-    () =>
-      [...members].sort((a, b) => {
-        const aRank = a.role === "admin" ? 0 : a.role === "manager" ? 1 : 2;
-        const bRank = b.role === "admin" ? 0 : b.role === "manager" ? 1 : 2;
+  const visibleMembers = useMemo(
+    () => [...members]
+      .filter((member) => matchesTeamMemberFilters(member, { search, roleGroup, status: statusFilter }))
+      .sort((a, b) => {
+        const aRank = roleRank(a.role_key ?? a.role);
+        const bRank = roleRank(b.role_key ?? b.role);
         if (aRank !== bRank) return aRank - bRank;
         return (a.display_name || a.email || "").localeCompare(b.display_name || b.email || "");
       }),
-    [members]
+    [members, search, roleGroup, statusFilter]
   );
 
   async function createMember(event: FormEvent<HTMLFormElement>) {
@@ -262,129 +279,148 @@ export default function TeamPage() {
           <strong>Manager</strong> can access everything except the Team page.
           {" "}
           <strong>Application Engineer</strong> can access everything except Team, Jobs, and Companies.
+          {" "}
+          Co-manager and Application Engineer (Reviewer &amp; Manager) currently use Manager access; Application Engineer (Reviewer) and Application Engineer (Grunter) use Application Engineer access. Their role variants are stored separately so permissions can be separated later.
         </p>
       </div>
 
-      <div>
-        <h2 className="section-title flex items-center gap-2">
-          <Users className="w-4 h-4 text-ink-soft" />
-          Members
-        </h2>
+      <section className={styles.directory} aria-labelledby="team-members-heading">
+        <div className={styles.directoryHeader}>
+          <div>
+            <h2 id="team-members-heading" className="section-title flex items-center gap-2">
+              <Users className="w-4 h-4 text-ink-soft" /> Team members
+            </h2>
+            <p className={styles.resultCount} aria-live="polite">
+              {loading ? "Loading team members…" : `Showing ${visibleMembers.length} of ${members.length} members`}
+            </p>
+          </div>
+          <button className="btn btn-compact" onClick={() => void load()} disabled={loading}>
+            Refresh
+          </button>
+        </div>
+
+        <div className={styles.filters} role="search" aria-label="Filter team members">
+          <label className={styles.searchField}>
+            <Search aria-hidden="true" size={17} />
+            <span className={styles.visuallyHidden}>Search by name or email</span>
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or email" />
+          </label>
+          <label className={styles.selectField}>
+            <span>Role group</span>
+            <span className={styles.selectControl}>
+              <select value={roleGroup} onChange={(event) => setRoleGroup(event.target.value as TeamRoleGroupFilter)}>
+                <option value="all">All role groups</option>
+                <option value="admin">Admin</option>
+                <option value="manager">Manager access</option>
+                <option value="application_engineer">Application Engineer access</option>
+              </select>
+              <ChevronDown aria-hidden="true" size={16} />
+            </span>
+          </label>
+          <label className={styles.selectField}>
+            <span>Status</span>
+            <span className={styles.selectControl}>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as TeamStatusFilter)}>
+                <option value="all">All statuses</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+              <ChevronDown aria-hidden="true" size={16} />
+            </span>
+          </label>
+          {(search || roleGroup !== "all" || statusFilter !== "all") && (
+            <button className={styles.clearFilters} onClick={() => { setSearch(""); setRoleGroup("all"); setStatusFilter("all"); }}>
+              Clear filters
+            </button>
+          )}
+        </div>
 
         {loading ? (
-          <p className="muted">Loading team…</p>
-        ) : sortedMembers.length === 0 ? (
+          <div className={styles.loadingState}>Loading team members…</div>
+        ) : members.length === 0 ? (
           <div className="empty">
             <Users className="w-8 h-8 text-ink-soft mx-auto mb-2" />
             No team members found.
           </div>
+        ) : visibleMembers.length === 0 ? (
+          <div className={styles.emptyState}>
+            <Users aria-hidden="true" size={22} />
+            <strong>No members match these filters</strong>
+            <span>Try a different name, role group, or status.</span>
+            <button className="btn btn-compact" onClick={() => { setSearch(""); setRoleGroup("all"); setStatusFilter("all"); }}>Clear filters</button>
+          </div>
         ) : (
-          <div className="table-shell" style={{ overflow: "visible" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table className="table table-compact">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Role</th>
-                    <th>Status</th>
-                    <th className="text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedMembers.map((member) => {
-                    const RoleIcon = roleIcon(member.role);
+          <div className={styles.memberGrid}>
+                  {visibleMembers.map((member) => {
+                    const memberRoleKey = member.role_key ?? member.role;
+                    const RoleIcon = roleIcon(memberRoleKey);
                     return (
-                    <tr key={member.user_id}>
-                      <td>
-                        <div className="flex items-center gap-2.5">
-                          <div className="avatar-circle w-8 h-8 text-xs">
+                    <article key={member.user_id} className={styles.memberCard}>
+                      <div className={styles.memberCardTop}>
+                        <div className={styles.identity}>
+                          <div className={styles.avatar} aria-hidden="true">
                             {initials(member.display_name || member.email || "User")}
                           </div>
-                          <div>
-                            <div className="font-semibold text-ink">{member.display_name || member.email || "User"}</div>
-                            {me?.profile.user_id === member.user_id && <div className="muted text-xs">You</div>}
+                          <div className={styles.identityText}>
+                            <div className={styles.memberName}>{member.display_name || member.email || "User"}</div>
+                            {me?.profile.user_id === member.user_id && <span className={styles.youBadge}>You</span>}
                           </div>
                         </div>
-                      </td>
-                      <td className="muted">{member.email || "—"}</td>
-                      <td>
-                        <span className="badge flex items-center gap-1 w-fit">
-                          <RoleIcon className="w-3 h-3" />
-                          {roleLabel(member.role)}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={cn("badge", member.is_active ? "bg-accent-soft text-accent" : "bg-gray-100 text-gray-500")}>
-                          {member.is_active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                      <td className="text-right">
                         <DropdownMenu
                           open={openMenuId === member.user_id}
                           onOpenChange={(open) => setOpenMenuId(open ? member.user_id : null)}
                         >
                           <DropdownMenuTrigger asChild>
                             <button
-                              className="btn btn-compact p-1.5"
+                              className={styles.actionButton}
                               disabled={actionId === member.user_id}
                               aria-label={`Open actions for ${member.display_name || member.email || "user"}`}
                             >
-                              <MoreHorizontal className="w-4 h-4" />
+                              <MoreHorizontal size={18} />
                             </button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            align="end"
-                            className="min-w-[220px] border-border bg-surface p-1 shadow-lg"
-                          >
-                            <DropdownMenuLabel className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">
-                              Change Role
-                            </DropdownMenuLabel>
+                          <DropdownMenuContent align="end" className="min-w-[220px] border-border bg-surface p-1 shadow-lg">
+                            <DropdownMenuLabel className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">Change Role</DropdownMenuLabel>
                             {roleOptions.map((roleOption) => (
                               <DropdownMenuItem
                                 key={roleOption.value}
                                 className={cn(
                                   "cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink",
-                                  member.role === roleOption.value && "bg-accent-soft text-accent focus:bg-accent-soft focus:text-accent"
+                                  memberRoleKey === roleOption.value && "bg-accent-soft text-accent focus:bg-accent-soft focus:text-accent"
                                 )}
                                 onSelect={() => changeRole(member.user_id, roleOption.value)}
                                 disabled={me?.profile.user_id === member.user_id}
                               >
-                                <roleOption.icon className="h-3.5 w-3.5" />
-                                {roleOption.label}
+                                <roleOption.icon className="h-3.5 w-3.5" />{roleOption.label}
                               </DropdownMenuItem>
                             ))}
                             <DropdownMenuSeparator className="my-1 bg-border" />
-                            <DropdownMenuItem
-                              className="cursor-pointer rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink"
-                              onSelect={() => toggleStatus(member.user_id)}
-                            >
+                            <DropdownMenuItem className="cursor-pointer rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink" onSelect={() => toggleStatus(member.user_id)}>
                               {member.is_active ? "Deactivate" : "Activate"}
                             </DropdownMenuItem>
                             <DropdownMenuSeparator className="my-1 bg-border" />
                             <DropdownMenuItem
                               className="cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm text-danger focus:bg-danger focus:text-white"
-                              onSelect={() => {
-                                setDeleteError("");
-                                setDeleteConfirmation("");
-                                setMemberToDelete(member);
-                              }}
+                              onSelect={() => { setDeleteError(""); setDeleteConfirmation(""); setMemberToDelete(member); }}
                               disabled={me?.profile.user_id === member.user_id}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Permanently delete
+                              <Trash2 className="h-3.5 w-3.5" />Permanently delete
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                      </td>
-                    </tr>
+                      </div>
+                      <div className={styles.memberEmail}>{member.email || "No email on file"}</div>
+                      <div className={styles.cardFooter}>
+                        <span className={styles.roleBadge}><RoleIcon size={14} />{member.role_label || roleLabel(memberRoleKey)}</span>
+                        <span className={cn(styles.statusBadge, member.is_active ? styles.active : styles.inactive)}>
+                          <span aria-hidden="true" className={styles.statusDot} />{member.is_active ? "Active" : "Inactive"}
+                        </span>
+                      </div>
+                    </article>
                   )})}
-                </tbody>
-              </table>
-            </div>
           </div>
         )}
-      </div>
+      </section>
 
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>

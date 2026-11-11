@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccessPath, getDefaultRouteForRole, normalizeUserRole } from "@/lib/auth-edge";
+import { canAccessPath, getDefaultRouteForRole, getEffectiveUserRole, getTeamRoleStorage, isTeamRoleKey, normalizeUserRole } from "@/lib/auth-edge";
 
 describe("canAccessPath", () => {
   it("lets only admins into the /team management page and /api/users/<id> (role edits, deactivation)", () => {
@@ -51,5 +51,27 @@ describe("getDefaultRouteForRole", () => {
     expect(getDefaultRouteForRole("application_engineer")).toBe("/candidates");
     expect(getDefaultRouteForRole("manager")).toBe("/jobs");
     expect(getDefaultRouteForRole("admin")).toBe("/jobs");
+  });
+});
+
+describe("team role variants", () => {
+  it("stores distinct labels while preserving the currently approved access profiles", () => {
+    expect(getTeamRoleStorage("application_engineer_manager_reviewer"))
+      .toEqual({ role: "manager", role_variant: "application_engineer_manager_reviewer" });
+    expect(getTeamRoleStorage("application_engineer_reviewer"))
+      .toEqual({ role: "application_engineer", role_variant: "application_engineer_reviewer" });
+    expect(getTeamRoleStorage("application_engineer_grunter"))
+      .toEqual({ role: "application_engineer", role_variant: "application_engineer_grunter" });
+    expect(getTeamRoleStorage("co_manager"))
+      .toEqual({ role: "manager", role_variant: "co_manager" });
+  });
+
+  it("resolves permissions from variants and rejects unknown labels", () => {
+    expect(getEffectiveUserRole("application_engineer", "application_engineer_manager_reviewer")).toBe("manager");
+    expect(getEffectiveUserRole("manager", "co_manager")).toBe("manager");
+    expect(getEffectiveUserRole("application_engineer", "application_engineer_reviewer")).toBe("application_engineer");
+    expect(isTeamRoleKey("application_engineer_grunter")).toBe(true);
+    expect(isTeamRoleKey("not-a-role")).toBe(false);
+    expect(canAccessPath(getEffectiveUserRole("application_engineer", "application_engineer_manager_reviewer"), "/team")).toBe(false);
   });
 });

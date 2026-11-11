@@ -20,6 +20,7 @@ type ProfileRow = {
   display_name: string;
   email: string | null;
   role: string;
+  role_variant: string | null;
   is_active: boolean;
 };
 
@@ -28,6 +29,7 @@ type EventAggregateRow = {
   display_name: string;
   email: string | null;
   role: string;
+  role_variant: string | null;
   is_active: boolean;
   jobs_added: number;
   candidates_logged: number;
@@ -56,7 +58,7 @@ function toCounts(row?: Partial<TeamActivityCounts>): TeamActivityCounts {
 async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMember[]> {
   const [profiles, aggregates] = await Promise.all([
     query<ProfileRow>(
-      `SELECT user_id::text AS user_id, display_name, email, role, is_active
+      `SELECT user_id::text AS user_id, display_name, email, role, role_variant, is_active
          FROM profiles
         WHERE is_active = true
           AND role IN ('application_engineer', 'manager')
@@ -67,6 +69,7 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
               COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member') AS display_name,
               COALESCE(NULLIF(to_jsonb(e)->>'actor_email', ''), p.email) AS email,
               p.role AS role,
+              p.role_variant AS role_variant,
               p.is_active AS is_active,
               COUNT(*) FILTER (WHERE e.event_type = 'job_added')::int AS jobs_added,
               COUNT(*) FILTER (WHERE e.event_type = 'candidate_logged')::int AS candidates_logged,
@@ -82,7 +85,7 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
         GROUP BY e.actor_user_id::text,
                  COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member'),
                  COALESCE(NULLIF(to_jsonb(e)->>'actor_email', ''), p.email),
-                 p.role, p.is_active
+                 p.role, p.role_variant, p.is_active
         ORDER BY display_name, email`,
       [startAt.toISOString(), endAt.toISOString()],
     ),
@@ -96,6 +99,7 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
       display_name: profile.display_name || profile.email || "Team member",
       email: profile.email,
       role: profile.role,
+      role_variant: profile.role_variant,
       is_active: profile.is_active,
       ...toCounts(),
     });

@@ -2,18 +2,24 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { verifyJWT } from "@/server/auth/jwt";
 import { queryOne } from "@/server/db/neon";
-import { normalizeUserRole } from "@/lib/auth-edge";
+import { getEffectiveUserRole, getRoleLabel, getTeamRoleKey } from "@/lib/auth-edge";
 import type { UserRole } from "@/lib/auth-edge";
 
 export {
   ALL_USER_ROLES,
   CANDIDATE_JOB_REVIEW_ROLES,
+  getEffectiveUserRole,
+  getRoleLabel,
+  getTeamRoleKey,
+  getTeamRoleStorage,
+  isTeamRoleKey,
+  TEAM_ROLE_DEFINITIONS,
+  TEAM_ROLE_KEYS,
   canAccessPath,
   getDefaultRouteForRole,
-  getRoleLabel,
   normalizeUserRole,
 } from "@/lib/auth-edge";
-export type { LegacyUserRole, UserRole } from "@/lib/auth-edge";
+export type { LegacyUserRole, TeamRoleKey, UserRole } from "@/lib/auth-edge";
 
 export const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 export const REFRESH_TOKEN_COOKIE = "skarion_refresh_token";
@@ -47,13 +53,13 @@ export function sanitizeInternalPath(path: string | null | undefined) {
 }
 
 export function hasRole(profile: UserProfile, roles: UserRole[]) {
-  return roles.includes(normalizeUserRole(profile.role));
+  return roles.includes(getEffectiveUserRole(profile.role, profile.role_variant));
 }
 
-function normalizeUserProfile<T extends Pick<UserProfile, "role">>(profile: T): T {
+function normalizeUserProfile(profile: UserProfile): UserProfile {
   return {
     ...profile,
-    role: normalizeUserRole(profile.role),
+    role: getEffectiveUserRole(profile.role, profile.role_variant),
   };
 }
 
@@ -97,11 +103,14 @@ export async function requireCurrentUser(allowedRoles?: UserRole[]) {
 
 export function publicUserProfile(profile: UserProfile) {
   const normalizedProfile = normalizeUserProfile(profile);
+  const roleKey = getTeamRoleKey(normalizedProfile.role, normalizedProfile.role_variant);
   return {
     user_id: normalizedProfile.user_id,
     email: normalizedProfile.email,
     display_name: normalizedProfile.display_name,
     role: normalizedProfile.role,
+    role_key: roleKey,
+    role_label: getRoleLabel(roleKey),
     is_active: normalizedProfile.is_active,
   };
 }

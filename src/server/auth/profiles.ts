@@ -1,5 +1,5 @@
 import type { UserRole } from "@/lib/auth";
-import { normalizeUserRole } from "@/lib/auth";
+import { getEffectiveUserRole } from "@/lib/auth";
 import { execute, queryOne } from "@/server/db/neon";
 
 export interface AuthProfileRow {
@@ -39,7 +39,7 @@ export async function findProfileByEmail(email: string) {
 
   return {
     ...profile,
-    role: normalizeUserRole(profile.role),
+    role: getEffectiveUserRole(profile.role, profile.role_variant),
   } satisfies AuthProfileRow;
 }
 
@@ -55,12 +55,13 @@ export async function createProfile(input: {
     email: string;
     display_name: string;
     role: string;
+    role_variant: string | null;
     is_active: boolean;
     password_hash: string | null;
   }>(
     `INSERT INTO profiles (user_id, email, display_name, role, is_active, password_hash, email_verified, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-     RETURNING user_id, email, display_name, role, is_active, password_hash`,
+     RETURNING user_id, email, display_name, role, NULL::text AS role_variant, is_active, password_hash`,
     [
       crypto.randomUUID(),
       input.email.toLowerCase(),
@@ -78,7 +79,7 @@ export async function createProfile(input: {
 
   return {
     ...profile,
-    role: normalizeUserRole(profile.role),
+    role: getEffectiveUserRole(profile.role, profile.role_variant),
   } satisfies AuthProfileRow;
 }
 

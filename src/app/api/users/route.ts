@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publicUserProfile, requireCurrentUser, type UserRole } from "@/lib/auth";
+import { getTeamRoleStorage, isTeamRoleKey, publicUserProfile, requireCurrentUser } from "@/lib/auth";
 import { hashPassword } from "@/server/auth/crypto";
 import { queryOne } from "@/server/db/neon";
 import { listAllProfiles, listActiveProfiles, upsertProfile } from "@/server/repositories/profilesRepository";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
-
-const roles: UserRole[] = ["admin", "manager", "application_engineer"];
 
 export async function GET() {
   const { context, response } = await requireCurrentUser();
@@ -26,7 +24,7 @@ export async function POST(req: NextRequest) {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const displayName = String(body.display_name ?? "").trim();
-  const role = body.role as UserRole;
+  const role = body.role;
 
   if (!email || !password || !displayName) {
     return NextResponse.json({ error: "Name, email, and temporary password are required." }, { status: 400 });
@@ -34,9 +32,10 @@ export async function POST(req: NextRequest) {
   if (password.length < 8) {
     return NextResponse.json({ error: "Temporary password must be at least 8 characters." }, { status: 400 });
   }
-  if (!roles.includes(role)) {
+  if (!isTeamRoleKey(role)) {
     return NextResponse.json({ error: "Invalid role." }, { status: 400 });
   }
+  const storedRole = getTeamRoleStorage(role);
 
   const existingProfile = await queryOne<{ user_id: string }>(
     "SELECT user_id FROM profiles WHERE LOWER(email) = $1",
@@ -53,7 +52,7 @@ export async function POST(req: NextRequest) {
     user_id: userId,
     email,
     display_name: displayName,
-    role,
+    ...storedRole,
     is_active: true,
   });
 
@@ -72,7 +71,7 @@ export async function POST(req: NextRequest) {
     action: "user.created",
     entity_type: "profile",
     entity_id: userId,
-    metadata: { email, role },
+    metadata: { email, role, access_role: storedRole.role },
   });
 
   return NextResponse.json(publicUserProfile(profile as any), { status: 201 });

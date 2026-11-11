@@ -6,6 +6,72 @@
 
 export type UserRole = "admin" | "manager" | "application_engineer";
 export type LegacyUserRole = UserRole | "recruiter" | "reviewer";
+export type TeamRoleKey = UserRole
+  | "co_manager"
+  | "application_engineer_manager_reviewer"
+  | "application_engineer_reviewer"
+  | "application_engineer_grunter";
+
+export interface TeamRoleDefinition {
+  key: TeamRoleKey;
+  label: string;
+  accessRole: UserRole;
+  roleVariant: string | null;
+}
+
+/**
+ * Role titles are stored separately from their current access profile.
+ * This keeps today's established permission checks intact while allowing
+ * each sub-role to receive a distinct permission profile later.
+ */
+export const TEAM_ROLE_DEFINITIONS: Record<TeamRoleKey, TeamRoleDefinition> = {
+  admin: { key: "admin", label: "Admin", accessRole: "admin", roleVariant: null },
+  manager: { key: "manager", label: "Manager", accessRole: "manager", roleVariant: null },
+  co_manager: { key: "co_manager", label: "Co-manager", accessRole: "manager", roleVariant: "co_manager" },
+  application_engineer: { key: "application_engineer", label: "Application Engineer", accessRole: "application_engineer", roleVariant: null },
+  application_engineer_manager_reviewer: {
+    key: "application_engineer_manager_reviewer",
+    label: "Application Engineer (Reviewer & Manager)",
+    accessRole: "manager",
+    roleVariant: "application_engineer_manager_reviewer",
+  },
+  application_engineer_reviewer: {
+    key: "application_engineer_reviewer",
+    label: "Application Engineer (Reviewer)",
+    accessRole: "application_engineer",
+    roleVariant: "application_engineer_reviewer",
+  },
+  application_engineer_grunter: {
+    key: "application_engineer_grunter",
+    label: "Application Engineer (Grunter)",
+    accessRole: "application_engineer",
+    roleVariant: "application_engineer_grunter",
+  },
+};
+
+export const TEAM_ROLE_KEYS = Object.keys(TEAM_ROLE_DEFINITIONS) as TeamRoleKey[];
+
+export function isTeamRoleKey(role: unknown): role is TeamRoleKey {
+  return typeof role === "string" && Object.prototype.hasOwnProperty.call(TEAM_ROLE_DEFINITIONS, role);
+}
+
+export function getTeamRoleStorage(role: TeamRoleKey) {
+  const definition = TEAM_ROLE_DEFINITIONS[role];
+  return { role: definition.accessRole, role_variant: definition.roleVariant };
+}
+
+export function getEffectiveUserRole(role: string | null | undefined, roleVariant?: string | null): UserRole {
+  if (roleVariant && isTeamRoleKey(roleVariant) && TEAM_ROLE_DEFINITIONS[roleVariant].roleVariant) {
+    return TEAM_ROLE_DEFINITIONS[roleVariant].accessRole;
+  }
+  return normalizeUserRole(role);
+}
+
+export function getTeamRoleKey(role: string | null | undefined, roleVariant?: string | null): TeamRoleKey {
+  if (roleVariant && isTeamRoleKey(roleVariant) && TEAM_ROLE_DEFINITIONS[roleVariant].roleVariant) return roleVariant;
+  const normalized = normalizeUserRole(role);
+  return normalized;
+}
 
 export const ALL_USER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
 // Review decisions are shared by staff; this does not grant access to
@@ -25,6 +91,7 @@ export function normalizeUserRole(role: string | null | undefined): UserRole {
 }
 
 export function getRoleLabel(role: string) {
+  if (isTeamRoleKey(role)) return TEAM_ROLE_DEFINITIONS[role].label;
   return normalizeUserRole(role).replaceAll("_", " ");
 }
 

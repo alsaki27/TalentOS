@@ -18,6 +18,7 @@ import {
   getTeamActivityReportRecipients,
   getTeamActivityReportWindow,
   renderTeamActivityEmail,
+  buildTeamActivityGroups,
   type TeamActivityMember,
 } from "@/lib/teamActivityEmailReport";
 
@@ -26,6 +27,7 @@ const member: TeamActivityMember = {
   display_name: "AE <One>",
   email: "ae@example.com",
   role: "application_engineer",
+  role_variant: "application_engineer_reviewer",
   is_active: true,
   jobs_added: 2,
   candidates_logged: 3,
@@ -58,7 +60,23 @@ describe("team activity report email helpers", () => {
       .toEqual(["one@example.com", "two@example.com"]);
   });
 
-  it("renders a branded report while escaping team-provided text", () => {
+  it("groups reviewer metrics with assigned grunter applications and keeps uncategorized staff visible", () => {
+    const reviewer = { ...member, actor_user_id: "rev", display_name: "Azmain Ahnaf", jobs_added: 8, candidates_logged: 9, applications_reviewed: 7 };
+    const grunter = { ...member, actor_user_id: "grun", display_name: "Shahria Arafat Tafhim", role_variant: "application_engineer_grunter", jobs_added: 30, candidates_logged: 33, applications_reviewed: 22, applications_applied: 6 };
+    const unknown = { ...member, actor_user_id: "new", display_name: "New AE", role_variant: "application_engineer_reviewer", applications_reviewed: 2 };
+    const groups = buildTeamActivityGroups([reviewer, grunter, unknown]);
+    expect(groups[0]).toMatchObject({
+      reviewer: { display_name: "Azmain Ahnaf" },
+      grunters: [{ display_name: "Shahria Arafat Tafhim" }],
+      jobs_added: 8,
+      candidates_logged: 9,
+      applications_reviewed: 7,
+      applications_applied: 6,
+    });
+    expect(groups.some((group) => group.reviewer?.display_name === "New AE")).toBe(true);
+  });
+
+  it("renders the approved responsive table and final comparison chart without per-person totals or email addresses", () => {
     const window = getTeamActivityReportWindow("daily", new Date("2026-10-23T21:00:00.000Z"));
     const html = renderTeamActivityEmail({
       period: "daily",
@@ -71,9 +89,15 @@ describe("team activity report email helpers", () => {
     expect(html).toContain("background:#f7f8fc");
     expect(html).toContain('color:#16275f;">SKARION</div>');
     expect(html).toContain("Daily team activity");
-    expect(html).toContain("10 actions");
+    expect(html).toContain("Application Engineer activity");
+    expect(html).toContain("Assigned grunter(s)");
+    expect(html).toContain("Team comparison · scale 0–60");
+    expect(html).toContain("Reviews completed");
+    expect(html).toContain("60");
     expect(html).toContain("AE &lt;One&gt;");
     expect(html).not.toContain("AE <One>");
+    expect(html).not.toContain("ae@example.com");
+    expect(html).not.toMatch(/\d+ actions?/i);
     expect(html).not.toMatch(/duplicate/i);
     expect(html).toContain("Open TalentOS activity report");
   });
@@ -97,15 +121,15 @@ describe("team activity report cron endpoint", () => {
       .mockResolvedValueOnce([
         {
           user_id: "member-1", display_name: "AE One", email: "ae@example.com",
-          role: "application_engineer", is_active: true,
+          role: "application_engineer", role_variant: "application_engineer_reviewer", is_active: true,
         },
         {
           user_id: "member-2", display_name: "Manager One", email: "manager@example.com",
-          role: "manager", is_active: true,
+          role: "manager", role_variant: "co_manager", is_active: true,
         },
         {
           user_id: "member-inactive", display_name: "Inactive AE", email: "inactive@example.com",
-          role: "application_engineer", is_active: false,
+          role: "application_engineer", role_variant: "application_engineer_grunter", is_active: false,
         },
         {
           user_id: "member-admin", display_name: "Admin User", email: "admin@example.com",
@@ -115,12 +139,12 @@ describe("team activity report cron endpoint", () => {
       .mockResolvedValueOnce([
         {
           actor_user_id: "member-1", display_name: "AE One", email: "ae@example.com",
-          role: "application_engineer", is_active: true,
+          role: "application_engineer", role_variant: "application_engineer_reviewer", is_active: true,
           jobs_added: 2, candidates_logged: 3, applications_reviewed: 4, applications_applied: 1,
         },
         {
           actor_user_id: "member-inactive", display_name: "Inactive AE", email: "inactive@example.com",
-          role: "application_engineer", is_active: false,
+          role: "application_engineer", role_variant: "application_engineer_grunter", is_active: false,
           jobs_added: 7, candidates_logged: 7, applications_reviewed: 7, applications_applied: 7,
         },
         {
@@ -145,20 +169,30 @@ describe("team activity report cron endpoint", () => {
       expect(String(sql)).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
     }
     expect(String(mocks.query.mock.calls[0][0])).toContain("role IN ('application_engineer', 'manager')");
+    expect(String(mocks.query.mock.calls[0][0])).toContain("role_variant");
     expect(String(mocks.query.mock.calls[0][0])).toContain("WHERE is_active = true");
     expect(String(mocks.query.mock.calls[1][0])).toContain("p.is_active = true");
     expect(String(mocks.query.mock.calls[1][0])).not.toContain("job_duplicate");
     const emailHtml = mocks.sendGraphMail.mock.calls[0][0].html as string;
     expect(emailHtml).toContain("AE One");
-    expect(emailHtml).toContain("Manager One");
+    expect(emailHtml).not.toContain("Manager One");
     expect(emailHtml).not.toContain("Inactive AE");
     expect(emailHtml).not.toContain("Admin User");
     expect(emailHtml).not.toMatch(/duplicate/i);
+    expect(emailHtml).not.toContain("manager@example.com");
     expect(mocks.sendGraphMail).toHaveBeenCalledWith(expect.objectContaining({
       to: "shohanhyder@gmail.com",
       subject: expect.stringContaining("Daily Team Activity Report"),
       html: expect.stringContaining("Open TalentOS activity report"),
     }));
+  });
+
+  it("uses the weekly 300-point chart scale with the same report layout", () => {
+    const window = getTeamActivityReportWindow("weekly", new Date("2026-10-23T21:00:00.000Z"));
+    const html = renderTeamActivityEmail({ period: "weekly", window, members: [member], reportUrl: "https://talent.skarion.com/admin/extension-reports" });
+    expect(html).toContain("Weekly team activity");
+    expect(html).toContain("Team comparison · scale 0–300");
+    expect(html).toContain("Application Engineer activity");
   });
 
   it("rejects unauthorized or invalid requests without querying or sending", async () => {

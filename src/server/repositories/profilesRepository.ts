@@ -5,6 +5,7 @@ export interface ProfileRow {
   email: string | null;
   display_name: string;
   role: string;
+  role_variant?: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -23,18 +24,19 @@ export async function listAllProfiles(): Promise<ProfileRow[]> {
   return query<ProfileRow>("SELECT * FROM profiles ORDER BY display_name ASC");
 }
 
-export async function upsertProfile(input: { user_id: string; email?: string; display_name?: string; role?: string; is_active?: boolean }): Promise<ProfileRow> {
+export async function upsertProfile(input: { user_id: string; email?: string; display_name?: string; role?: string; role_variant?: string | null; is_active?: boolean }): Promise<ProfileRow> {
   const rows = await query<ProfileRow>(
-    `INSERT INTO profiles (user_id, email, display_name, role, is_active)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO profiles (user_id, email, display_name, role, role_variant, is_active)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (user_id) DO UPDATE SET
        email = COALESCE(EXCLUDED.email, profiles.email),
        display_name = COALESCE(EXCLUDED.display_name, profiles.display_name),
        role = COALESCE(EXCLUDED.role, profiles.role),
+       role_variant = EXCLUDED.role_variant,
        is_active = COALESCE(EXCLUDED.is_active, profiles.is_active),
        updated_at = NOW()
      RETURNING *`,
-    [input.user_id, input.email ?? null, input.display_name ?? "", input.role ?? "recruiter", input.is_active ?? true]
+    [input.user_id, input.email ?? null, input.display_name ?? "", input.role ?? "recruiter", input.role_variant ?? null, input.is_active ?? true]
   );
   return rows[0];
 }

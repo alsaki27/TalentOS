@@ -8,6 +8,7 @@ interface SessionUser {
   email: string | null;
   display_name: string;
   role: UserRole;
+  role_variant?: string | null;
   is_active: boolean;
 }
 

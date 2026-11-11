@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publicUserProfile, requireCurrentUser, type UserRole } from "@/lib/auth";
+import { getTeamRoleStorage, isTeamRoleKey, publicUserProfile, requireCurrentUser } from "@/lib/auth";
 import { queryOne, sql } from "@/server/db/neon";
-
-const roles: UserRole[] = ["admin", "manager", "application_engineer"];
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(["admin"]);
@@ -15,17 +13,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if ("email" in body) updates.email = body.email ? String(body.email).trim() : null;
   if ("is_active" in body) updates.is_active = Boolean(body.is_active);
   if ("role" in body) {
-    if (!roles.includes(body.role)) {
+    if (!isTeamRoleKey(body.role)) {
       return NextResponse.json({ error: "Invalid role." }, { status: 400 });
     }
-    updates.role = body.role;
+    Object.assign(updates, getTeamRoleStorage(body.role));
   }
 
   const entries = Object.entries(updates);
   const setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
   const sqlParams = entries.map(([, val]) => val);
   sqlParams.push(params.id);
-  const data = await queryOne<any>(`UPDATE profiles SET ${setClauses.join(", ")} WHERE user_id = $${sqlParams.length} RETURNING user_id, email, display_name, role, is_active`, sqlParams);
+  const data = await queryOne<any>(`UPDATE profiles SET ${setClauses.join(", ")} WHERE user_id = $${sqlParams.length} RETURNING user_id, email, display_name, role, role_variant, is_active`, sqlParams);
   return NextResponse.json(data ? publicUserProfile(data as any) : null);
 }
 
