@@ -20,7 +20,7 @@ Report recipients are configured as a Cloudflare Worker variable in
 `wrangler.toml`:
 
 ```text
-TEAM_ACTIVITY_REPORT_RECIPIENTS = "info@skarion.com,shohanhyder@gmail.com"
+TEAM_ACTIVITY_REPORT_RECIPIENTS = "info@skarion.com,shohanhyder@gmail.com,akash@skarion.com"
 ```
 
 Multiple recipients can be separated by commas or semicolons. Change this
