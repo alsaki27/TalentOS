@@ -40,6 +40,15 @@ function applyRuntimeSecrets(env) {
   if (typeof env?.JOB_AGENT_NIGHTLY_ENABLED === "string") {
     process.env.JOB_AGENT_NIGHTLY_ENABLED = env.JOB_AGENT_NIGHTLY_ENABLED;
   }
+  for (const name of [
+    "BROWSER_WORKER_PREPARE_ENABLED",
+    "BROWSER_WORKER_ENVIRONMENT",
+    "BROWSER_WORKER_PRODUCTION_PILOT_APPLICATION_ID",
+  ]) {
+    const value = env?.[name];
+    if (typeof value === "string") process.env[name] = value;
+    else delete process.env[name];
+  }
   applyHyperdrive(env);
 }
 
