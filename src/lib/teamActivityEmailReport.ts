@@ -244,12 +244,12 @@ export function renderTeamActivityEmail(options: {
     const reviewerName = group.reviewer ? escapeHtml(group.reviewer.display_name) : "Other AE activity";
     const background = index % 2 === 0 ? "#ffffff" : "#f3f6fa";
     return `<tr style="background:${background};">
-      <td style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font:700 12px/1.35 Arial,sans-serif;color:#17213b;overflow-wrap:anywhere;">${reviewerName}</td>
-      <td style="padding:8px;border-bottom:1px solid #e2e8f0;font:11px/1.35 Arial,sans-serif;">${grunterNames}</td>
-      <td align="right" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.jobs_added)}</td>
-      <td align="right" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.candidates_logged)}</td>
-      <td align="right" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.applications_reviewed)}</td>
-      <td align="right" style="padding:10px 8px;border-bottom:1px solid #e2e8f0;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.applications_applied)}</td>
+      <td align="center" style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;font:700 12px/1.35 Arial,sans-serif;color:#17213b;overflow-wrap:anywhere;">${reviewerName}</td>
+      <td align="center" style="padding:8px;border-bottom:1px solid #e2e8f0;text-align:center;font:11px/1.35 Arial,sans-serif;">${grunterNames}</td>
+      <td align="center" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;text-align:center;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.jobs_added)}</td>
+      <td align="center" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;text-align:center;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.candidates_logged)}</td>
+      <td align="center" style="padding:10px 7px;border-bottom:1px solid #e2e8f0;text-align:center;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.applications_reviewed)}</td>
+      <td align="center" style="padding:10px 8px;border-bottom:1px solid #e2e8f0;text-align:center;font:700 12px Arial,sans-serif;color:#17213b;">${number(group.applications_applied)}</td>
     </tr>`;
   }).join("");
 
@@ -265,20 +265,21 @@ export function renderTeamActivityEmail(options: {
     ].map(({ label, value, color }) => {
       const width = Math.min(100, Math.max(0, (value / scale) * 100));
       const trackCells = width === 0
-        ? `<td class="chart-track-empty" width="100%" bgcolor="#e7edf3" style="height:10px;background:#e7edf3;border-radius:5px;"></td>`
-        : `<td class="chart-track-value" width="${width}%" bgcolor="${color}" style="height:10px;background:${color};border-radius:5px 0 0 5px;"></td><td class="chart-track-rest" style="height:10px;"></td>`;
+        ? `<td class="chart-track-empty" width="100%" bgcolor="#e7edf3" style="height:10px;font-size:0;line-height:0;background:#e7edf3;border-radius:5px;">&nbsp;</td>`
+        : `<td class="chart-track-value" width="${width}%" bgcolor="${color}" style="height:10px;font-size:0;line-height:0;background:${color};border-radius:5px 0 0 5px;">&nbsp;</td><td class="chart-track-rest" width="${100 - width}%" bgcolor="#e7edf3" style="height:10px;font-size:0;line-height:0;background:#e7edf3;">&nbsp;</td>`;
       return `<tr>
-        <td class="chart-measure-label" style="width:13%;padding:4px 5px;border-bottom:1px solid #eef1f5;font:10px Arial,sans-serif;color:#52647d;">${label}</td>
-        <td class="chart-track-cell" style="width:74%;padding:4px 5px;border-bottom:1px solid #eef1f5;">
-          <table class="chart-track" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#e7edf3" style="width:100%;height:10px;table-layout:fixed;border-radius:5px;"><tr>${trackCells}</tr></table>
+        <td class="chart-measure-label" width="15%" style="width:15%;padding:4px 5px;border-bottom:1px solid #eef1f5;font:10px Arial,sans-serif;color:#52647d;">${label}</td>
+        <td class="chart-track-cell" width="70%" style="width:70%;padding:4px 5px;border-bottom:1px solid #eef1f5;">
+          <table class="chart-track" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#e7edf3" style="width:100%;height:10px;table-layout:fixed;border-collapse:separate;border-spacing:0;border-radius:5px;"><tr>${trackCells}</tr></table>
         </td>
-        <td class="chart-measure-value" align="right" style="width:13%;padding:4px 4px 4px 2px;border-bottom:1px solid #eef1f5;font:700 11px Arial,sans-serif;color:#17243c;">${number(value)}</td>
+        <td class="chart-measure-value" width="15%" align="center" style="width:15%;padding:4px 4px 4px 2px;border-bottom:1px solid #eef1f5;text-align:center;font:700 11px Arial,sans-serif;color:#17243c;">${number(value)}</td>
       </tr>`;
     }).join("");
-    return `<tr><td class="chart-member" style="width:32%;padding:6px 4px;border-bottom:1px solid #dfe6ed;vertical-align:middle;">
-      <div class="chart-member-name" style="font:700 12px/1.35 Arial,sans-serif;color:#17243c;overflow-wrap:anywhere;">${escapeHtml(reviewerName)}</div>
+    return `<tr><td class="chart-person-row" colspan="2" style="padding:8px 8px 6px;border-bottom:1px solid #dfe6ed;">
+      <div class="chart-person-name" style="font:700 12px/1.35 Arial,sans-serif;color:#17243c;overflow-wrap:anywhere;">${escapeHtml(reviewerName)}</div>
       <div class="chart-grunter-names" style="padding-top:2px;font:10px/1.35 Arial,sans-serif;color:#52647d;overflow-wrap:anywhere;">${escapeHtml(grunterLabel)}</div>
-    </td><td class="chart-metrics" style="width:68%;padding:0;border-bottom:1px solid #dfe6ed;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">${bars}</table></td></tr>`;
+      <table class="chart-bar-table" role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;table-layout:fixed;margin-top:4px;">${bars}</table>
+    </td></tr>`;
   }).join("");
 
   const totalCells = actionDefinitions.map(({ key, label }) => `
@@ -295,14 +296,9 @@ export function renderTeamActivityEmail(options: {
       .email-section { padding-left:10px !important; padding-right:10px !important; }
       .report-table th { padding:7px 3px !important; font-size:9px !important; }
       .report-table td { padding:7px 3px !important; font-size:10px !important; }
-      .chart-member, .chart-metrics { display:block !important; width:100% !important; max-width:100% !important; box-sizing:border-box !important; }
-      .chart-member { padding:9px 8px 3px !important; border-bottom:0 !important; }
-      .chart-metrics { padding:0 6px 8px !important; }
-      .chart-member-name { font-size:13px !important; }
+      .chart-person-row { padding:9px 8px 7px !important; }
+      .chart-person-name { font-size:13px !important; }
       .chart-grunter-names { font-size:11px !important; }
-      .chart-measure-label { width:15% !important; }
-      .chart-track-cell { width:73% !important; }
-      .chart-measure-value { width:12% !important; }
     }
   </style></head>
 <body style="margin:0;padding:0;background:#f2f4f8;color:#17213b;font-family:Arial,Helvetica,sans-serif;">
@@ -326,12 +322,12 @@ export function renderTeamActivityEmail(options: {
       <tr><td class="email-section" style="padding:0 18px 18px;background:#ffffff;">
         <table class="report-table" role="table" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;table-layout:fixed;border:1px solid #dce3ec;border-collapse:collapse;">
           <thead><tr style="background:#16275f;color:#ffffff;">
-            <th align="left" style="width:19%;padding:10px 8px;font:700 11px/1.3 Arial,sans-serif;">Reviewer</th>
-            <th align="left" style="width:31%;padding:10px 8px;font:700 11px/1.3 Arial,sans-serif;">Assigned grunter(s)</th>
-            <th align="right" style="width:10%;padding:10px 5px;font:700 11px/1.3 Arial,sans-serif;">Jobs added</th>
-            <th align="right" style="width:13%;padding:10px 5px;font:700 11px/1.3 Arial,sans-serif;">Logged</th>
-            <th align="right" style="width:14%;padding:10px 5px;font:700 11px/1.3 Arial,sans-serif;">Reviews</th>
-            <th align="right" style="width:13%;padding:10px 8px;font:700 11px/1.3 Arial,sans-serif;">Applied</th>
+            <th align="center" style="width:19%;padding:10px 8px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Reviewer</th>
+            <th align="center" style="width:31%;padding:10px 8px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Assigned grunter(s)</th>
+            <th align="center" style="width:10%;padding:10px 5px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Jobs added</th>
+            <th align="center" style="width:13%;padding:10px 5px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Logged</th>
+            <th align="center" style="width:14%;padding:10px 5px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Reviews</th>
+            <th align="center" style="width:13%;padding:10px 8px;text-align:center;font:700 11px/1.3 Arial,sans-serif;">Applied</th>
           </tr></thead>
           <tbody>${tableRows || `<tr><td colspan="6" style="padding:18px;font:14px/1.5 Arial,sans-serif;color:#65708a;">No Application Engineer activity was recorded for this period.</td></tr>`}</tbody>
         </table>

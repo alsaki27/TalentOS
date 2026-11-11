@@ -113,9 +113,46 @@ describe("team activity report email helpers", () => {
 
     expect(html).toContain('class="chart-track-empty" width="100%" bgcolor="#e7edf3"');
     expect(html).not.toContain('width="0%"');
-    expect(html).toContain(".chart-member, .chart-metrics { display:block !important; width:100% !important;");
-    expect(html).toContain('class="chart-member-name"');
+    expect(html).toContain('<td class="chart-person-row" colspan="2"');
+    expect(html).toContain('<table class="chart-bar-table" role="presentation" width="100%"');
+    expect(html).toContain('class="chart-person-name"');
     expect(html).toContain('class="chart-grunter-names"');
+    expect(html).toContain('font-size:0;line-height:0;background:#e7edf3');
+  });
+
+  it("keeps nonzero chart bars proportional while the bar track spans the available width", () => {
+    const reviewer = { ...member, display_name: "Azmain Ahnaf" };
+    const grunter = {
+      ...member,
+      actor_user_id: "grunter-1",
+      display_name: "Shahria Arafat Tafhim",
+      role_variant: "application_engineer_grunter",
+      applications_applied: 6,
+    };
+    const html = renderTeamActivityEmail({
+      period: "daily",
+      window: getTeamActivityReportWindow("daily", new Date("2026-10-23T21:00:00.000Z")),
+      members: [reviewer, grunter],
+      reportUrl: "https://talent.skarion.com/admin/extension-reports",
+    });
+
+    expect(html).toContain('class="chart-track" role="presentation" width="100%"');
+    expect(html).toContain('class="chart-track-value" width="10%"');
+    expect(html).toContain('class="chart-track-rest" width="90%"');
+    expect(html).toContain('class="chart-track-value" width="6.666666666666667%"');
+  });
+
+  it("centers every Application Engineer activity heading and value", () => {
+    const html = renderTeamActivityEmail({
+      period: "daily",
+      window: getTeamActivityReportWindow("daily", new Date("2026-10-23T21:00:00.000Z")),
+      members: [member],
+      reportUrl: "https://talent.skarion.com/admin/extension-reports",
+    });
+    const table = html.slice(html.indexOf('<table class="report-table"'), html.indexOf("</table>", html.indexOf('<table class="report-table"')));
+    expect(table.match(/align="center"/g)).toHaveLength(12);
+    expect(table).not.toMatch(/align="(?:left|right)"/);
+    expect(table).toContain("text-align:center");
   });
 });
 
