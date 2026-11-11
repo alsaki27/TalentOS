@@ -78,10 +78,20 @@ interface Source {
 }
 // This is an additional, conservative prepare-enrollment eligibility check. It
 // does not replace or modify the existing Application Queue's filters.
+// Finalized résumés reference target_jobs. Some older records use jobs.id directly.
+const SELECTED_RESUME_JOIN = `JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
+  AND v.candidate_id = a.candidate_id
+  AND (v.application_id IS NULL OR v.application_id = a.id)
+  AND (v.job_id IS NULL OR v.job_id = a.job_id)
+  AND (
+    EXISTS (SELECT 1 FROM target_jobs t WHERE t.id = v.target_job_id
+      AND t.candidate_id = a.candidate_id AND t.job_id = a.job_id)
+    OR (v.target_job_id = a.job_id
+      AND NOT EXISTS (SELECT 1 FROM target_jobs t WHERE t.id = v.target_job_id))
+  )`;
 const SOURCE_JOINS = `FROM applications a
   JOIN jobs j ON j.id = a.job_id
-  JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
-    AND v.candidate_id = a.candidate_id AND v.target_job_id = a.job_id
+  ${SELECTED_RESUME_JOIN}
   JOIN application_resume_exports x ON x.application_id = a.id AND x.resume_version_id = v.id`;
 const READY = `COALESCE(a.application_stage, a.ae_stage) = 'ready_for_application'
   AND a.applied_at IS NULL AND COALESCE(a.review_status, 'approved') IN ('approved', 'not_required')
@@ -96,8 +106,7 @@ const BOUND = `${READY}
   AND to_jsonb(j) = e.job_snapshot AND to_jsonb(v) = e.resume_snapshot`;
 const BOUND_JOINS = `JOIN applications a ON a.id = e.application_id
   JOIN jobs j ON j.id = a.job_id
-  JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
-    AND v.candidate_id = a.candidate_id AND v.target_job_id = a.job_id
+  ${SELECTED_RESUME_JOIN}
   JOIN application_resume_exports x ON x.id = e.export_id AND x.application_id = a.id AND x.resume_version_id = v.id`;
 
 /** Staff route supplies the authenticated operator, never a caller-provided actor. */
