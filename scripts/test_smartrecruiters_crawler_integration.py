@@ -35,6 +35,16 @@ def response(url: str, status: int, html: str = "") -> SimpleNamespace:
 
 
 class SmartRecruitersCrawlerIntegrationTests(unittest.TestCase):
+    def test_tracking_query_is_removed_before_public_detail_request(self):
+        tracked = JOB_URL + "?trid=9efb9c01-c797-443f-8be7-a145b6fb7194"
+        with patch.object(ingest, "_request", side_effect=[response(BOARD_URL, 200, board(tracked)),
+                                                         response(JOB_URL, 200, detail_html())]) as request:
+            jobs, complete, notes = ingest._smartrecruiters_jobs(BOARD_URL, "Acme", "Acme")
+        self.assertTrue(complete, notes)
+        self.assertEqual(request.call_args_list[1].args[0], JOB_URL)
+        self.assertEqual(jobs[0]["source_url"], JOB_URL)
+        self.assertGreater(len(jobs[0]["description_text"]), 200)
+
     def test_complete_board_and_public_detail_are_ready(self):
         with patch.object(ingest, "_request", side_effect=[response(BOARD_URL, 200, board()),
                                                          response(JOB_URL, 200, detail_html())]) as request:

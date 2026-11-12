@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
+
+
+_TRACKING_ID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\Z")
 
 
 @dataclass(frozen=True)
@@ -24,14 +27,37 @@ def public_job_path(url: str) -> str | None:
         parsed = urlsplit(url)
         if (parsed.scheme != "https" or parsed.hostname != "jobs.smartrecruiters.com"
                 or parsed.username or parsed.password or parsed.port not in (None, 443)
-                or parsed.query):
+                or parsed.query or parsed.fragment):
             return None
     except ValueError:
         return None
-    segments = [part.casefold() for part in parsed.path.split("/") if part]
+    segments = [unquote(part).casefold() for part in parsed.path.split("/") if part]
     if len(segments) != 2 or any(part in {"apply", "application", "applications", "apps", "new"} for part in segments):
         return None
     return parsed.path.rstrip("/")
+
+
+def public_job_url_from_card(url: str) -> str | None:
+    """Remove only the board's UUID tracking tag from a public job card URL.
+
+    The returned URL is a query-free job detail. Unknown query parameters and
+    application routes remain invalid; the caller must still check robots.
+    """
+    try:
+        parsed = urlsplit(url)
+        if (parsed.scheme != "https" or parsed.hostname != "jobs.smartrecruiters.com"
+                or parsed.username or parsed.password or parsed.port not in (None, 443)
+                or parsed.fragment):
+            return None
+    except ValueError:
+        return None
+    if parsed.query:
+        params = parse_qsl(parsed.query, keep_blank_values=True)
+        if (len(params) != 1 or params[0][0].casefold() != "trid"
+                or not _TRACKING_ID.fullmatch(params[0][1])):
+            return None
+    clean = urlunsplit(("https", "jobs.smartrecruiters.com", parsed.path.rstrip("/"), "", ""))
+    return clean if public_job_path(clean) else None
 
 
 def _title(value: Any) -> str:

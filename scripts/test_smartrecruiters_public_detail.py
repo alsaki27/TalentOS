@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from smartrecruiters_public_detail import merge_public_job_detail
+from smartrecruiters_public_detail import merge_public_job_detail, public_job_url_from_card
 
 
 URL = "https://jobs.smartrecruiters.com/Acme/96484926-material-handler"
@@ -25,6 +25,21 @@ def posting(**changes: object) -> dict:
 
 
 class SmartRecruitersPublicDetailTests(unittest.TestCase):
+    def test_only_uuid_tracking_query_is_removed_from_public_card(self):
+        tracked = URL + "?trid=9efb9c01-c797-443f-8be7-a145b6fb7194"
+        self.assertEqual(public_job_url_from_card(tracked), URL)
+        self.assertEqual(public_job_url_from_card(URL), URL)
+        for url in (
+            URL + "?apply=true",
+            tracked + "&apply=true",
+            URL + "?trid=invalid",
+            tracked + "#apply",
+            URL + "/apply?trid=9efb9c01-c797-443f-8be7-a145b6fb7194",
+            URL.replace("/Acme/", "/%61pply/"),
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(public_job_url_from_card(url))
+
     def test_one_matching_public_jobposting_enriches_card(self):
         original = card()
         result = merge_public_job_detail(original, 200, URL, [posting()])

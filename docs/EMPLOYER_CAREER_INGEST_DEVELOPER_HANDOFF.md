@@ -12,7 +12,7 @@ A later frozen v14 checkpoint brought the historical result union to **1,295 gro
 
 The stopped v15 checkpoint plus historical results covers **1,310 groups**. An attempt-lineage audit found that 21 of its 492 source-reported complete groups lacked **8,538 saved job rows**; those groups are held for revalidation. The remaining **471 groups** have matching source and payload counts, with 55,512 candidate rows. The reporter holds 31,307 records with invalid or unverified job URLs, 4,683 whose descriptions would trigger Job CEO to fetch the URL, and 394 with application-form URLs; **19,128 payloads pass these minimum readiness checks**. The 31,307 URL holds include 29,313 historical and 1,994 v15 Workday listings whose URLs omitted the Workday site segment. The four v15 shards stopped after 20 valid source results to add an application-form redirect guard and Workday detail validation. The v16 continuation repairs Workday job details and rejects Taleo portal-shell false positives. Of the 471 count-matched complete groups, 164 still have at least one held payload. All remaining groups still need a first pass, and a complete listing result alone does not prove its job payloads are ready or that Job CEO will log them.
 
-The ongoing scrape-only work includes four v16 continuation shards (8,632 groups), four v16 Workday revalidation shards (116 historical groups), one v16 Taleo revalidation shard (four historical groups), four v18 TalentBrew shards (37 verified groups), four v19 payload-count revalidation shards (21 historical groups), and a v20 TalentBrew HTML-detail pilot. These cohorts overlap; **do not add their group counts** to the 9,919 denominator. The v19 SmartRecruiters revalidation finished 18 groups: 13 complete and five partial because public job URLs or details could not be verified. The v20 Workable revalidation finished all 15 groups with 797 distinct jobs whose public URLs and descriptions passed the minimum checks; its pilot resolved 99 location rows into 34 jobs while preserving every location in `raw`. The one-board v20 TalentBrew pilot is still running. No jobs from these runs have been posted to TalentOS, and their results are not in the frozen v15 private ZIP.
+The scrape-only continuation now has a reconciled checkpoint: the four v16 first-pass shards were stopped after **158 groups** and **21,397 saved job rows**, all valid JSONL with no complete-source payload shortfall. The remaining **8,474 groups** are in four host-exclusive resume trackers; the two sets cover exactly the 8,632-group continuation. A 24-worker-per-shard v21 trial was stopped after 59 results because 15 unrelated hosts had TLS failures while checking robots files. Its four folders are marked `INVALID_ROBOTS_RUN.json` and excluded from readiness. The same 8,474-group cohort was restarted in four **v21b output folders at 16 workers each**. Other cohorts overlap this inventory, so **do not add their group counts** to the 9,919 denominator. Targeted Workday (116 historical groups), TalentBrew (37 verified groups plus 14 detail retries), and payload-count (21 historical groups) runs continue. Taleo revalidation finished four groups, all partial with no validated jobs. The v20 Workable replay completed 15 of 15 groups with 797 minimum-ready jobs, and the v20 TalentBrew Consor pilot completed 162 of 162 jobs, including 130 public HTML detail descriptions. SmartRecruiters revalidation completed 13 of 18 groups at v19 and recovered another four groups with 25 minimum-ready jobs at v21; one source with a stale HTTP 404 detail remains partial. No jobs from these runs have been posted to TalentOS, and their results are not in the frozen v15 private ZIP.
 
 ## What is on this branch
 
@@ -25,10 +25,10 @@ The ongoing scrape-only work includes four v16 continuation shards (8,632 groups
 - `scripts/workday_public_detail.py`: validates public Workday CXS details, full descriptions, and canonical job URLs before a Workday source is complete.
 - `scripts/talentbrew_public_board.py`: validates TalentBrew/Radancy HTML listing totals, pagination, and same-host details.
 - `scripts/talentbrew_public_detail.py`: validates public TalentBrew HTML job descriptions when a job page lacks schema.org JobPosting data, using the listed card title and same-host job ID.
-- `scripts/smartrecruiters_public_detail.py`: validates full public SmartRecruiters job details against the HTML listing cards; stale or mismatched detail pages leave the source partial.
+- `scripts/smartrecruiters_public_detail.py`: validates full public SmartRecruiters job details against the HTML listing cards; v21 strips only a single UUID `trid` tracking query before fetching a public job page. Stale or mismatched detail pages leave the source partial.
 - `scripts/workable_public_job_url.py`: derives a public Workable job page from a matching `/j/<id>/apply` URL without visiting the application route. The v20 crawler merges multiple location rows for one Workable job ID and retains the location set in `raw`.
 - `scripts/careerplug_public_listing.py`: listing-only research parser. CareerPlug job links redirect to application forms, so this is not an integration-ready adapter.
-- `scripts/test_employer_career_ingest.py` and the focused adapter, attempt-lineage, application-guard, rate-limit, robots, shard, safe-report, and Open Positions tests: 194 offline tests passed for v20.
+- `scripts/test_employer_career_ingest.py` and the focused adapter, attempt-lineage, application-guard, rate-limit, robots, shard, safe-report, and Open Positions tests: 196 offline tests passed for v21.
 - `data/talentos-employer-careers/README.md`, `career_page_tracker_summary.json`, and `scrape_source_manifest.json`: source definitions, counts, and the exact tracker SHA-256.
 
 The repository is **public**. The full `career_page_tracker.csv` and `source_dispositions.csv` contain internal company IDs and review notes, so they are ignored by Git and must be given to the developer through a private channel. The tracker SHA-256 in `scrape_source_manifest.json` is `6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d`. Place the private tracker at `data/talentos-employer-careers/career_page_tracker.csv` before running the crawler. The local ignored `outputs/employer-career-ingest-run-2026-11-12-v15-readiness-v19-final/employer-career-private-handoff-v15-audited-v19-2026-11-12.zip` contains the tracker, corrected dispositions, 19,128 gated payloads, run selection, cohort manifest, and hash manifest; deliver it privately. Its SHA-256 is `583d6f91f2f46994dd35261a2ac57f263c710bc10451ebfa3e9cd349b36b8a0b`. All earlier handoff ZIPs are superseded. Later crawl checkpoints require an updated private handoff.
@@ -54,6 +54,8 @@ $runs = @(
 )
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v15-shard-{0:D2}' -f $_) }
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v16-shard-{0:D2}' -f $_) }
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v21-shard-{0:D2}' -f $_) } # marked invalid; wrapper excludes
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v21b-shard-{0:D2}' -f $_) }
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v16-workday-{0:D2}' -f $_) }
 $runs += 'outputs/employer-career-ingest-run-2026-11-12-v16-taleo'
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v18-talentbrew-{0:D2}' -f $_) }
@@ -61,12 +63,15 @@ $runs += 'outputs/employer-career-ingest-run-2026-11-12-v18-workable'
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v19-payload-{0:D2}' -f $_) }
 $runs += 'outputs/employer-career-ingest-run-2026-11-12-v19-smartrecruiters'
 $runs += 'outputs/employer-career-ingest-run-2026-11-12-v20-workable'
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v20-talentbrew-consor-pilot'
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v20-talentbrew-{0:D2}' -f $_) }
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v21-smartrecruiters'
 $reportArgs = @(
   'scripts/report_employer_career_safe_runs.py',
   '--tracker', 'data/talentos-employer-careers/career_page_tracker.csv',
-  '--adapter-version', 'employer-career-ingest-v11,employer-career-ingest-v12,employer-career-ingest-v13,employer-career-ingest-v14,employer-career-ingest-v15,employer-career-ingest-v16,employer-career-ingest-v17,employer-career-ingest-v18,employer-career-ingest-v19,employer-career-ingest-v20',
+  '--adapter-version', 'employer-career-ingest-v11,employer-career-ingest-v12,employer-career-ingest-v13,employer-career-ingest-v14,employer-career-ingest-v15,employer-career-ingest-v16,employer-career-ingest-v17,employer-career-ingest-v18,employer-career-ingest-v19,employer-career-ingest-v20,employer-career-ingest-v21',
   '--min-sitemap-adapter-version', 'employer-career-ingest-v14',
-  '--output-dir', 'outputs/employer-career-ingest-run-2026-11-12-v20-readiness'
+  '--output-dir', 'outputs/employer-career-ingest-run-2026-11-12-v21-readiness'
 )
 foreach ($run in $runs) { $reportArgs += @('--run-dir', $run) }
 python @reportArgs

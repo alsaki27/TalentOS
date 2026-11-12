@@ -42,7 +42,7 @@ from typing import Any, Callable, Iterable
 import requests
 from jazzhr_public_board import board_url_for, parse_board_listing
 from open_position_links import detail_matches_open_position, discover_open_position_links
-from smartrecruiters_public_detail import merge_public_job_detail, public_job_path
+from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
 from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
 from talentbrew_public_detail import parse_public_detail as parse_talentbrew_public_detail
 from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
@@ -50,7 +50,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v20"
+ADAPTER_VERSION = "employer-career-ingest-v21"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -917,12 +917,15 @@ def _smartrecruiters_jobs(url: str, company: str, employer: str) -> tuple[list[d
             for row in rows:
                 job_url = str(row.get("url") or "").strip()
                 title = _text(row.get("title"))
+                normalized_job_url = public_job_url_from_card(job_url)
                 parsed_job = urllib.parse.urlparse(job_url)
                 if parsed_job.scheme != "https" or parsed_job.hostname != "jobs.smartrecruiters.com" or not title:
                     complete = False
                     notes.append(f"SmartRecruiters page {page_index} contained an invalid job card")
                     continue
-                normalized_job_url = job_url.split("#", 1)[0]
+                # Retain an unrecognized card for source-level auditing, but
+                # never request it as a detail or mark the source complete.
+                normalized_job_url = normalized_job_url or job_url.split("#", 1)[0]
                 if normalized_job_url in seen_urls:
                     complete = False
                     notes.append("SmartRecruiters board repeated a job URL across groups/pages")
