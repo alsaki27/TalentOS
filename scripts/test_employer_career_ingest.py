@@ -92,6 +92,30 @@ class CareerScraperTests(unittest.TestCase):
         boards = scraper._linked_ats_boards(html, "https://acme.example/careers")
         self.assertEqual(boards, [("https://jobs.lever.co/acme", ("lever", "acme"))])
 
+    def test_source_order_spreads_hosts_and_keeps_direct_ats_near_front(self):
+        urls = [
+            "https://jobs.ashbyhq.com/beta",
+            "https://b.example/careers",
+            "https://jobs.lever.co/charlie",
+            "https://a.example/careers",
+            "https://jobs.ashbyhq.com/acme",
+            "https://c.example/careers",
+        ]
+        sources = [{"url": url, "normalized_url": url} for url in urls]
+        ordered = scraper._interleave_sources_by_host(sources, workers=4)
+        self.assertEqual(
+            [source["url"] for source in ordered],
+            [
+                "https://jobs.ashbyhq.com/acme",
+                "https://jobs.lever.co/charlie",
+                "https://a.example/careers",
+                "https://b.example/careers",
+                "https://jobs.ashbyhq.com/beta",
+                "https://c.example/careers",
+            ],
+        )
+        self.assertEqual(scraper._interleave_sources_by_host(list(reversed(sources)), workers=4), ordered)
+
     def test_generic_career_redirect_to_ats_uses_vendor_adapter(self):
         page = SimpleNamespace(status_code=200, url="https://jobs.lever.co/acme", text="<html></html>")
         job = {"title": "Field Engineer", "company": "Acme", "source_url": "https://jobs.lever.co/acme/123", "external_job_id": "123", "raw": {}}
@@ -361,6 +385,31 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(result["method"], "personio_page_fallback:sitemap_structured_data")
         self.assertTrue(result["complete"])
         self.assertIn("HTTP 404", result["notes"][0])
+
+    def test_personio_html_fallback_and_official_redirect_dispatch(self):
+        board_url = "https://sample.jobs.personio.de/"
+        job_url = "https://sample.jobs.personio.de/job/123"
+        html = '<script type="application/ld+json">{"@type":"JobPosting","title":"Engineer","url":"https://sample.jobs.personio.de/job/123","description":"Build systems"}</script>'
+        response = SimpleNamespace(status_code=200, text=html, url=board_url)
+        source = {"url": board_url, "normalized_url": board_url, "source_urls": [board_url], "evidence_urls": [], "employers": ["Sample"], "employer_keys": ["sample"]}
+        with patch.object(scraper, "_personio_jobs", side_effect=scraper.ScrapeFailure("HTTP 404")) as feed, \
+             patch.object(scraper, "_request", return_value=response), \
+             patch.object(scraper, "_discover_sitemaps", return_value=([], False, [])):
+            result = scraper.scrape_source(source)
+        self.assertEqual(feed.call_count, 1)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["method"], "personio_page_fallback:linked_pages_structured_data")
+        self.assertEqual([job["source_url"] for job in result["jobs"]], [job_url])
+
+        official_url = "https://official.example/careers"
+        official = {**source, "url": official_url, "normalized_url": official_url, "source_urls": [official_url]}
+        api_job = {"title": "Engineer", "company": "Sample", "source_url": job_url, "external_job_id": "123", "raw": {}}
+        with patch.object(scraper, "_personio_jobs", return_value=([api_job], True, [])) as feed, \
+             patch.object(scraper, "_request", return_value=response):
+            redirected = scraper.scrape_source(official)
+        feed.assert_called_once_with(board_url, "sample", "Sample")
+        self.assertTrue(redirected["complete"])
+        self.assertEqual(redirected["method"], "redirected_public_xml_feed:personio-v1")
 
     def test_greenhouse_total_count_must_match_before_complete_scrape(self):
         payload = {"meta": {"total": 1}, "jobs": [{"id": 123, "title": "GIS Analyst", "absolute_url": "https://boards.greenhouse.io/acme/jobs/123"}]}

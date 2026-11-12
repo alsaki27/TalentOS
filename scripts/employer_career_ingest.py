@@ -16,6 +16,7 @@ the results file for adapter follow-up. No page is sent to TalentOS unless
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import csv
 import hashlib
 from html.parser import HTMLParser
@@ -1912,6 +1913,7 @@ def _linked_ats_boards(html: str, current_url: str) -> list[tuple[str, tuple[str
 
 def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]], str, bool, list[str]]:
     postings: list[dict[str, Any]] = []
+    personio_feed_note: str | None = None
     # Some sources are a job detail page already.
     response = _request(start_url)
     if response.status_code >= 400:
@@ -1943,8 +1945,19 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         if redirected_platform[0] == "taleo":
             jobs, complete, notes = _taleo_jobs(response.url, redirected_platform[1], employer)
             return jobs, "public_career_section_sitemap:taleo-enterprise-v1", complete, notes
-        jobs = _api_jobs(response.url, redirected_platform, employer)
-        return jobs, f"redirected_ats_api:{redirected_platform[0]}", True, []
+        if redirected_platform[0] == "personio":
+            # Direct Personio URLs reach this path only after their XML feed
+            # failed in scrape_source. An official page redirect has not yet
+            # tried the feed, so use it before falling back to public HTML.
+            if _platform(start_url) != redirected_platform:
+                try:
+                    jobs, complete, notes = _personio_jobs(response.url, redirected_platform[1], employer)
+                    return jobs, "redirected_public_xml_feed:personio-v1", complete, notes
+                except ScrapeFailure as exc:
+                    personio_feed_note = f"redirected Personio XML feed unavailable: {str(exc)[:140]}"
+        else:
+            jobs = _api_jobs(response.url, redirected_platform, employer)
+            return jobs, f"redirected_ats_api:{redirected_platform[0]}", True, []
     if not postings and is_job_detail_url(response.url):
         heuristic = extract_html_job(response.text, response.url, employer)
         if heuristic: postings.append(heuristic)
@@ -2024,9 +2037,15 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         unique: dict[str, dict[str, Any]] = {}
         for job in combined:
             unique.setdefault(str(job.get("source_url") or job.get("external_job_id") or len(unique)), job)
+        if personio_feed_note:
+            board_notes.insert(0, personio_feed_note)
+            all_boards_complete = False
         return list(unique.values()), "linked_ats_api:" + "+".join(dict.fromkeys(p[0] for _, p in linked_boards)), all_boards_complete, board_notes
     seen_posting_urls = {job["source_url"].split("#", 1)[0] for job in postings}
     urls, complete, notes = _discover_sitemaps(response.url)
+    if personio_feed_note:
+        complete = False
+        notes.insert(0, personio_feed_note)
     listing_pages: list[str] = []
     method = "sitemap_structured_data"
     if not urls:
@@ -2079,6 +2098,32 @@ def load_sources(path: Path) -> list[dict[str, Any]]:
             entry["employers"].append((row.get("employer_name") or "").strip())
             entry["employer_keys"].append((row.get("employer_key") or "").strip())
     return [{**v, "source_urls": list(dict.fromkeys(v["source_urls"])), "evidence_urls": list(dict.fromkeys(v["evidence_urls"])), "employers": list(dict.fromkeys(x for x in v["employers"] if x)), "employer_keys": list(dict.fromkeys(x for x in v["employer_keys"] if x))} for v in grouped.values()]
+
+
+def _interleave_sources_by_host(sources: list[dict[str, Any]], workers: int) -> list[dict[str, Any]]:
+    """Start different hosts together while giving direct ATS boards half the slots."""
+    buckets: dict[str, deque[dict[str, Any]]] = {}
+    for source in sorted(sources, key=lambda s: (0 if _platform(s["url"]) else 1, s["normalized_url"])):
+        host = urllib.parse.urlparse(source["url"]).hostname or source["normalized_url"]
+        buckets.setdefault(host, deque()).append(source)
+    direct = deque(sorted(host for host, items in buckets.items() if _platform(items[0]["url"])))
+    generic = deque(sorted(host for host, items in buckets.items() if not _platform(items[0]["url"])))
+    direct_quota = max(1, workers // 2)
+    generic_quota = max(1, workers - direct_quota)
+    ordered: list[dict[str, Any]] = []
+    while direct or generic:
+        requeue_direct: list[str] = []
+        requeue_generic: list[str] = []
+        for queue, quota in ((direct, direct_quota), (generic, generic_quota)):
+            for _ in range(min(quota, len(queue))):
+                host = queue.popleft()
+                ordered.append(buckets[host].popleft())
+                if buckets[host]:
+                    target = requeue_direct if _platform(buckets[host][0]["url"]) else requeue_generic
+                    target.append(host)
+        direct.extend(requeue_direct)
+        generic.extend(requeue_generic)
+    return ordered
 
 
 def _read_done(results_path: Path) -> dict[str, dict[str, Any]]:
@@ -2468,8 +2513,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     results_path = args.output_dir / "source_results.jsonl"
     jobs_path = args.output_dir / "jobs.jsonl"
-    sources = load_sources(args.input)
-    sources.sort(key=lambda s: (0 if _platform(s["url"]) else 1, s["normalized_url"]))
+    sources = _interleave_sources_by_host(load_sources(args.input), args.workers)
     tracker_sha256 = hashlib.sha256(args.input.read_bytes()).hexdigest()
     with args.input.open(newline="", encoding="utf-8-sig") as input_file:
         tracker_rows = list(csv.DictReader(input_file))
