@@ -79,12 +79,7 @@ export async function POST(req: NextRequest) {
   return repairQueue(req);
 }
 
-// This is intentionally opt-in and admin-gated so the authenticated control
-// center can execute the repair when a direct POST client is unavailable.
-// Without execute=1 it remains read-only rather than mutating on navigation.
-export async function GET(req: NextRequest) {
-  if (new URL(req.url).searchParams.get("execute") !== "1") {
-    return NextResponse.json({ error: "Use POST, or GET with execute=1 from the authenticated admin control center." }, { status: 405 });
-  }
-  return repairQueue(req);
+// A navigation or prefetch must never retry workflows. The admin UI uses POST.
+export async function GET() {
+  return NextResponse.json({ error: "Use POST to repair the AI queue." }, { status: 405 });
 }

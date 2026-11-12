@@ -12,6 +12,14 @@ describe("canAccessPath", () => {
     expect(canAccessPath("admin", "/api/users/some-id")).toBe(true);
   });
 
+  it("restricts public API key management to admins", () => {
+    for (const path of ["/settings/api-keys", "/api/api-keys", "/api/api-keys/example-id"]) {
+      expect(canAccessPath("admin", path)).toBe(true);
+      expect(canAccessPath("manager", path)).toBe(false);
+      expect(canAccessPath("application_engineer", path)).toBe(false);
+    }
+  });
+
   it("lets every authenticated role read the team list from GET /api/users - the assignment picker used by jobs, the application queue, inbox, and interview scheduling, not just /team", () => {
     // Regression guard: this exact path was previously swept into the /team
     // admin-only rule, which silently emptied every non-admin "owner" /

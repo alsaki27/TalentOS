@@ -255,10 +255,7 @@ export default function TemplatesPage() {
             <h2>Preview: {previewTemplate.name}</h2>
             <div className="card" style={{ marginTop: 10 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>Subject: {previewTemplate.subject}</div>
-              <div
-                style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}
-                dangerouslySetInnerHTML={{ __html: previewTemplate.body.replace(/\n/g, "<br/>") }}
-              />
+              <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{previewTemplate.body}</div>
             </div>
             <div className="modal-actions">
               <button onClick={() => setPreviewTemplate(null)}>Close</button>

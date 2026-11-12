@@ -6,9 +6,40 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne, execute, sql } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
+
+type SequenceStepInput = {
+  step_number: number;
+  template_id: string;
+  delay_hours?: number;
+  send_time?: string | null;
+  condition?: string | null;
+};
+
+function validSteps(value: unknown): value is SequenceStepInput[] {
+  return Array.isArray(value) && value.length <= 50 && value.every((step) =>
+    step && typeof step === "object" &&
+    Number.isInteger(step.step_number) && step.step_number > 0 &&
+    typeof step.template_id === "string" && step.template_id.length > 0 &&
+    (step.delay_hours === undefined || (Number.isInteger(step.delay_hours) && step.delay_hours >= 0))
+  );
+}
+
+function stepInsert(sequenceId: string, steps: SequenceStepInput[]) {
+  const values: unknown[] = [];
+  const placeholders = steps.map((step) => {
+    const start = values.length + 1;
+    values.push(sequenceId, step.step_number, step.template_id, step.delay_hours ?? 24,
+      step.send_time ?? null, step.condition ?? null);
+    return `(${Array.from({ length: 6 }, (_, offset) => `$${start + offset}`).join(", ")})`;
+  });
+  return {
+    text: `INSERT INTO email_sequence_steps (sequence_id, step_number, template_id, delay_hours, send_time, condition) VALUES ${placeholders.join(", ")}`,
+    values,
+  };
+}
 
 export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser();
@@ -69,39 +100,23 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });
+  const steps: unknown = body.steps ?? [];
+  if (!validSteps(steps)) return NextResponse.json({ error: "Invalid sequence steps" }, { status: 400 });
 
-  const sequence = await queryOne(
-    `INSERT INTO email_sequences (name, description, trigger_event, is_active, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [body.name, body.description ?? null, body.trigger_event ?? null, body.is_active ?? true, context.profile.user_id]
-  );
-  if (!sequence) return NextResponse.json({ error: "Insert failed" }, { status: 500 });
-
-  const steps = body.steps ?? [];
-  if (steps.length > 0) {
-    const cols = ["sequence_id", "step_number", "template_id", "delay_hours", "send_time", "condition"];
-    const placeholders: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-    for (const step of steps) {
-      const rowPlaceholders: string[] = [];
-      for (const _ of cols) {
-        rowPlaceholders.push(`$${idx++}`);
-      }
-      placeholders.push(`(${rowPlaceholders.join(", ")})`);
-      values.push(
-        sequence.id,
-        step.step_number,
-        step.template_id,
-        step.delay_hours ?? 24,
-        step.send_time ?? null,
-        step.condition ?? null
-      );
+  const sequenceId = crypto.randomUUID();
+  const [createdRows] = await sql().transaction((tx) => {
+    const statements = [tx.query(
+      `INSERT INTO email_sequences (id, name, description, trigger_event, is_active, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [sequenceId, body.name, body.description ?? null, body.trigger_event ?? null, body.is_active ?? true, context.profile.user_id]
+    )];
+    if (steps.length > 0) {
+      const insert = stepInsert(sequenceId, steps);
+      statements.push(tx.query(insert.text, insert.values));
     }
-    await execute(
-      `INSERT INTO email_sequence_steps (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`,
-      values
-    );
-  }
+    return statements;
+  });
+  const sequence = createdRows?.[0];
+  if (!sequence) return NextResponse.json({ error: "Insert failed" }, { status: 500 });
 
   return NextResponse.json({ ...sequence, steps }, { status: 201 });
 }
@@ -112,41 +127,39 @@ export async function PATCH(req: NextRequest) {
 
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: "id is required" }, { status: 400 });
-
-  const data = await queryOne(
-    `UPDATE email_sequences SET name = $1, description = $2, trigger_event = $3, is_active = $4 WHERE id = $5 RETURNING *`,
-    [body.name ?? null, body.description ?? null, body.trigger_event ?? null, body.is_active ?? null, body.id]
-  );
-  if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
-
-  // Replace steps if provided
-  if (body.steps && Array.isArray(body.steps)) {
-    await execute("DELETE FROM email_sequence_steps WHERE sequence_id = $1", [body.id]);
-    const cols = ["sequence_id", "step_number", "template_id", "delay_hours", "send_time", "condition"];
-    const placeholders: string[] = [];
-    const values: any[] = [];
-    let idx = 1;
-    for (const step of body.steps) {
-      const rowPlaceholders: string[] = [];
-      for (const _ of cols) {
-        rowPlaceholders.push(`$${idx++}`);
-      }
-      placeholders.push(`(${rowPlaceholders.join(", ")})`);
-      values.push(
-        body.id,
-        step.step_number,
-        step.template_id,
-        step.delay_hours ?? 24,
-        step.send_time ?? null,
-        step.condition ?? null
-      );
-    }
-    await execute(
-      `INSERT INTO email_sequence_steps (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`,
-      values
-    );
+  if (body.name !== undefined && (typeof body.name !== "string" || !body.name.trim())) {
+    return NextResponse.json({ error: "name must be a nonempty string" }, { status: 400 });
+  }
+  if (body.is_active !== undefined && typeof body.is_active !== "boolean") {
+    return NextResponse.json({ error: "is_active must be a boolean" }, { status: 400 });
+  }
+  if (body.steps !== undefined && !validSteps(body.steps)) {
+    return NextResponse.json({ error: "Invalid sequence steps" }, { status: 400 });
   }
 
+  const [updatedRows] = await sql().transaction((tx) => {
+    const statements = [tx.query(
+      `UPDATE email_sequences
+          SET name = COALESCE($1, name),
+              description = CASE WHEN $2::boolean THEN $3 ELSE description END,
+              trigger_event = CASE WHEN $4::boolean THEN $5 ELSE trigger_event END,
+              is_active = COALESCE($6, is_active)
+        WHERE id = $7 RETURNING *`,
+      [body.name ?? null, body.description !== undefined, body.description ?? null,
+        body.trigger_event !== undefined, body.trigger_event ?? null, body.is_active ?? null, body.id]
+    )];
+
+    if (body.steps !== undefined) {
+      statements.push(tx.query("DELETE FROM email_sequence_steps WHERE sequence_id = $1", [body.id]));
+      if (body.steps.length > 0) {
+        const insert = stepInsert(body.id, body.steps);
+        statements.push(tx.query(insert.text, insert.values));
+      }
+    }
+    return statements;
+  });
+  const data = updatedRows?.[0];
+  if (!data) return NextResponse.json({ error: "Sequence not found" }, { status: 404 });
   return NextResponse.json(data);
 }
 

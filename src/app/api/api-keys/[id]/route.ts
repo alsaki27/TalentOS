@@ -4,7 +4,7 @@ import { queryOne } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const { context, response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const data = await queryOne(
