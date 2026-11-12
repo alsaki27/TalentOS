@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import csv
+import errno
 import hashlib
 from html.parser import HTMLParser
 import json
@@ -35,14 +36,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import requests
 from jazzhr_public_board import board_url_for, parse_board_listing
+from open_position_links import detail_matches_open_position, discover_open_position_links
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v14"
+ADAPTER_VERSION = "employer-career-ingest-v15"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -52,14 +54,22 @@ TEAMTAILOR_PAGE_SIZE = 100
 MAX_BODY_BYTES = 8_000_000
 _robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
 _robots_lock = threading.Lock()
+_robots_fetch_locks: dict[str, threading.Lock] = {}
+_robots_fetch_lock_guard = threading.Lock()
 _host_locks: dict[str, threading.Lock] = {}
 _host_lock_guard = threading.Lock()
 _last_host_request: dict[str, float] = {}
 _request_session_local = threading.local()
+_shared_host_rate_dir: Path | None = None
+SHARED_HOST_LOCK_TIMEOUT_SECONDS = 300.0
 
 
 class ScrapeFailure(RuntimeError):
     pass
+
+
+class RobotsFetchFailure(ScrapeFailure):
+    """The robots policy could not be fetched; retry after transport recovers."""
 
 
 def _public_https_url(url: str) -> urllib.parse.ParseResult:
@@ -101,30 +111,102 @@ def _thread_session() -> requests.Session:
     return session
 
 
+def _shared_host_request(host: str, rules: urllib.robotparser.RobotFileParser | None, send: Callable[[], requests.Response]) -> requests.Response:
+    """Serialize one host across shard processes; the caller holds its thread lock."""
+    if _shared_host_rate_dir is None:
+        raise RuntimeError("shared host rate directory is not configured")
+    rate_path = _shared_host_rate_dir / (hashlib.sha256(host.encode("utf-8")).hexdigest() + ".rate")
+    with rate_path.open("a+b") as rate_file:
+        deadline = time.monotonic() + SHARED_HOST_LOCK_TIMEOUT_SECONDS
+        if os.name == "nt":
+            import msvcrt
+        else:
+            import fcntl
+        while True:
+            try:
+                rate_file.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(rate_file.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(rate_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK) and getattr(exc, "winerror", None) not in (33, 36):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ScrapeFailure(f"shared host rate lock timed out for {host} after {SHARED_HOST_LOCK_TIMEOUT_SECONDS:g}s") from exc
+                time.sleep(min(0.05, remaining))
+        try:
+            # Append complete records so a crash during a write cannot erase
+            # the preceding timestamp. A leading newline isolates a torn tail.
+            def stamp() -> None:
+                rate_file.write(b"\n" + f"{time.time():.6f}".encode("ascii") + b"\n")
+                rate_file.flush()
+
+            rate_file.seek(0, os.SEEK_END)
+            size = rate_file.tell()
+            rate_file.seek(max(0, size - 4096))
+            tail = rate_file.read()
+            last_request = 0.0
+            for line in reversed(tail.split(b"\n")[:-1]):
+                try:
+                    last_request = float(line.strip())
+                    break
+                except ValueError:
+                    continue
+            if not last_request and size <= 64:
+                # Read files created by the earlier single-value format.
+                try:
+                    last_request = float(tail.strip())
+                except ValueError:
+                    pass
+            gap = _minimum_host_gap(rules) - (time.time() - last_request)
+            if gap > 0:
+                time.sleep(gap)
+            # Persist before I/O so killing the worker during send leaves a
+            # request timestamp for the next shard process.
+            stamp()
+            try:
+                return send()
+            finally:
+                stamp()
+        finally:
+            if os.name == "nt":
+                rate_file.seek(0)
+                msvcrt.locking(rate_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(rate_file.fileno(), fcntl.LOCK_UN)
+
+
 def _robots_parser(root: str) -> urllib.robotparser.RobotFileParser | None:
-    with _robots_lock:
-        if root in _robots:
-            return _robots[root]
-    parser = urllib.robotparser.RobotFileParser()
-    parser.set_url(root + "/robots.txt")
-    try:
-        response = _request(root + "/robots.txt", check_robots=False, timeout=10)
+    with _robots_fetch_lock_guard:
+        fetch_lock = _robots_fetch_locks.setdefault(root, threading.Lock())
+    with fetch_lock:
+        with _robots_lock:
+            if root in _robots:
+                return _robots[root]
+        parser = urllib.robotparser.RobotFileParser()
+        parser.set_url(root + "/robots.txt")
+        try:
+            response = _request(root + "/robots.txt", check_robots=False, timeout=10)
+        except (requests.RequestException, ScrapeFailure, OSError) as exc:
+            # Keep the underlying reason and allow a later source on this root
+            # to retry. A transport failure is not a robots policy denial.
+            raise RobotsFetchFailure(f"robots.txt fetch failed for {root}: {exc}") from exc
         if response.status_code == 200:
             parser.parse(response.text.splitlines())
         elif response.status_code in (404, 410):
             # Robots Exclusion Protocol: an unavailable file has no rules.
-            # This is an explicit policy choice; 401/403 and server errors
-            # remain fail-closed below.
             parser.parse([])
         elif response.status_code in (401, 403):
-            raise ScrapeFailure(f"robots.txt returned HTTP {response.status_code}; source held")
+            # Preserve the policy hold for explicit authorization failures.
+            parser = None
         else:
-            raise ScrapeFailure(f"robots.txt returned HTTP {response.status_code}; policy is unknown")
-    except Exception:
-        parser = None
-    with _robots_lock:
-        _robots[root] = parser
-    return parser
+            raise RobotsFetchFailure(f"robots.txt returned HTTP {response.status_code}; policy could not be checked")
+        with _robots_lock:
+            _robots[root] = parser
+        return parser
 
 
 def _minimum_host_gap(rules: urllib.robotparser.RobotFileParser | None) -> float:
@@ -153,12 +235,17 @@ def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session:
         for attempt in range(3):
             try:
                 with lock:
-                    gap = _minimum_host_gap(rules) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
-                    if gap > 0:
-                        time.sleep(gap)
                     requester = session if session is not None else _thread_session()
-                    response = requester.get(current, headers={"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}, timeout=timeout, allow_redirects=False, stream=True)
-                    _last_host_request[parsed.hostname or ""] = time.monotonic()
+                    def send() -> requests.Response:
+                        return requester.get(current, headers={"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}, timeout=timeout, allow_redirects=False, stream=True)
+                    if _shared_host_rate_dir is not None:
+                        response = _shared_host_request(parsed.hostname or "", rules, send)
+                    else:
+                        gap = _minimum_host_gap(rules) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
+                        if gap > 0:
+                            time.sleep(gap)
+                        response = send()
+                        _last_host_request[parsed.hostname or ""] = time.monotonic()
             except requests.RequestException:
                 if attempt == 2:
                     raise
@@ -1460,10 +1547,15 @@ def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Respons
     with _host_lock(parsed.hostname or "") as lock:
         for attempt in range(3):
             try:
-                gap = _minimum_host_gap(rp) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
-                if gap > 0: time.sleep(gap)
-                response = requests.post(url, data=body, headers={"User-Agent": UA, "Accept": "application/json", "Content-Type": "application/json"}, timeout=timeout, allow_redirects=False)
-                _last_host_request[parsed.hostname or ""] = time.monotonic()
+                def send() -> requests.Response:
+                    return requests.post(url, data=body, headers={"User-Agent": UA, "Accept": "application/json", "Content-Type": "application/json"}, timeout=timeout, allow_redirects=False)
+                if _shared_host_rate_dir is not None:
+                    response = _shared_host_request(parsed.hostname or "", rp, send)
+                else:
+                    gap = _minimum_host_gap(rp) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
+                    if gap > 0: time.sleep(gap)
+                    response = send()
+                    _last_host_request[parsed.hostname or ""] = time.monotonic()
             except requests.RequestException:
                 if attempt == 2: raise
                 time.sleep(2 ** attempt)
@@ -2095,6 +2187,7 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         complete = False
         notes.insert(0, personio_feed_note)
     listing_pages: list[str] = []
+    open_position_titles: dict[str, str] = {}
     method = "sitemap_structured_data"
     if not urls:
         method = "linked_pages_structured_data"
@@ -2103,6 +2196,11 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         host = urllib.parse.urlparse(response.url).hostname or ""
         listing_pages = _listing_links(response.text, response.url, host)[:250]
         urls = listing_pages
+        for candidate in discover_open_position_links(response.text, response.url):
+            if candidate.url not in open_position_titles:
+                open_position_titles[candidate.url] = candidate.title
+            if candidate.url not in urls and len(urls) < 250:
+                urls.append(candidate.url)
     for detail_url in urls:
         try:
             detail = _request(detail_url, timeout=12)
@@ -2111,6 +2209,14 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                 if not new and is_job_detail_url(detail.url):
                     heuristic = extract_html_job(detail.text, detail.url, employer)
                     if heuristic: new = [heuristic]
+                if not new and detail_url in open_position_titles and urllib.parse.urlparse(detail.url).hostname == host:
+                    title = open_position_titles[detail_url]
+                    if detail_matches_open_position(detail.text, title):
+                        heuristic = extract_html_job(detail.text, detail.url, employer)
+                        if heuristic and len(heuristic.get("description_text") or "") >= 200:
+                            heuristic["title"] = title
+                            heuristic["raw"]["extractor"] = "same_host_open_position_link"
+                            new = [heuristic]
                 if not new:
                     complete = False
                     notes.append(f"detail page had no extractable job posting: {detail_url}")
@@ -2434,7 +2540,7 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
         return {"url": url, "normalized_url": source["normalized_url"], "source_urls": source["source_urls"], "evidence_urls": source["evidence_urls"], "employers": source["employers"], "employer_keys": source["employer_keys"], "adapter_version": ADAPTER_VERSION, "status": status, "method": method, "complete": complete, "notes": notes, "jobs": jobs, "job_count": len(jobs), "error": None}
     except Exception as exc:
         msg = str(exc)
-        status = "held" if "career source must be an https url" in msg.lower() else ("blocked" if any(term in msg.lower() for term in ("robots", "disallows", "access denied", "http 401", "http 403")) else "error")
+        status = "error" if isinstance(exc, RobotsFetchFailure) else ("held" if "career source must be an https url" in msg.lower() else ("blocked" if any(term in msg.lower() for term in ("robots", "disallows", "access denied", "http 401", "http 403")) else "error"))
         return {"url": url, "normalized_url": source["normalized_url"], "source_urls": source["source_urls"], "evidence_urls": source["evidence_urls"], "employers": source["employers"], "employer_keys": source["employer_keys"], "adapter_version": ADAPTER_VERSION, "status": status, "method": "failed", "complete": False, "notes": [], "jobs": [], "job_count": 0, "error": msg[:500]}
 
 
@@ -2555,6 +2661,7 @@ def summarize_results(results_path: Path, jobs_path: Path) -> dict[str, Any]:
 
 
 def main() -> int:
+    global _shared_host_rate_dir
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_TRACKER)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/employer-career-ingest"))
@@ -2563,11 +2670,15 @@ def main() -> int:
     parser.add_argument("--ingest", action="store_true", help="POST scraped jobs to Job CEO after scraping")
     parser.add_argument("--include-completed", action="store_true", help="re-scrape completed URLs")
     parser.add_argument("--skip-attempted", action="store_true", help="finish one inventory pass without retrying current-version partial, blocked, or failed groups; ignored with --include-completed")
+    parser.add_argument("--shared-host-rate-dir", type=Path, default=Path(os.environ["TALENTOS_SHARED_HOST_RATE_DIR"]) if os.environ.get("TALENTOS_SHARED_HOST_RATE_DIR") else None, help="shared writable directory for cross-process per-host crawl delays (also TALENTOS_SHARED_HOST_RATE_DIR)")
     args = parser.parse_args()
     if args.workers < 1 or args.workers > 64:
         parser.error("--workers must be between 1 and 64")
     if args.ingest and args.limit:
         parser.error("--ingest cannot be combined with --limit; complete the full scrape first")
+    _shared_host_rate_dir = args.shared_host_rate_dir.resolve() if args.shared_host_rate_dir else None
+    if _shared_host_rate_dir is not None:
+        _shared_host_rate_dir.mkdir(parents=True, exist_ok=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     results_path = args.output_dir / "source_results.jsonl"
     jobs_path = args.output_dir / "jobs.jsonl"
@@ -2593,6 +2704,7 @@ def main() -> int:
         "ingest_requested": args.ingest,
         "include_completed": args.include_completed,
         "skip_attempted": bool(args.skip_attempted and not args.include_completed),
+        "shared_host_rate_dir": str(_shared_host_rate_dir) if _shared_host_rate_dir else None,
     }
     (args.output_dir / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
     if args.limit: sources = sources[:args.limit]

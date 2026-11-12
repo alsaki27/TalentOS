@@ -1005,7 +1005,7 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(sources[0]["evidence_urls"], ["https://example.com/about", "https://example.com/jobs"])
 
     def test_robots_authorization_failures_are_held(self):
-        for status in (401, 403, 500):
+        for status in (401, 403):
             root = f"https://robots-{status}.example.com"
             scraper._robots.pop(root, None)
             with patch.object(scraper, "_request", return_value=SimpleNamespace(status_code=status)):
