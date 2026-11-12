@@ -1,0 +1,9 @@
+{
+  "tracker_sha256": "6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d",
+  "tracker_rows": 14634,
+  "verified_employer_records": 10718,
+  "raw_unique_career_urls": 9942,
+  "normalized_unique_career_urls": 9919,
+  "url_dedupe_rule": "lowercase hostname; strip fragment; trim trailing slash (root remains /); preserve scheme, port, path case, parameters, and query",
+  "source_url_aliases_preserved": true
+}

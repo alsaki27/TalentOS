@@ -1,0 +1,42 @@
+{
+  "raw_employer_denominator_rows": 14718,
+  "company_records_without_jobs_excluded": 60,
+  "canonical_jobs_only_denominator_rows": 14634,
+  "manual_employer_rows": 11336,
+  "manual_status_counts": {
+    "unresolved": 2201,
+    "verified_official_ats_link": 1079,
+    "ambiguous_identity": 1435,
+    "verified_official": 6621
+  },
+  "verified_homepage_link_rows": 2245,
+  "link_status_counts": {
+    "unresolved": 133,
+    "verified_official_ats_link": 270,
+    "verified_official": 1830,
+    "ambiguous_identity": 12
+  },
+  "deferred_lead_rows": 671,
+  "deferred_status_counts": {
+    "unresolved": 101,
+    "verified_official_ats_link": 71,
+    "verified_official": 486,
+    "ambiguous_identity": 13
+  },
+  "homepage_discovery_output_rows": 4249,
+  "homepage_input_rows": 3332,
+  "homepage_hosts_inspected": 3332,
+  "homepage_crawl_status": "completed",
+  "homepage_candidate_links": 3625,
+  "tracker_status_counts": {
+    "unresolved": 2454,
+    "verified_official": 9240,
+    "verified_official_ats_link": 1478,
+    "ambiguous_identity": 1462
+  },
+  "generated_at_local": "2026-11-04T23:17:59.242-05:00",
+  "scope_note": "Partial checkpoint. Homepage candidates require official-source confirmation. Continue until every target employer has an evidence-backed disposition.",
+  "manual_distinct_employer_keys": 11336,
+  "verified_homepage_link_distinct_employer_keys": 2245,
+  "deferred_distinct_employer_keys": 671
+}
