@@ -57,25 +57,70 @@ def _read_results(path: Path | list[Path], adapter_version: str) -> dict[str, di
     return selected
 
 
+def _legacy_sitemap_complete_keys(path: Path | list[Path], older_versions: set[str]) -> set[str]:
+    """Find complete generic sitemap results that a newer adapter must revalidate."""
+    keys: set[str] = set()
+    for result_path in _paths(path):
+        if not result_path.exists():
+            continue
+        with result_path.open(encoding="utf-8") as source_file:
+            for line in source_file:
+                try:
+                    item = json.loads(line)
+                    if (
+                        item.get("adapter_version") not in older_versions
+                        or item.get("method") != "sitemap_structured_data"
+                        or item.get("complete") is not True
+                        or item.get("status") not in ("scraped", "no_jobs")
+                    ):
+                        continue
+                    keys.add(item.get("normalized_url") or normalize_source_url(item["url"]))
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    continue
+    return keys
+
+
 def build_report(
     tracker_path: Path,
     results_path: Path | list[Path],
     jobs_path: Path | list[Path],
     output_dir: Path,
     adapter_version: str = ADAPTER_VERSION,
+    min_sitemap_adapter_version: str | None = None,
 ) -> dict[str, Any]:
     sources = load_sources(tracker_path)
     platform_counts = Counter(
         (_platform(source["url"]) or ("generic", ""))[0] for source in sources
     )
-    adapter_versions = {value.strip() for value in adapter_version.split(",") if value.strip()}
+    versions = [value.strip() for value in adapter_version.split(",") if value.strip()]
+    adapter_versions = set(versions)
+    if min_sitemap_adapter_version and min_sitemap_adapter_version not in adapter_versions:
+        raise ValueError("--min-sitemap-adapter-version must be included in --adapter-version")
     by_url = _read_results(results_path, adapter_version)
     complete = {
         key
         for key, item in by_url.items()
         if item.get("complete") is True and item.get("status") in ("scraped", "no_jobs")
     }
-    statuses = Counter(str(item.get("status") or "unknown") for item in by_url.values())
+    needs_revalidation: set[str] = set()
+    if min_sitemap_adapter_version:
+        minimum_rank = versions.index(min_sitemap_adapter_version)
+        older_versions = set(versions[:minimum_rank])
+        tracker_keys = {source["normalized_url"] for source in sources}
+        legacy_complete = _legacy_sitemap_complete_keys(results_path, older_versions)
+        needs_revalidation = {
+            key for key in legacy_complete & tracker_keys
+            if not (
+                key in complete
+                and by_url[key].get("adapter_version") in adapter_versions
+                and versions.index(by_url[key]["adapter_version"]) >= minimum_rank
+            )
+        }
+        complete.difference_update(needs_revalidation)
+    statuses = Counter(
+        "needs_revalidation" if key in needs_revalidation else str(item.get("status") or "unknown")
+        for key, item in by_url.items()
+    )
     jobs_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     rejected_jobs = 0
     eligible_payload_rows = 0
@@ -124,17 +169,21 @@ def build_report(
         writer.writeheader()
         for source in sources:
             item = by_url.get(source["normalized_url"])
+            revalidation_required = source["normalized_url"] in needs_revalidation
+            notes = list(item.get("notes") or []) if item else []
+            if revalidation_required:
+                notes.append(f"requires complete {min_sitemap_adapter_version} revalidation of legacy sitemap result")
             writer.writerow({
                 "normalized_url": source["normalized_url"],
                 "url": source["url"],
                 "employers": " | ".join(source["employers"]),
                 "employer_keys": " | ".join(source["employer_keys"]),
-                "status": item.get("status", "not_started") if item else "not_started",
+                "status": "needs_revalidation" if revalidation_required else item.get("status", "not_started") if item else "not_started",
                 "complete": bool(item and item.get("complete") is True and source["normalized_url"] in complete),
                 "job_count": item.get("job_count", 0) if item else 0,
                 "method": item.get("method", "") if item else "",
                 "error": item.get("error", "") if item else "",
-                "notes": " | ".join(item.get("notes") or []) if item else "",
+                "notes": " | ".join(notes),
             })
 
     summary = {
@@ -165,6 +214,9 @@ def build_report(
         "ready_jobs_path": str(ready_jobs_path.resolve()),
         "source_dispositions_path": str(dispositions_path.resolve()),
     }
+    if min_sitemap_adapter_version:
+        summary["min_sitemap_adapter_version"] = min_sitemap_adapter_version
+        summary["needs_revalidation_source_groups"] = len(needs_revalidation)
     (output_dir / "readiness_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
@@ -176,8 +228,11 @@ def main() -> int:
     parser.add_argument("--jobs", type=Path, action="append", required=True, help="jobs JSONL; repeat in the same order as --results")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--adapter-version", default=ADAPTER_VERSION)
+    parser.add_argument("--min-sitemap-adapter-version", help="require this version or newer before legacy sitemap_structured_data results count as complete; version order follows --adapter-version")
     args = parser.parse_args()
-    summary = build_report(args.tracker, args.results, args.jobs, args.output_dir, args.adapter_version)
+    if args.min_sitemap_adapter_version and args.min_sitemap_adapter_version not in {value.strip() for value in args.adapter_version.split(",")}:
+        parser.error("--min-sitemap-adapter-version must be included in --adapter-version")
+    summary = build_report(args.tracker, args.results, args.jobs, args.output_dir, args.adapter_version, args.min_sitemap_adapter_version)
     print(json.dumps(summary, indent=2))
     return 0
 

@@ -6,16 +6,17 @@ Branch: `codex/employer-career-dev-handoff` (created from `0c01167baa5215e8bb222
 
 We have identified **9,919 distinct career-page crawl groups** from **9,942 verified URLs** linked to **10,718 employer records**. A group is one normalized URL; multiple employers can share it. This is a source inventory, not 9,919 fully working scrapers.
 
-The November 12, 2026, 11:04 a.m. ET checkpoint selected results for 1,213 groups. **529 groups were complete** (462 with jobs, 67 confirmed empty), producing **65,933 unique job payloads eligible for integration**. The remaining groups were either unattempted (8,706), partial (577), blocked (70), errored (33), or held (4). These figures are a snapshot, not a live production count. No jobs from this crawl were posted to TalentOS.
+The November 12, 2026, 11:53 a.m. ET safety-gated checkpoint selected results for 1,251 groups. **486 groups were complete** (416 with jobs, 70 confirmed empty), producing **53,341 unique job payloads eligible for integration**. Another 61 historical generic completions require v14 revalidation; 8,668 groups had not started. The rest were partial (609), blocked (68), errored (23), or held (4). These figures are a snapshot, not a live production count. No jobs from this crawl were posted to TalentOS.
 
 ## What is on this branch
 
 - `scripts/employer_career_ingest.py`: the discovery crawler and a dry-run-by-default Job CEO batch uploader. It checkpoints each source in `source_results.jsonl` and payloads in `jobs.jsonl`. `--skip-attempted` resumes one inventory pass after interruption without redoing recorded failures; the default mode retries incomplete groups.
-- `scripts/report_employer_career_ingest.py`: combines crawl checkpoints, selects complete results by adapter version, and writes `ready_jobs.jsonl`, `source_dispositions.csv`, and `readiness_summary.json`.
-- `scripts/test_employer_career_ingest.py`: focused crawler/reporter regression coverage.
+- `scripts/report_employer_career_ingest.py`: combines crawl checkpoints, selects complete results by adapter version, and writes `ready_jobs.jsonl`, `source_dispositions.csv`, and `readiness_summary.json`. Use `--min-sitemap-adapter-version employer-career-ingest-v14` to hold historical generic sitemap results until revalidated.
+- `scripts/jazzhr_public_board.py`: validates public JazzHR listing pages without an undocumented feed.
+- `scripts/test_employer_career_ingest.py` and `scripts/test_jazzhr_*.py`: focused crawler/reporter regression coverage.
 - `data/talentos-employer-careers/README.md`, `career_page_tracker_summary.json`, and `scrape_source_manifest.json`: source definitions, counts, and the exact tracker SHA-256.
 
-The repository is **public**. The full `career_page_tracker.csv` and `career_source_dispositions_2026-11-12.csv` contain internal company IDs and review notes, so they are ignored by Git and must be given to the developer through a private channel. The tracker SHA-256 in `scrape_source_manifest.json` is `6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d`. Place the private tracker at `data/talentos-employer-careers/career_page_tracker.csv` before running the crawler. The large live crawl outputs under `outputs/employer-career-ingest-run*` are also excluded from Git; the developer must receive those privately or rerun the crawl.
+The repository is **public**. The full `career_page_tracker.csv` and `source_dispositions.csv` contain internal company IDs and review notes, so they are ignored by Git and must be given to the developer through a private channel. The tracker SHA-256 in `scrape_source_manifest.json` is `6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d`. Place the private tracker at `data/talentos-employer-careers/career_page_tracker.csv` before running the crawler. The local ignored `outputs/employer-career-ingest-run-2026-11-12-v14/employer-career-private-handoff-v14-safe-2026-11-12.zip` contains the private tracker, disposition, safe ready payloads, and cohort manifest; deliver it privately. The earlier November 12 ZIP is superseded. The live crawl checkpoints remain outside Git.
 
 ## Existing TalentOS paths
 

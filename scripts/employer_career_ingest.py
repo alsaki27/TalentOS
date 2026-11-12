@@ -38,10 +38,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import requests
+from jazzhr_public_board import board_url_for, parse_board_listing
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v13"
+ADAPTER_VERSION = "employer-career-ingest-v14"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -463,6 +464,8 @@ def _platform(url: str) -> tuple[str, str] | None:
         return "applicantstack", host[: -len(".applicantstack.com")]
     if host.endswith(".applicantpro.com") and host != "www.applicantpro.com":
         return "applicantpro", host[: -len(".applicantpro.com")]
+    if host.endswith(".applytojob.com"):
+        return "jazzhr", host[: -len(".applytojob.com")]
     if host == "recruiting.paylocity.com":
         match = re.search(r"/(?:Recruiting/)?Jobs/All/([0-9a-f-]{36})(?:/|$)", p.path, re.I)
         if match:
@@ -1747,7 +1750,7 @@ def _discover_sitemaps(start_url: str) -> tuple[list[str], bool, list[str]]:
                 complete = False; notes.append("sitemap index included external hosts that were not followed")
             queue.extend(local)
         else:
-            job_sitemap = bool(re.search(r"job|career|opening|position|vacanc", sitemap, re.I))
+            job_sitemap = bool(re.search(r"job|career|opening|position|vacanc", urllib.parse.urlparse(sitemap).path, re.I))
             for loc in locs:
                 locp = urllib.parse.urlparse(loc)
                 if locp.hostname != base_host: continue
@@ -1779,7 +1782,7 @@ def _discover_sitemaps(start_url: str) -> tuple[list[str], bool, list[str]]:
                     locs, is_index = _xml_locations(response.content)
                     if is_index:
                         continue
-                    job_sitemap = bool(re.search(r"job|career|opening|position|vacanc", sitemap, re.I))
+                    job_sitemap = bool(re.search(r"job|career|opening|position|vacanc", urllib.parse.urlparse(sitemap).path, re.I))
                     for loc in locs:
                         locp = urllib.parse.urlparse(loc)
                         if locp.hostname == base_host and (job_sitemap or JOB_PATH_RE.search(locp.path) or re.search(r"job|requisition|posting", locp.query, re.I)):
@@ -1892,6 +1895,43 @@ def _listing_links(html: str, current_url: str, host: str) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+def _jazzhr_jobs(url: str, tenant: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Enumerate a JazzHR tenant's public HTML listing and validate each detail."""
+    board_url = board_url_for(url)
+    board_host = urllib.parse.urlparse(board_url).hostname
+    if board_host != f"{tenant}.applytojob.com":
+        raise ScrapeFailure("JazzHR tenant did not match the tracked board")
+    board = _request(board_url, timeout=20)
+    if board.status_code != 200 or urllib.parse.urlparse(board.url).hostname != board_host:
+        raise ScrapeFailure(f"JazzHR public board returned HTTP {board.status_code} or redirected off tenant")
+    listing = parse_board_listing(board.text, url, max_postings=MAX_JOB_URLS)
+    complete = listing.complete
+    notes: list[str] = [] if complete else [listing.reason]
+    jobs: list[dict[str, Any]] = []
+    for detail_url in listing.posting_urls:
+        try:
+            detail = _request(detail_url, timeout=15)
+            if detail.status_code != 200 or urllib.parse.urlparse(detail.url).hostname != board_host:
+                raise ScrapeFailure(f"HTTP {detail.status_code} or redirect off tenant")
+            extracted = extract_postings(detail.text, detail.url, employer)
+            matching = [
+                job for job in extracted
+                if normalize_source_url(str(job.get("source_url") or detail.url)) == normalize_source_url(detail_url)
+            ]
+            if len(matching) != 1:
+                raise ScrapeFailure(f"expected one matching JobPosting, found {len(matching)}")
+            job = matching[0]
+            path_parts = [part for part in urllib.parse.urlparse(detail_url).path.split("/") if part]
+            job["external_job_id"] = path_parts[1]
+            jobs.append(job)
+        except Exception as exc:
+            complete = False
+            notes.append(f"JazzHR detail failed: {detail_url} ({str(exc)[:120]})")
+    if len(jobs) != len(listing.posting_urls):
+        complete = False
+    return jobs, complete, list(dict.fromkeys(notes))
+
+
 def _linked_ats_boards(html: str, current_url: str) -> list[tuple[str, tuple[str, str]]]:
     """Find explicitly linked, supported public ATS boards on an official career page."""
     parser = _CareerLinks()
@@ -1936,6 +1976,9 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         if redirected_platform[0] == "applicantpro":
             jobs, complete, notes = _applicantpro_jobs(response.url, redirected_platform[1], employer)
             return jobs, "public_sitemap_postings:applicantpro-v1", complete, notes
+        if redirected_platform[0] == "jazzhr":
+            jobs, complete, notes = _jazzhr_jobs(response.url, redirected_platform[1], employer)
+            return jobs, "redirected_public_board_listing:jazzhr-v1", complete, notes
         if redirected_platform[0] == "breezy":
             jobs, complete, notes = _breezy_jobs(response.url, redirected_platform[1], employer)
             return jobs, "public_json_feed:breezy-v1", complete, notes
@@ -2003,6 +2046,11 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                     board_jobs.extend(adapted_jobs)
                     all_boards_complete = all_boards_complete and board_complete
                     board_notes.extend(f"linked ApplicantPro board: {note}" for note in adapter_notes)
+                elif platform[0] == "jazzhr":
+                    adapted_jobs, board_complete, adapter_notes = _jazzhr_jobs(board_url, platform[1], employer)
+                    board_jobs.extend(adapted_jobs)
+                    all_boards_complete = all_boards_complete and board_complete
+                    board_notes.extend(f"linked JazzHR board: {note}" for note in adapter_notes)
                 elif platform[0] == "breezy":
                     adapted_jobs, board_complete, adapter_notes = _breezy_jobs(board_url, platform[1], employer)
                     board_jobs.extend(adapted_jobs)
@@ -2063,6 +2111,9 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                 if not new and is_job_detail_url(detail.url):
                     heuristic = extract_html_job(detail.text, detail.url, employer)
                     if heuristic: new = [heuristic]
+                if not new:
+                    complete = False
+                    notes.append(f"detail page had no extractable job posting: {detail_url}")
                 for job in new:
                     key = job["source_url"].split("#", 1)[0]
                     if key not in seen_posting_urls:
@@ -2072,6 +2123,9 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                     for candidate in nested:
                         if candidate not in urls and len(urls) < 250:
                             urls.append(candidate)
+            else:
+                complete = False
+                notes.append(f"detail page returned HTTP {detail.status_code}: {detail_url}")
         except Exception as exc:
             complete = False; notes.append(f"detail page failed: {detail_url} ({str(exc)[:100]})")
             continue
@@ -2178,6 +2232,7 @@ def _pending_sources(sources: list[dict[str, Any]], done: dict[str, dict[str, An
         "personio": "public_xml_feed:personio-v1",
         "applicantstack": "public_board_count:applicantstack-v1",
         "applicantpro": "public_sitemap_postings:applicantpro-v1",
+        "jazzhr": "public_board_listing:jazzhr-v1",
     }
     for source in sources:
         previous = done.get(source["url"])
@@ -2355,6 +2410,9 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
             elif p[0] == "applicantpro":
                 jobs, complete, notes = _applicantpro_jobs(url, p[1], employer)
                 method = "public_sitemap_postings:applicantpro-v1"
+            elif p[0] == "jazzhr":
+                jobs, complete, notes = _jazzhr_jobs(url, p[1], employer)
+                method = "public_board_listing:jazzhr-v1"
             elif p[0] == "taleo":
                 jobs, complete, notes = _taleo_jobs(url, p[1], employer)
                 method = "public_career_section_sitemap:taleo-enterprise-v1"

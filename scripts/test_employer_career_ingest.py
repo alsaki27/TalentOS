@@ -1,4 +1,5 @@
 """Focused offline checks for the employer-career scraper's core contracts."""
+import csv
 import json
 import tempfile
 import unittest
@@ -137,6 +138,59 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(method, "linked_ats_api:rippling")
         self.assertTrue(complete)
         self.assertEqual(notes, [])
+
+    def test_generic_sitemap_detail_http_failure_is_partial(self):
+        landing = SimpleNamespace(status_code=200, url="https://example.com/careers", text="<html></html>")
+        detail_ok = SimpleNamespace(
+            status_code=200,
+            url="https://example.com/jobs/1",
+            text='<script type="application/ld+json">{"@type":"JobPosting","title":"Engineer","url":"https://example.com/jobs/1","description":"Build systems"}</script>',
+        )
+        detail_missing = SimpleNamespace(status_code=404, url="https://example.com/jobs/2", text="")
+        urls = [detail_ok.url, detail_missing.url]
+        with patch.object(scraper, "_request", side_effect=[landing, detail_ok, detail_missing]), \
+             patch.object(scraper, "_discover_sitemaps", return_value=(urls, True, [])):
+            jobs, method, complete, notes = scraper._crawl_generic(landing.url, "Example")
+        self.assertEqual(method, "sitemap_structured_data")
+        self.assertEqual([job["source_url"] for job in jobs], [detail_ok.url])
+        self.assertFalse(complete)
+        self.assertIn("detail page returned HTTP 404: https://example.com/jobs/2", notes)
+
+    def test_generic_sitemap_detail_without_job_is_partial(self):
+        landing = SimpleNamespace(status_code=200, url="https://example.com/careers", text="<html></html>")
+        detail_ok = SimpleNamespace(
+            status_code=200,
+            url="https://example.com/jobs/1",
+            text='<script type="application/ld+json">{"@type":"JobPosting","title":"Engineer","url":"https://example.com/jobs/1","description":"Build systems"}</script>',
+        )
+        detail_empty = SimpleNamespace(status_code=200, url="https://example.com/jobs/2", text="<html><h1>Careers</h1></html>")
+        urls = [detail_ok.url, detail_empty.url]
+        with patch.object(scraper, "_request", side_effect=[landing, detail_ok, detail_empty]), \
+             patch.object(scraper, "_discover_sitemaps", return_value=(urls, True, [])):
+            jobs, method, complete, notes = scraper._crawl_generic(landing.url, "Example")
+        self.assertEqual(method, "sitemap_structured_data")
+        self.assertEqual([job["source_url"] for job in jobs], [detail_ok.url])
+        self.assertFalse(complete)
+        self.assertIn("detail page had no extractable job posting: https://example.com/jobs/2", notes)
+
+    def test_generic_mixed_sitemap_does_not_infer_job_only_from_careers_hostname(self):
+        xml = b'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://careers.example.com/jobs/1</loc></url>
+          <url><loc>https://careers.example.com/about</loc></url>
+        </urlset>'''
+        job_url = "https://careers.example.com/jobs/1"
+
+        for fallback in (False, True):
+            def fake_request(url, **_kwargs):
+                status = 404 if fallback and url.endswith("/sitemap.xml") else 200
+                return SimpleNamespace(status_code=status, content=xml)
+
+            with self.subTest(fallback=fallback), \
+                 patch.object(scraper, "_robots_parser", return_value=None), \
+                 patch.object(scraper, "_request", side_effect=fake_request):
+                urls, complete, _notes = scraper._discover_sitemaps("https://careers.example.com/")
+            self.assertEqual(urls, [job_url])
+            self.assertFalse(complete)
 
     def test_vendor_local_job_ids_are_scoped_to_career_board(self):
         job = {"external_job_id": "123", "source_url": "https://jobs.example.com/job/123", "raw": {"career_source_url": "https://example.com/careers"}}
@@ -882,6 +936,48 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(summary["complete_source_groups"], 2)
         self.assertEqual(summary["unique_integration_ready_job_payloads"], 2)
         self.assertEqual({item["title"] for item in ready}, {"A current", "B retried"})
+
+    def test_readiness_report_requires_new_generic_sitemap_revalidation_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            results = root / "results.jsonl"
+            jobs = root / "jobs.jsonl"
+            tracker.write_text(
+                "career_page_status,career_page_url,evidence_url,employer_name,employer_key\n"
+                + "".join(f"verified_official,https://{key}.example/careers,,{key},company_id:{key}\n" for key in "ACDE"),
+                encoding="utf-8",
+            )
+            rows = [
+                {"url": f"https://{key}.example/careers", "adapter_version": version, "method": method, "complete": complete, "status": status, "job_count": 1}
+                for key, version, method, complete, status in (
+                    ("A", "v11", "sitemap_structured_data", True, "scraped"),
+                    ("C", "v11", "sitemap_structured_data", True, "scraped"),
+                    ("C", "v14", "sitemap_structured_data", True, "scraped"),
+                    ("D", "v11", "ats_api:lever", True, "scraped"),
+                    ("E", "v11", "sitemap_structured_data", True, "scraped"),
+                    ("E", "v14", "sitemap_structured_data", False, "partial"),
+                )
+            ]
+            results.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            payloads = [
+                {"title": f"{key} {version}", "company": key, "source_url": f"https://{key}.example/jobs/{version}", "external_job_id": f"{key}-{version}", "raw": {"career_source_url": f"https://{key}.example/careers", "adapter_version": version}}
+                for key, version in (("A", "v11"), ("C", "v11"), ("C", "v14"), ("D", "v11"), ("E", "v11"))
+            ]
+            jobs.write_text("".join(json.dumps(row) + "\n" for row in payloads), encoding="utf-8")
+            baseline = report.build_report(tracker, results, jobs, root / "baseline", "v11,v14")
+            gated = report.build_report(tracker, results, jobs, root / "gated", "v11,v14", "v14")
+            ready = [json.loads(line) for line in Path(gated["ready_jobs_path"]).read_text(encoding="utf-8").splitlines()]
+            with Path(gated["source_dispositions_path"]).open(encoding="utf-8-sig", newline="") as dispositions_file:
+                dispositions = {row["employers"]: row for row in csv.DictReader(dispositions_file)}
+        self.assertEqual(baseline["unique_integration_ready_job_payloads"], 3)
+        self.assertEqual(gated["needs_revalidation_source_groups"], 2)
+        self.assertEqual(gated["status_counts_by_source_group"]["needs_revalidation"], 2)
+        self.assertEqual(gated["complete_source_groups"], 2)
+        self.assertEqual({job["title"] for job in ready}, {"C v14", "D v11"})
+        self.assertEqual(dispositions["A"]["status"], "needs_revalidation")
+        self.assertEqual(dispositions["E"]["status"], "needs_revalidation")
+        self.assertEqual(dispositions["C"]["status"], "scraped")
 
     def test_html_fallback_only_accepts_job_detail_routes_with_real_headings(self):
         self.assertTrue(is_job_detail_url("https://jobs.example.com/careers/1234"))

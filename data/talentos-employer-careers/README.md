@@ -82,6 +82,9 @@ Recruitee, and Paylocity (public V2 feed documented at
 [Paylocity Job Feed](https://recruiting.paylocity.com/Recruiting/v2/api/feed/documentation)). Other verified career sources use robots-aware sitemap traversal and
 same-host linked-page discovery, extracting schema.org `JobPosting` JSON-LD or
 microdata. Payloads record which structured-data format supplied each job.
+JazzHR `applytojob.com` tenants use their public server-rendered `/apply/`
+listing and validate each same-tenant detail page; an unrecognized layout,
+pagination control, or missing posting keeps the board partial.
 Pinpoint-hosted pages use Pinpoint's documented public
 [`postings.json` career feed](https://developers.pinpointhq.com/docs/jobs-json-endpoint),
 which returns the postings as displayed on the employer career site.
@@ -125,3 +128,10 @@ are retried. Only groups marked `complete` are counted as fully ready; partial,
 blocked, held, and error outcomes remain visible for follow-up.
 Sites that need vendor-specific APIs or JavaScript rendering remain visible as
 partial/error outcomes for subsequent adapter work.
+
+Adapter v14 corrects generic sitemap classification and requires every selected
+detail page to yield an extractable posting before calling that source complete.
+Historical v11-v13 `sitemap_structured_data` completions need v14 revalidation
+before their payloads are counted as integration-ready. The v14 coverage cohort
+and its source/hash manifest are saved under the local ignored `outputs/`
+directory; they are not included in the public repository.
