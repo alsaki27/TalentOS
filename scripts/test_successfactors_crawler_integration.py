@@ -38,6 +38,13 @@ def detail(index: int, *, title: str | None = None) -> str:
     return '<script type="application/ld+json">' + json.dumps(data) + "</script>"
 
 
+def microdata_detail(title: str) -> str:
+    description = "Complete public responsibilities, qualifications, and experience requirements. " * 8
+    return (f'<meta property="og:title" content="{title}">'
+            '<div itemscope itemtype="https://schema.org/JobPosting">'
+            f'<span itemprop="description">{description}</span></div>')
+
+
 def response(url: str, body: str, status: int = 200) -> SimpleNamespace:
     return SimpleNamespace(url=url, text=body, status_code=status)
 
@@ -73,6 +80,27 @@ class SuccessFactorsCrawlerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
 
         pages[JOBS[0]] = response(JOBS[0], detail(0, title="Other Role"))
+        with patch.object(crawler, "_request", side_effect=lambda url, **_kwargs: pages[url]):
+            jobs, _, complete, notes = crawler._crawl_generic(BOARD, "Example")
+        self.assertFalse(complete)
+        self.assertEqual(jobs, [])
+        self.assertTrue(any("title did not match" in note for note in notes))
+
+    def test_microdata_detail_can_use_exact_card_and_og_title_when_schema_omits_them(self):
+        direct_listing = (
+            '<table id="searchresults" aria-label="Search results for . Page 1 of 1, Results 1 to 1 of 1">'
+            f'<tr><td><a class="jobTitle-link" href="{JOBS[0]}">Role 1</a></td></tr></table>'
+        )
+        pages = {BOARD: response(BOARD, direct_listing), JOBS[0]: response(JOBS[0], microdata_detail("Role 1"))}
+        with patch.object(crawler, "_request", side_effect=lambda url, **_kwargs: pages[url]):
+            jobs, _, complete, notes = crawler._crawl_generic(BOARD, "Example")
+        self.assertTrue(complete, notes)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["source_url"], JOBS[0])
+        self.assertEqual(jobs[0]["external_job_id"], "1001")
+        self.assertGreater(len(jobs[0]["description_text"]), 200)
+
+        pages[JOBS[0]] = response(JOBS[0], microdata_detail("Different role"))
         with patch.object(crawler, "_request", side_effect=lambda url, **_kwargs: pages[url]):
             jobs, _, complete, notes = crawler._crawl_generic(BOARD, "Example")
         self.assertFalse(complete)

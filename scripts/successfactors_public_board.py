@@ -120,6 +120,118 @@ class _ListingParser(HTMLParser):
             self.anchor_text.append(data)
 
 
+class _DetailHTMLParser(HTMLParser):
+    """Collect one visible schema.org description and matching page title."""
+
+    _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[dict[str, Any]] = []
+        self.job_roots = 0
+        self.description_count = 0
+        self.description_depth = 0
+        self.description_parts: list[str] = []
+        self.title_depth = 0
+        self.title_parts: list[str] = []
+        self.title_candidates: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
+        attrs = dict(attrs_list)
+        itemtype = (attrs.get("itemtype") or "").casefold()
+        starts_root = bool("itemscope" in attrs and "jobposting" in itemtype)
+        if starts_root:
+            self.job_roots += 1
+        inside_root = starts_root or any(frame["inside_root"] for frame in self.stack)
+        props = set((attrs.get("itemprop") or "").casefold().split())
+        starts_description = inside_root and "description" in props
+        if starts_description:
+            self.description_count += 1
+        description_depth = self.description_depth + 1 if self.description_depth or starts_description else 0
+        starts_title = inside_root and "title" in props and tag.casefold() not in self._VOID_TAGS
+        title_depth = self.title_depth + 1 if self.title_depth or starts_title else 0
+
+        if tag.casefold() == "meta":
+            key = (attrs.get("property") or attrs.get("name") or "").casefold()
+            value = (attrs.get("content") or "").strip()
+            if value and (key in {"og:title", "twitter:title"} or (inside_root and "title" in props)):
+                self.title_candidates.append(value)
+        if tag.casefold() not in self._VOID_TAGS:
+            self.stack.append({
+                "tag": tag.casefold(),
+                "inside_root": inside_root,
+                "description_depth": description_depth,
+                "title_depth": title_depth,
+            })
+            self.description_depth = description_depth
+            self.title_depth = title_depth
+
+    def handle_data(self, data: str) -> None:
+        if self.description_depth and data.strip():
+            self.description_parts.append(data)
+        if self.title_depth and data.strip():
+            self.title_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        wanted = tag.casefold()
+        index = next((i for i in range(len(self.stack) - 1, -1, -1)
+                      if self.stack[i]["tag"] == wanted), None)
+        if index is None:
+            return
+        popped = self.stack[index:]
+        del self.stack[index:]
+        for frame in reversed(popped):
+            if frame["description_depth"]:
+                self.description_depth -= 1
+            if frame["title_depth"]:
+                self.title_depth -= 1
+        if popped and popped[0]["title_depth"] and not self.title_depth:
+            title = " ".join("".join(self.title_parts).split())
+            if title:
+                self.title_candidates.append(title)
+            self.title_parts = []
+
+
+def validate_detail_html(listed_url: str, response_url: str, response_status: int,
+                         expected_title: str, html: str, postings: list[dict[str, Any]],
+                         employer: str) -> PublicDetail:
+    """Use the public card and detail URL to fill missing microdata title/URL fields."""
+    verified = validate_detail(listed_url, response_url, response_status, expected_title, postings)
+    if verified.complete or verified.reason != "public detail lacked exactly one matching JobPosting":
+        return verified
+    listed = _public_url(listed_url, _JOB_PATH)
+    returned = _public_url(response_url, _JOB_PATH)
+    if (listed is None or returned is None or returned[0] != listed[0]
+            or returned[1].group(1) != listed[1].group(1) or response_status != 200):
+        return verified
+    parser = _DetailHTMLParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except (TypeError, ValueError):
+        return PublicDetail(None, False, "public detail HTML could not be parsed")
+    if parser.job_roots != 1 or parser.description_count != 1:
+        return PublicDetail(None, False, "public detail lacked one JobPosting root and one description")
+    matching_titles = [title for title in parser.title_candidates if _title(title) == _title(expected_title)]
+    conflicting_titles = [title for title in parser.title_candidates if _title(title) != _title(expected_title)]
+    if not matching_titles or conflicting_titles:
+        return PublicDetail(None, False, "public detail HTML title did not match its listing card")
+    description = " ".join(" ".join(parser.description_parts).split())
+    if len(description) <= 200:
+        return PublicDetail(None, False, "public detail HTML description was too short")
+    job = {
+        "title": expected_title,
+        "company": employer,
+        "location": None,
+        "source_url": returned[2],
+        "external_job_id": listed[1].group(1),
+        "description_text": description,
+        "snippet": description[:300],
+        "raw": {"ats": "successfactors", "structured_data_format": "microdata-card-validated"},
+    }
+    return PublicDetail(job, True, None)
+
+
 def discover_all_jobs_link(html: str, source_url: str) -> str | None:
     """Find one explicitly linked public All-Jobs board on a branded page."""
     if _public_url(source_url, re.compile(r"^/.*$")) is None:

@@ -43,7 +43,7 @@ import requests
 from jazzhr_public_board import board_url_for, parse_board_listing
 from open_position_links import detail_matches_open_position, discover_open_position_links
 from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
-from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail as validate_successfactors_detail
+from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail_html as validate_successfactors_detail
 from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
 from talentbrew_public_detail import parse_public_detail as parse_talentbrew_public_detail
 from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
@@ -2268,7 +2268,8 @@ def _successfactors_jobs(first_response: requests.Response, employer: str) -> tu
             detail = _request(detail_url, timeout=15)
             extracted = extract_postings(detail.text, detail.url, employer) if detail.status_code == 200 else []
             validated = validate_successfactors_detail(
-                detail_url, detail.url, detail.status_code, card_title, extracted,
+                detail_url, detail.url, detail.status_code, card_title,
+                detail.text, extracted, employer,
             )
             if not validated.complete or validated.job is None:
                 issues[validated.reason or "public detail did not validate"] += 1
