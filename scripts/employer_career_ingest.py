@@ -16,7 +16,7 @@ the results file for adapter follow-up. No page is sent to TalentOS unless
 from __future__ import annotations
 
 import argparse
-from collections import deque
+from collections import Counter, deque
 import csv
 import errno
 import hashlib
@@ -31,6 +31,7 @@ import time
 from datetime import datetime, timezone
 import urllib.parse
 import urllib.robotparser
+import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -41,10 +42,15 @@ from typing import Any, Callable, Iterable
 import requests
 from jazzhr_public_board import board_url_for, parse_board_listing
 from open_position_links import detail_matches_open_position, discover_open_position_links
+from smartrecruiters_public_detail import merge_public_job_detail, public_job_path
+from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
+from talentbrew_public_detail import parse_public_detail as parse_talentbrew_public_detail
+from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
+from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v15"
+ADAPTER_VERSION = "employer-career-ingest-v20"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -70,6 +76,38 @@ class ScrapeFailure(RuntimeError):
 
 class RobotsFetchFailure(ScrapeFailure):
     """The robots policy could not be fetched; retry after transport recovers."""
+
+
+def _application_form_target(url: str) -> bool:
+    """Reject application/form destinations before following or crawling them."""
+    parsed = urllib.parse.urlparse(url)
+    path = parsed.path
+    for _ in range(3):
+        decoded = urllib.parse.unquote(path)
+        if decoded == path:
+            break
+        path = decoded
+    segments = [part.casefold() for part in path.split("/") if part]
+    if not segments:
+        return False
+    host = (parsed.hostname or "").casefold()
+    form_segments = {
+        "apply", "apply-now", "apply-online", "application", "applications",
+        "application-form", "job-application", "start-application",
+    }
+    # JazzHR's public /apply/, /apply/<posting-id>, and
+    # /apply/<posting-id>/<slug> are listing/detail routes. Form steps remain
+    # excluded even when the path has only three segments.
+    if (host.endswith(".applytojob.com") and segments[0] == "apply"
+            and len(segments) <= 3
+            and not any(part in form_segments or part in {"new", "start", "submit"} for part in segments[1:])):
+        return False
+    if any(part in form_segments for part in segments):
+        return True
+    if any(segments[index] == "apps" and segments[index + 1] == "new" for index in range(len(segments) - 1)):
+        return True
+    return any(key.casefold() in {"apply", "application", "applicationform"}
+               for key, _ in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
 
 
 def _public_https_url(url: str) -> urllib.parse.ParseResult:
@@ -221,6 +259,8 @@ def _minimum_host_gap(rules: urllib.robotparser.RobotFileParser | None) -> float
 def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session: requests.Session | None = None) -> requests.Response:
     current = url
     for _ in range(6):
+        if _application_form_target(current):
+            raise ScrapeFailure("application form target refused")
         parsed = _public_https_url(current)
         root = f"https://{parsed.netloc}"
         rules = None
@@ -266,7 +306,10 @@ def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session:
             response.close()
             if not location:
                 raise ScrapeFailure("redirect response has no Location")
-            current = urllib.parse.urljoin(current, location)
+            target = urllib.parse.urljoin(current, location)
+            if _application_form_target(target):
+                raise ScrapeFailure("redirect to application form refused")
+            current = target
             continue
         body = response.raw.read(MAX_BODY_BYTES + 1, decode_content=True)
         response.close()
@@ -561,7 +604,7 @@ def _platform(url: str) -> tuple[str, str] | None:
         jobs_index = next((i for i, part in enumerate(parts) if part.lower() == "jobs"), -1)
         if jobs_index > 0:
             return "rippling", "/".join(parts[: jobs_index + 1])
-    if host.endswith("myworkdayjobs.com") and parts:
+    if host.endswith(".myworkdayjobs.com") and parts:
         tenant = host.split(".")[0].split("-")[0]
         site_index = 1 if re.fullmatch(r"[a-z]{2}-[A-Z]{2}", parts[0]) and len(parts) > 1 else 0
         return "workday", f"{tenant}|{parts[site_index]}"
@@ -900,7 +943,26 @@ def _smartrecruiters_jobs(url: str, company: str, employer: str) -> tuple[list[d
     if complete and len(page_groups) != first.total_pages:
         complete = False
         notes.append(f"SmartRecruiters returned {len(page_groups)} of {first.total_pages} group pages")
-    return jobs, complete, list(dict.fromkeys(notes))
+    detailed_jobs: list[dict[str, Any]] = []
+    detail_failures: Counter[str] = Counter()
+    for job in jobs:
+        if not public_job_path(job["source_url"]):
+            detail = merge_public_job_detail(job, 0, "", [])
+        else:
+            try:
+                response = _request(job["source_url"], timeout=15)
+                postings = extract_postings(response.text, response.url, employer) if response.status_code == 200 else []
+                detail = merge_public_job_detail(job, response.status_code, response.url, postings)
+            except (requests.RequestException, ScrapeFailure, OSError) as exc:
+                detail = merge_public_job_detail(job, 0, "", [], request_error=str(exc))
+        detailed_jobs.append(detail.job)
+        if not detail.complete:
+            complete = False
+            detail_failures[detail.reason or "unknown detail failure"] += 1
+    if detail_failures:
+        notes.append(f"SmartRecruiters public job detail incomplete for {sum(detail_failures.values())} of {len(jobs)} cards")
+        notes.extend(f"{count} detail page(s): {reason}" for reason, count in detail_failures.most_common(3))
+    return detailed_jobs, complete, list(dict.fromkeys(notes))
 
 
 def _pinpoint_jobs(url: str, tenant: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
@@ -1475,8 +1537,28 @@ def _api_jobs(url: str, platform: tuple[str, str], employer: str) -> list[dict[s
         endpoint = f"https://www.workable.com/api/accounts/{urllib.parse.quote(token, safe='')}?details=true"
         response = _request(endpoint)
         data = response.json()
-        rows = data.get("jobs", []) if isinstance(data, dict) else []
-        return [{"title": _text(j.get("title")), "company": _text(data.get("name")) or employer, "location": ", ".join(str(x) for x in (j.get("city"), j.get("state"), j.get("country")) if x) or None, "source_url": j.get("application_url") or j.get("url") or url, "external_job_id": str(j.get("shortcode") or j.get("code") or j.get("id") or ""), "description_text": _clean_description(j.get("description")), "raw": {"source": SOURCE, "ats": kind, "posted_at": j.get("published_on"), "employment_type": j.get("employment_type"), "workplace_type": j.get("workplace_type")}} for j in rows if _text(j.get("title"))]
+        if not isinstance(data, dict) or not isinstance(data.get("jobs"), list):
+            raise ScrapeFailure("Workable public account response omitted its jobs array")
+        rows = data["jobs"]
+        output: list[dict[str, Any]] = []
+        for j in rows:
+            title = _text(j.get("title"))
+            if not title:
+                continue
+            external_id = str(j.get("shortcode") or j.get("code") or j.get("id") or "")
+            job_page = job_page_from_application_url(j.get("application_url"), external_id)
+            description = _clean_description(j.get("description"))
+            output.append({
+                "title": title, "company": _text(data.get("name")) or employer,
+                "location": ", ".join(str(x) for x in (j.get("city"), j.get("state"), j.get("country")) if x) or None,
+                "source_url": job_page or url, "external_job_id": external_id,
+                "description_text": description,
+                "raw": {"source": SOURCE, "ats": kind, "posted_at": j.get("published_on"),
+                        "employment_type": j.get("employment_type"), "workplace_type": j.get("workplace_type"),
+                        "workable_job_page_verified": bool(job_page),
+                        "workable_description_complete": len(description or "") > 200},
+            })
+        return output
     if kind == "recruitee":
         endpoint = f"https://{urllib.parse.quote(token, safe='')}.recruitee.com/api/offers"
         response = _request(endpoint)
@@ -1495,46 +1577,161 @@ def _api_jobs(url: str, platform: tuple[str, str], employer: str) -> list[dict[s
             "raw": {"source": SOURCE, "ats": kind, "posted_at": j.get("publishedDate") or j.get("createdUtc"), "employment_type": j.get("jobTypes") or j.get("jobTypesArray"), "salary_description": j.get("salaryDescription"), "requirements": _text(j.get("requirements"))},
         } for j in rows if _text(j.get("title"))]
     if kind == "workday":
-        tenant, site = token.split("|", 1)
-        host = urllib.parse.urlparse(url).hostname or ""
-        api_root = f"https://{host}/wday/cxs/{urllib.parse.quote(tenant, safe='')}/{urllib.parse.quote(site, safe='')}"
-        output: list[dict[str, Any]] = []
-        offset = 0
-        expected_total: int | None = None
-        fetched_count = 0
-        while offset < 100000:
-            request = requests.Request("POST", api_root + "/jobs", json={"limit": 20, "offset": offset, "searchText": "", "appliedFacets": {}}).prepare()
-            response = _request_post(request.url or "", request.body or "{}")
-            data = response.json()
-            rows = data.get("jobPostings", []) if isinstance(data, dict) else []
-            for job in rows:
-                title = _text(job.get("title")); external = str(job.get("bulletFields", [""])[0] if job.get("bulletFields") else "")
-                if title:
-                    detail_url = urllib.parse.urljoin(url, str(job.get("externalPath") or ""))
-                    output.append({"title": title, "company": employer, "location": _text(job.get("locationsText")), "source_url": detail_url or url, "external_job_id": external or hashlib.sha256((detail_url or title).lower().encode()).hexdigest()[:32], "description_text": _clean_description(job.get("jobDescription")), "raw": {"source": SOURCE, "ats": kind, "posted_at": job.get("postedOn"), "employment_type": job.get("timeType")}})
-            total = data.get("total") if isinstance(data, dict) else None
-            try:
-                total = int(total)
-            except (TypeError, ValueError):
-                raise ScrapeFailure("Workday API omitted its total-count metadata; completeness cannot be verified")
-            if expected_total is None:
-                expected_total = total
-            elif total > 0 and expected_total != total:
-                raise ScrapeFailure(f"Workday total changed during pagination ({expected_total} to {total})")
-            if total < 0:
-                raise ScrapeFailure("Workday returned a negative job total")
-            if not rows:
-                if fetched_count != expected_total:
-                    raise ScrapeFailure(f"Workday ended at {fetched_count} of {expected_total} postings")
-                return output
-            fetched_count += len(rows)
-            if fetched_count > expected_total:
-                raise ScrapeFailure(f"Workday returned more than its initial total of {expected_total} postings")
-            offset += len(rows)
-            if fetched_count == expected_total:
-                return output
-        raise ScrapeFailure("Workday exceeded the 100000-posting safety cap; completeness cannot be verified")
+        return _workday_jobs(url, token, employer)[0]
     raise ScrapeFailure("ATS adapter not implemented")
+
+
+def _workable_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Keep public jobs distinct while merging equivalent location rows."""
+    listing_rows = _api_jobs(url, ("workable", token), employer)
+    jobs: list[dict[str, Any]] = []
+    by_job: dict[tuple[str, str], dict[str, Any]] = {}
+    collapsed_rows = 0
+    conflicting_rows = 0
+    for job in listing_rows:
+        raw = job["raw"]
+        location = str(job.get("location") or "").strip()
+        raw["workable_locations"] = [location] if location else []
+        raw["workable_listing_rows"] = 1
+        external_id = str(job.get("external_job_id") or "").strip()
+        job_url = str(job.get("source_url") or "").strip()
+        # A missing or unverified public URL is already a partial source. Do
+        # not collapse such rows merely because they share the board fallback.
+        if not external_id or not raw.get("workable_job_page_verified"):
+            jobs.append(job)
+            continue
+        key = (external_id.casefold(), job_url.casefold())
+        prior = by_job.get(key)
+        if prior is None:
+            by_job[key] = job
+            jobs.append(job)
+            continue
+        prior_raw = prior["raw"]
+        core = ("title", "company", "source_url", "external_job_id", "description_text")
+        metadata = ("posted_at", "employment_type", "workplace_type")
+        if (any(prior.get(field) != job.get(field) for field in core)
+                or any(prior_raw.get(field) != raw.get(field) for field in metadata)):
+            conflicting_rows += 1
+            continue
+        prior_raw["workable_listing_rows"] += 1
+        if location and location not in prior_raw["workable_locations"]:
+            prior_raw["workable_locations"].append(location)
+        collapsed_rows += 1
+    missing_url = sum(not job["raw"].get("workable_job_page_verified") for job in jobs)
+    short_description = sum(not job["raw"].get("workable_description_complete") for job in jobs)
+    notes = []
+    if collapsed_rows:
+        notes.append(f"Workable collapsed {collapsed_rows} equivalent location rows across {len(jobs)} postings")
+    if conflicting_rows:
+        notes.append(f"Workable had {conflicting_rows} conflicting rows sharing a job ID and public URL")
+    if missing_url:
+        notes.append(f"Workable public job-page URL unavailable for {missing_url} postings")
+    if short_description:
+        notes.append(f"Workable description too short for safe handoff for {short_description} postings")
+    return jobs, not (missing_url or short_description or conflicting_rows), notes
+
+
+def _workday_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Enumerate Workday postings and read each robots-allowed public CXS detail."""
+    tenant, site = token.split("|", 1)
+    host = urllib.parse.urlparse(url).hostname or ""
+    api_root = f"https://{host}/wday/cxs/{urllib.parse.quote(tenant, safe='')}/{urllib.parse.quote(site, safe='')}"
+    output: list[dict[str, Any]] = []
+    offset = 0
+    expected_total: int | None = None
+    fetched_count = 0
+    missing_titles = 0
+    missing_details = 0
+    repeated_paths = 0
+    seen_paths: set[str] = set()
+
+    def finish() -> tuple[list[dict[str, Any]], bool, list[str]]:
+        total = expected_total or 0
+        notes: list[str] = []
+        if missing_titles:
+            notes.append(f"Workday listing omitted titles for {missing_titles} of {total} postings")
+        if repeated_paths:
+            notes.append(f"Workday listing repeated {repeated_paths} job paths")
+        if missing_details:
+            notes.append(f"Workday public details unavailable for {missing_details} of {len(output)} titled postings")
+        if len(output) != total:
+            notes.append(f"Workday yielded {len(output)} titled postings out of {total} reported")
+        return output, not notes, notes
+
+    while offset < 100000:
+        request = requests.Request("POST", api_root + "/jobs", json={"limit": 20, "offset": offset, "searchText": "", "appliedFacets": {}}).prepare()
+        response = _request_post(request.url or "", request.body or "{}")
+        data = response.json()
+        rows = data.get("jobPostings", []) if isinstance(data, dict) else []
+        if not isinstance(rows, list):
+            raise ScrapeFailure("Workday API returned a non-list jobPostings value")
+        total = data.get("total") if isinstance(data, dict) else None
+        try:
+            total = int(total)
+        except (TypeError, ValueError):
+            raise ScrapeFailure("Workday API omitted its total-count metadata; completeness cannot be verified")
+        if expected_total is None:
+            expected_total = total
+        elif total > 0 and expected_total != total:
+            raise ScrapeFailure(f"Workday total changed during pagination ({expected_total} to {total})")
+        if total < 0:
+            raise ScrapeFailure("Workday returned a negative job total")
+        if not rows:
+            if fetched_count != expected_total:
+                raise ScrapeFailure(f"Workday ended at {fetched_count} of {expected_total} postings")
+            return finish()
+        for job in rows:
+            if not isinstance(job, dict) or not _text(job.get("title")):
+                missing_titles += 1
+                continue
+            title = _text(job.get("title")) or ""
+            external = str(job.get("bulletFields", [""])[0] if job.get("bulletFields") else "")
+            external_path = job.get("externalPath")
+            detail_error: str | None = None
+            detail = None
+            source_url = None
+            try:
+                detail_url = public_detail_url(url, tenant, site, external_path)
+                source_url = fallback_source_url(url, site, external_path)
+                if detail_url in seen_paths:
+                    repeated_paths += 1
+                    raise ValueError("Workday listing repeated a job path")
+                seen_paths.add(detail_url)
+                detail_response = _request(detail_url, timeout=15)
+                if detail_response.status_code != 200:
+                    raise ScrapeFailure(f"Workday public detail returned HTTP {detail_response.status_code}")
+                detail = parse_public_detail(detail_response.json(), url, site, external_path, _clean_description)
+                if not detail.complete:
+                    detail_error = detail.reason or "Workday public detail was incomplete"
+                if detail.source_url:
+                    source_url = detail.source_url
+            except (ValueError, requests.RequestException, ScrapeFailure) as exc:
+                detail_error = str(exc) or type(exc).__name__
+            if detail_error:
+                missing_details += 1
+            output.append({
+                "title": detail.title if detail and detail.title else title,
+                "company": employer,
+                "location": (detail.location if detail else None) or _text(job.get("locationsText")),
+                "source_url": source_url,
+                "external_job_id": (detail.external_job_id if detail else None) or external or hashlib.sha256((source_url or title).lower().encode()).hexdigest()[:32],
+                "description_text": (detail.description_text if detail else None) or _clean_description(job.get("jobDescription")),
+                "raw": {
+                    "source": SOURCE,
+                    "ats": "workday",
+                    "posted_at": (detail.posted_at if detail else None) or job.get("postedOn"),
+                    "employment_type": (detail.employment_type if detail else None) or job.get("timeType"),
+                    "workday_detail_complete": not bool(detail_error),
+                    **({"workday_detail_error": detail_error[:180]} if detail_error else {}),
+                },
+            })
+        fetched_count += len(rows)
+        if fetched_count > expected_total:
+            raise ScrapeFailure(f"Workday returned more than its initial total of {expected_total} postings")
+        offset += len(rows)
+        if fetched_count == expected_total:
+            return finish()
+    raise ScrapeFailure("Workday exceeded the 100000-posting safety cap; completeness cannot be verified")
 
 
 def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Response:
@@ -2043,9 +2240,91 @@ def _linked_ats_boards(html: str, current_url: str) -> list[tuple[str, tuple[str
     return [(url, platform) for platform, url in found.items()]
 
 
+def _talentbrew_jobs(first_response: requests.Response, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Validate a public TalentBrew listing and each same-host job detail."""
+    first_url = first_response.url
+    first_parsed = urllib.parse.urlparse(first_url)
+    first_query = urllib.parse.parse_qsl(first_parsed.query, keep_blank_values=True)
+    unfiltered = (first_parsed.path.rstrip("/").lower().endswith("/search-jobs")
+                  and all(key.lower() == "p" and value == "1" for key, value in first_query))
+
+    def fetch_page(url: str) -> tuple[str, str]:
+        if _application_form_target(url):
+            raise ScrapeFailure("TalentBrew next page points to an application form")
+        response = _request(url, timeout=15)
+        if response.status_code != 200:
+            raise ScrapeFailure(f"TalentBrew next page returned HTTP {response.status_code}")
+        return response.text, response.url
+
+    listing = enumerate_search_pages(first_response.text, first_url, fetch_page, max_postings=MAX_JOB_URLS)
+    notes: list[str] = []
+    if not listing.complete:
+        notes.append(listing.reason)
+    if not unfiltered:
+        notes.append("TalentBrew source is a filtered search page; employer-wide completeness is unknown")
+    if listing.declared_total is not None and listing.declared_total > MAX_JOB_URLS:
+        return [], False, notes
+
+    issues: Counter[str] = Counter()
+    jobs: list[dict[str, Any]] = []
+    expected_host = first_parsed.hostname
+    listing_titles = dict(listing.posting_titles)
+    for detail_url in listing.posting_urls:
+        if _application_form_target(detail_url):
+            issues["application form candidate skipped"] += 1
+            continue
+        try:
+            detail = _request(detail_url, timeout=15)
+            parsed_detail = urllib.parse.urlparse(detail.url)
+            if detail.status_code != 200 or parsed_detail.scheme != "https" or parsed_detail.hostname != expected_host:
+                issues["job detail did not return HTTP 200 on the listing host"] += 1
+                continue
+            expected_id = urllib.parse.urlparse(detail_url).path.rstrip("/").split("/")[-1]
+            if parsed_detail.path.rstrip("/").split("/")[-1] != expected_id:
+                issues["job detail redirected away from its listed ID"] += 1
+                continue
+            extracted = extract_postings(detail.text, detail.url, employer)
+            matches = [job for job in extracted
+                       if urllib.parse.urlparse(str(job.get("source_url") or "")).hostname == expected_host
+                       and urllib.parse.urlparse(str(job.get("source_url") or "")).path.rstrip("/").split("/")[-1] == expected_id
+                       and not _application_form_target(str(job.get("source_url") or ""))]
+            card_title = listing_titles.get(detail_url)
+            structured = matches[0] if len(matches) == 1 else None
+            if structured and card_title:
+                structured_title = " ".join(str(structured.get("title") or "").split()).casefold()
+                if structured_title != " ".join(card_title.split()).casefold():
+                    structured = None
+            if structured and len(str(structured.get("description_text") or "").strip()) > 200:
+                job = structured
+            else:
+                html_detail = parse_talentbrew_public_detail(detail.text, detail.url, detail_url, card_title or "")
+                if not html_detail.complete:
+                    issues[f"job detail lacked exactly one matching JobPosting or validated HTML description: {html_detail.reason}"] += 1
+                    continue
+                job = {
+                    "title": html_detail.title,
+                    "company": employer,
+                    "location": None,
+                    "source_url": html_detail.source_url,
+                    "external_job_id": html_detail.external_job_id,
+                    "description_text": html_detail.description_text,
+                    "snippet": (html_detail.description_text or "")[:300] or None,
+                    "raw": {"source": SOURCE, "extractor": "talentbrew_html_detail", "board_url": first_url},
+                }
+            job.setdefault("raw", {})["ats"] = "talentbrew"
+            jobs.append(job)
+        except Exception as exc:
+            issues[f"job detail request failed: {type(exc).__name__}"] += 1
+    notes.extend(f"{count} TalentBrew {reason}" for reason, count in sorted(issues.items()))
+    complete = (listing.complete and unfiltered and not issues
+                and listing.declared_total == len(jobs))
+    return jobs, complete, notes
+
+
 def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]], str, bool, list[str]]:
     postings: list[dict[str, Any]] = []
     personio_feed_note: str | None = None
+    linked_talentbrew_note: str | None = None
     # Some sources are a job detail page already.
     response = _request(start_url)
     if response.status_code >= 400:
@@ -2080,6 +2359,12 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         if redirected_platform[0] == "taleo":
             jobs, complete, notes = _taleo_jobs(response.url, redirected_platform[1], employer)
             return jobs, "public_career_section_sitemap:taleo-enterprise-v1", complete, notes
+        if redirected_platform[0] == "workday":
+            jobs, complete, notes = _workday_jobs(response.url, redirected_platform[1], employer)
+            return jobs, "redirected_public_cxs_listing_and_detail:workday-v2", complete, notes
+        if redirected_platform[0] == "workable":
+            jobs, complete, notes = _workable_jobs(response.url, redirected_platform[1], employer)
+            return jobs, "redirected_public_job_board_api:workable-v2", complete, notes
         if redirected_platform[0] == "personio":
             # Direct Personio URLs reach this path only after their XML feed
             # failed in scrape_source. An official page redirect has not yet
@@ -2093,9 +2378,17 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
         else:
             jobs = _api_jobs(response.url, redirected_platform, employer)
             return jobs, f"redirected_ats_api:{redirected_platform[0]}", True, []
+    try:
+        talentbrew_page = parse_search_page(response.text, response.url)
+    except (TypeError, ValueError):
+        talentbrew_page = None
+    if talentbrew_page and talentbrew_page.recognized:
+        jobs, complete, notes = _talentbrew_jobs(response, employer)
+        return jobs, "public_html_pagination:talentbrew-v1", complete, notes
     if not postings and is_job_detail_url(response.url):
         heuristic = extract_html_job(response.text, response.url, employer)
-        if heuristic: postings.append(heuristic)
+        if heuristic and len(str(heuristic.get("description_text") or "").strip()) > 200:
+            postings.append(heuristic)
     linked_boards = _linked_ats_boards(response.text, response.url)
     if linked_boards:
         board_jobs: list[dict[str, Any]] = []
@@ -2168,6 +2461,16 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                         board_jobs.extend(adapted_jobs)
                         all_boards_complete = all_boards_complete and board_complete
                         board_notes.extend(f"linked Personio board: {note}" for note in adapter_notes)
+                elif platform[0] == "workday":
+                    adapted_jobs, board_complete, adapter_notes = _workday_jobs(board_url, platform[1], employer)
+                    board_jobs.extend(adapted_jobs)
+                    all_boards_complete = all_boards_complete and board_complete
+                    board_notes.extend(f"linked Workday board: {note}" for note in adapter_notes)
+                elif platform[0] == "workable":
+                    adapted_jobs, board_complete, adapter_notes = _workable_jobs(board_url, platform[1], employer)
+                    board_jobs.extend(adapted_jobs)
+                    all_boards_complete = all_boards_complete and board_complete
+                    board_notes.extend(f"linked Workable board: {note}" for note in adapter_notes)
                 else:
                     board_jobs.extend(_api_jobs(board_url, platform, employer))
             except Exception as exc:
@@ -2181,11 +2484,38 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
             board_notes.insert(0, personio_feed_note)
             all_boards_complete = False
         return list(unique.values()), "linked_ats_api:" + "+".join(dict.fromkeys(p[0] for _, p in linked_boards)), all_boards_complete, board_notes
+    search_links = discover_same_host_search_links(response.text, response.url)
+    unfiltered_links = [url for url in search_links
+                        if urllib.parse.urlparse(url).path.rstrip("/").lower().endswith("/search-jobs")
+                        and not urllib.parse.urlparse(url).query]
+    if unfiltered_links:
+        try:
+            search_response = _request(unfiltered_links[0], timeout=15)
+            if search_response.status_code == 200 and parse_search_page(search_response.text, search_response.url).recognized:
+                jobs, complete, notes = _talentbrew_jobs(search_response, employer)
+                combined = {str(job.get("source_url")): job for job in jobs}
+                extra_homepage_jobs = 0
+                for job in postings:
+                    if str(job.get("source_url")) not in combined:
+                        combined[str(job.get("source_url"))] = job
+                        extra_homepage_jobs += 1
+                if extra_homepage_jobs:
+                    complete = False
+                    notes.append(f"{extra_homepage_jobs} homepage JobPosting records were not in the TalentBrew listing")
+                return list(combined.values()), "linked_public_html_pagination:talentbrew-v1", complete, notes
+            linked_talentbrew_note = "linked TalentBrew search page did not verify as an HTTP 200 public listing"
+        except Exception as exc:
+            # Fall back to the generic partial crawl; a homepage link alone
+            # cannot establish a complete listing.
+            linked_talentbrew_note = f"linked TalentBrew search failed: {str(exc)[:140]}"
     seen_posting_urls = {job["source_url"].split("#", 1)[0] for job in postings}
     urls, complete, notes = _discover_sitemaps(response.url)
     if personio_feed_note:
         complete = False
         notes.insert(0, personio_feed_note)
+    if linked_talentbrew_note:
+        complete = False
+        notes.insert(0, linked_talentbrew_note)
     listing_pages: list[str] = []
     open_position_titles: dict[str, str] = {}
     method = "sitemap_structured_data"
@@ -2202,13 +2532,18 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
             if candidate.url not in urls and len(urls) < 250:
                 urls.append(candidate.url)
     for detail_url in urls:
+        if _application_form_target(detail_url):
+            complete = False
+            notes.append(f"application form candidate skipped: {detail_url}")
+            continue
         try:
             detail = _request(detail_url, timeout=12)
             if detail.status_code == 200:
                 new = extract_postings(detail.text, detail.url, employer)
                 if not new and is_job_detail_url(detail.url):
                     heuristic = extract_html_job(detail.text, detail.url, employer)
-                    if heuristic: new = [heuristic]
+                    if heuristic and len(str(heuristic.get("description_text") or "").strip()) > 200:
+                        new = [heuristic]
                 if not new and detail_url in open_position_titles and urllib.parse.urlparse(detail.url).hostname == host:
                     title = open_position_titles[detail_url]
                     if detail_matches_open_position(detail.text, title):
@@ -2423,6 +2758,21 @@ def _taleo_jobs(url: str, portal: str, employer: str) -> tuple[list[dict[str, An
                 notes.append(f"Taleo job detail had no extractable title: {detail_url}")
                 continue
             job = extracted[0]
+            title = (_text(job.get("title")) or "").strip(" :")
+            description = _clean_description(job.get("description_text"))
+            template_labels = {
+                "primary location", "other locations", "work locations", "industry",
+                "schedule", "employee status", "job type", "job posting",
+                "description", "job number", "privacy agreement",
+            }
+            if title.casefold() in template_labels or len(description or "") < 100:
+                # Taleo can return a 200 session/template shell with an empty
+                # description. Heading fallback otherwise turns field labels
+                # such as "Primary Location" into fictitious jobs.
+                complete = False
+                notes.append(f"Taleo job detail lacked a usable title/description: {detail_url}")
+                continue
+            job["description_text"] = description
             query = urllib.parse.parse_qs(urllib.parse.urlparse(detail.url).query)
             query_id = next((query[k][0] for k in ("job", "rid", "requisitionId") if query.get(k)), "")
             job["external_job_id"] = query_id or job.get("external_job_id")
@@ -2522,6 +2872,12 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
             elif p[0] == "taleo":
                 jobs, complete, notes = _taleo_jobs(url, p[1], employer)
                 method = "public_career_section_sitemap:taleo-enterprise-v1"
+            elif p[0] == "workday":
+                jobs, complete, notes = _workday_jobs(url, p[1], employer)
+                method = "public_cxs_listing_and_detail:workday-v2"
+            elif p[0] == "workable":
+                jobs, complete, notes = _workable_jobs(url, p[1], employer)
+                method = "public_job_board_api:workable-v2"
             else:
                 jobs = _api_jobs(url, p, employer)
                 method = "ats_api:" + p[0]
@@ -2720,31 +3076,46 @@ def main() -> int:
     print(f"verified employer records={len(verified_records)}; raw URLs={len(raw_unique_urls)}; normalized crawl groups={run_manifest['normalized_unique_career_urls']}; tracker sha256={tracker_sha256}")
     print(f"already complete={already_complete}; previously attempted additionally skipped={attempted_skipped}; queued={len(pending)}")
     mode = "a" if not args.include_completed else "w"
-    already_written: set[str] = set()
-    if mode == "a" and jobs_path.exists():
-        with jobs_path.open(encoding="utf-8") as prior_jobs:
-            for line in prior_jobs:
-                try:
-                    job = json.loads(line)
-                    already_written.add(_job_dedupe_key(job))
-                except (json.JSONDecodeError, AttributeError):
-                    continue
     jobs_written = 0
     with results_path.open(mode, encoding="utf-8") as results, jobs_path.open(mode, encoding="utf-8") as jobs_file:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {pool.submit(scrape_source, s): s for s in pending}
             for future in as_completed(futures):
                 result = future.result()
-                result_row = {k: v for k, v in result.items() if k != "jobs"}
-                results.write(json.dumps(result_row, ensure_ascii=False) + "\n"); results.flush()
+                # A result and its payload rows form one immutable crawl attempt.
+                # Keep refreshed rows on retries; the reporter selects one attempt.
+                attempt_id = uuid.uuid4().hex
+                unique_jobs: list[dict[str, Any]] = []
+                seen_job_keys: set[str] = set()
                 for job in result["jobs"]:
                     job_key = _job_dedupe_key(job)
-                    if job_key in already_written: continue
-                    already_written.add(job_key)
+                    if job_key in seen_job_keys:
+                        continue
+                    seen_job_keys.add(job_key)
+                    unique_jobs.append(job)
+                result_row = {k: v for k, v in result.items() if k != "jobs"}
+                result_row["crawl_attempt_id"] = attempt_id
+                if len(unique_jobs) != len(result["jobs"]):
+                    # Duplicate details cannot account for every listed role.
+                    result_row["complete"] = False
+                    result_row["status"] = "partial"
+                    result_row["notes"] = list(result_row.get("notes") or []) + [
+                        f"{len(result['jobs']) - len(unique_jobs)} duplicate job payloads within crawl attempt"
+                    ]
+                result_row["job_count"] = len(unique_jobs)
+                for job in unique_jobs:
+                    raw = job.get("raw")
+                    if not isinstance(raw, dict):
+                        raw = {}
+                        job["raw"] = raw
+                    raw["crawl_attempt_id"] = attempt_id
                     jobs_file.write(json.dumps(job, ensure_ascii=False) + "\n")
                     jobs_written += 1
                 jobs_file.flush()
-                print(f"[{result['status']}] {result['job_count']} jobs | {result['url']} | {result['method']}" + (f" | {result['error']}" if result.get("error") else ""))
+                # Publish the complete attempt result only after its job rows
+                # are flushed. An interrupted write leaves ignored orphan rows.
+                results.write(json.dumps(result_row, ensure_ascii=False) + "\n"); results.flush()
+                print(f"[{result_row['status']}] {result_row['job_count']} jobs | {result_row['url']} | {result_row['method']}" + (f" | {result_row['error']}" if result_row.get("error") else ""))
     summary = {**run_manifest, **summarize_results(results_path, jobs_path)}
     (args.output_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print("source status counts: " + json.dumps(summary["status_counts_by_source_group"], sort_keys=True))

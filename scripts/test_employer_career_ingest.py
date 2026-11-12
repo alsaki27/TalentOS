@@ -492,9 +492,16 @@ class CareerScraperTests(unittest.TestCase):
             <li class="opening-job job"><a class="js-job-ad-link" href="https://jobs.smartrecruiters.com/Acme/101"><h4 class="job-title">Field Engineer</h4></a></li></ul></section></div>'''
         page1 = '''<section class="js-group" data-qty="1"><h3 class="opening-title">Remote</h3>
             <ul><li class="opening-job job"><a class="js-job-ad-link" href="https://jobs.smartrecruiters.com/Acme/102"><h4 class="job-title">Project Manager</h4></a></li></ul></section>'''
+        def detail(url, title):
+            posting = {"@type": "JobPosting", "url": url, "title": title,
+                       "description": "Lead detailed project work and coordinate delivery. " * 8}
+            return '<script type="application/ld+json">' + json.dumps(posting) + '</script>'
         responses = [
             SimpleNamespace(status_code=200, url="https://careers.smartrecruiters.com/Acme", text=page0),
             SimpleNamespace(status_code=200, url="https://careers.smartrecruiters.com/Acme/api/groups?page=1", text=page1),
+            SimpleNamespace(status_code=200, url="https://jobs.smartrecruiters.com/Acme/100", text=detail("https://jobs.smartrecruiters.com/Acme/100", "GIS Analyst")),
+            SimpleNamespace(status_code=200, url="https://jobs.smartrecruiters.com/Acme/101", text=detail("https://jobs.smartrecruiters.com/Acme/101", "Field Engineer")),
+            SimpleNamespace(status_code=200, url="https://jobs.smartrecruiters.com/Acme/102", text=detail("https://jobs.smartrecruiters.com/Acme/102", "Project Manager")),
         ]
         with patch.object(scraper, "_request", side_effect=responses) as request:
             jobs, complete, notes = scraper._smartrecruiters_jobs("https://jobs.smartrecruiters.com/Acme/100", "Acme", "Acme Inc.")
@@ -503,6 +510,8 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(jobs[0]["title"], "GIS Analyst")
         self.assertEqual(jobs[0]["location"], "Austin, TX")
         self.assertEqual(jobs[0]["raw"]["employment_type"], "Full-time")
+        self.assertGreater(len(jobs[0]["description_text"]), 200)
+        self.assertTrue(all(job["raw"]["smartrecruiters_detail_complete"] for job in jobs))
         self.assertEqual(request.call_args_list[1].args[0], "https://careers.smartrecruiters.com/Acme/api/groups?page=1")
 
     def test_scrape_source_dispatches_smartrecruiters_to_public_board_adapter(self):
@@ -701,7 +710,7 @@ class CareerScraperTests(unittest.TestCase):
             if "job=" not in scraper.urllib.parse.urlparse(url).query:
                 return SimpleNamespace(status_code=200, content=b"", text="<html><h1>Career Board</h1></html>", url=url)
             number = scraper.urllib.parse.parse_qs(scraper.urllib.parse.urlparse(url).query)["job"][0]
-            return SimpleNamespace(status_code=200, url=url, text=f"<html><h1>Engineer {number}</h1><div class='description'>Plan public infrastructure.</div></html>")
+            return SimpleNamespace(status_code=200, url=url, text=f"<html><main><h1>Engineer {number}</h1><div class='description'>{'Plan public infrastructure. ' * 6}</div></main></html>")
 
         with patch.object(scraper, "_request", side_effect=fake_request) as request:
             jobs, complete, notes = scraper._taleo_jobs("https://hdr.taleo.net/careersection/ex/jobsearch.ftl?lang=en", "ex", "HDR")
@@ -732,8 +741,27 @@ class CareerScraperTests(unittest.TestCase):
 
         with patch.object(scraper, "_request", side_effect=fake_request):
             jobs, complete, notes = scraper._taleo_jobs("https://hdr.taleo.net/careersection/ex/jobsearch.ftl", "ex", "HDR")
-        self.assertTrue(complete, notes)
-        self.assertEqual(len(jobs), 1)
+        self.assertFalse(complete)
+        self.assertEqual(jobs, [])
+        self.assertTrue(any("lacked a usable title/description" in note for note in notes))
+
+    def test_taleo_template_label_is_not_promoted_to_job_even_with_description_text(self):
+        sitemap = b'''<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://hdr.taleo.net/careersection/ex/jobdetail.ftl?job=101</loc></url>
+        </urlset>'''
+
+        def fake_request(url, **kwargs):
+            if "/sitemap.jss?" in url:
+                return SimpleNamespace(status_code=200, content=sitemap)
+            if "job=" not in scraper.urllib.parse.urlparse(url).query:
+                return SimpleNamespace(status_code=200, content=b"", text="<html><h1>Career Board</h1></html>", url=url)
+            return SimpleNamespace(status_code=200, url=url, text=f"<main><h2>Primary Location</h2><div class='description'>{'Generic portal copy. ' * 8}</div></main>")
+
+        with patch.object(scraper, "_request", side_effect=fake_request):
+            jobs, complete, notes = scraper._taleo_jobs("https://hdr.taleo.net/careersection/ex/jobsearch.ftl", "ex", "HDR")
+        self.assertEqual(jobs, [])
+        self.assertFalse(complete)
+        self.assertTrue(any("lacked a usable title/description" in note for note in notes))
 
     def test_ingest_batches_carry_run_id_and_namespace_external_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -886,7 +914,8 @@ class CareerScraperTests(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             current = {
                 "title": "Current title", "company": "Example Co", "source_url": "https://example.com/jobs/42",
-                "external_job_id": "42", "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v10"},
+                "external_job_id": "42", "description_text": "Full job duties and qualifications. " * 8,
+                "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v10"},
             }
             old_without_version = {**current, "title": "Legacy title", "raw": {"career_source_url": "https://example.com/careers"}}
             old_version = {**current, "title": "Old adapter title", "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v9"}}
@@ -896,6 +925,46 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(summary["eligible_payload_rows_from_complete_groups"], 1)
         self.assertEqual(summary["unique_integration_ready_job_payloads"], 1)
         self.assertEqual([item["title"] for item in ready], ["Current title"])
+
+    def test_readiness_holds_broken_workday_links_short_descriptions_and_application_forms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            results = root / "results.jsonl"
+            jobs = root / "jobs.jsonl"
+            tracker.write_text(
+                "career_page_status,career_page_url,evidence_url,employer_name,employer_key\n"
+                "verified_official,https://acme.wd1.myworkdayjobs.com/Acme,,Acme,company_id:1\n"
+                "verified_official,https://example.com/careers,,Example,company_id:2\n",
+                encoding="utf-8",
+            )
+            results.write_text("".join(json.dumps({
+                "url": url, "adapter_version": "v15", "method": "ats_api", "complete": True,
+                "status": "scraped", "job_count": 1 if "workday" in url else 4,
+            }) + "\n" for url in (
+                "https://acme.wd1.myworkdayjobs.com/Acme", "https://example.com/careers",
+            )), encoding="utf-8")
+            long_description = "Full job duties and qualifications. " * 8
+            payloads = [
+                {"title": "Broken Workday", "company": "Acme", "source_url": "https://acme.wd1.myworkdayjobs.com/job/role_1", "external_job_id": "1", "description_text": long_description, "raw": {"career_source_url": "https://acme.wd1.myworkdayjobs.com/Acme", "adapter_version": "v15", "ats": "workday"}},
+                {"title": "Ready role", "company": "Example", "source_url": "https://example.com/jobs/2", "external_job_id": "2", "description_text": "", "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v15"}},
+                {"title": "Ready role", "company": "Example", "source_url": "https://example.com/jobs/2", "external_job_id": "2", "description_text": long_description, "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v15"}},
+                {"title": "Application form", "company": "Example", "source_url": "https://example.com/jobs/3/apps/new", "external_job_id": "3", "description_text": long_description, "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v15"}},
+                {"title": "Short detail", "company": "Example", "source_url": "https://example.com/jobs/4", "external_job_id": "4", "description_text": "Too short", "raw": {"career_source_url": "https://example.com/careers", "adapter_version": "v15"}},
+            ]
+            jobs.write_text("".join(json.dumps(item) + "\n" for item in payloads), encoding="utf-8")
+            summary = report.build_report(tracker, results, jobs, root / "readiness", "v15")
+            ready = [json.loads(line) for line in Path(summary["ready_jobs_path"]).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(summary["eligible_payload_rows_from_complete_groups"], 5)
+        self.assertEqual(summary["unique_payloads_from_complete_groups"], 4)
+        self.assertEqual(summary["unique_integration_ready_job_payloads"], 1)
+        self.assertEqual(summary["payload_hold_counts_by_reason"], {
+            "application_form_url": 1,
+            "description_would_trigger_deep_fetch": 1,
+            "invalid_or_unverified_job_url": 1,
+        })
+        self.assertEqual(summary["source_groups_with_payload_holds"], 2)
+        self.assertEqual(ready[0]["title"], "Ready role")
 
     def test_readiness_report_merges_complete_old_sources_with_newer_retries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -919,9 +988,9 @@ class CareerScraperTests(unittest.TestCase):
             results_v11.write_text("".join(json.dumps(row) + "\n" for row in rows[:2]), encoding="utf-8")
             results_v12.write_text(json.dumps(rows[2]) + "\n", encoding="utf-8")
             payloads = [
-                {"title": "A current", "company": "Example A", "source_url": "https://example-a.com/jobs/1", "external_job_id": "1", "raw": {"career_source_url": "https://example-a.com/careers", "adapter_version": "v11"}},
-                {"title": "B stale partial", "company": "Example B", "source_url": "https://example-b.com/jobs/1", "external_job_id": "1", "raw": {"career_source_url": "https://example-b.com/careers", "adapter_version": "v11"}},
-                {"title": "B retried", "company": "Example B", "source_url": "https://example-b.com/jobs/1", "external_job_id": "1", "raw": {"career_source_url": "https://example-b.com/careers", "adapter_version": "v12"}},
+                {"title": "A current", "company": "Example A", "source_url": "https://example-a.com/jobs/1", "external_job_id": "1", "description_text": "Full job duties and qualifications. " * 8, "raw": {"career_source_url": "https://example-a.com/careers", "adapter_version": "v11"}},
+                {"title": "B stale partial", "company": "Example B", "source_url": "https://example-b.com/jobs/1", "external_job_id": "1", "description_text": "Full job duties and qualifications. " * 8, "raw": {"career_source_url": "https://example-b.com/careers", "adapter_version": "v11"}},
+                {"title": "B retried", "company": "Example B", "source_url": "https://example-b.com/jobs/1", "external_job_id": "1", "description_text": "Full job duties and qualifications. " * 8, "raw": {"career_source_url": "https://example-b.com/careers", "adapter_version": "v12"}},
             ]
             jobs_v11.write_text("".join(json.dumps(item) + "\n" for item in payloads[:2]), encoding="utf-8")
             jobs_v12.write_text(json.dumps(payloads[2]) + "\n", encoding="utf-8")
@@ -961,7 +1030,7 @@ class CareerScraperTests(unittest.TestCase):
             ]
             results.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
             payloads = [
-                {"title": f"{key} {version}", "company": key, "source_url": f"https://{key}.example/jobs/{version}", "external_job_id": f"{key}-{version}", "raw": {"career_source_url": f"https://{key}.example/careers", "adapter_version": version}}
+                {"title": f"{key} {version}", "company": key, "source_url": f"https://{key}.example/jobs/{version}", "external_job_id": f"{key}-{version}", "description_text": "Full job duties and qualifications. " * 8, "raw": {"career_source_url": f"https://{key}.example/careers", "adapter_version": version}}
                 for key, version in (("A", "v11"), ("C", "v11"), ("C", "v14"), ("D", "v11"), ("E", "v11"))
             ]
             jobs.write_text("".join(json.dumps(row) + "\n" for row in payloads), encoding="utf-8")

@@ -6,24 +6,34 @@ Branch: `codex/employer-career-dev-handoff` (created from `0c01167baa5215e8bb222
 
 We have identified **9,919 distinct career-page crawl groups** from **9,942 verified URLs** linked to **10,718 employer records**. A group is one normalized URL; multiple employers can share it. This is a source inventory, not 9,919 fully working scrapers.
 
-The November 12, 2026, 11:53 a.m. ET safety-gated checkpoint selected results for 1,251 groups. **486 groups were complete** (416 with jobs, 70 confirmed empty), producing **53,341 unique job payloads eligible for integration**. Another 61 historical generic completions require v14 revalidation; 8,668 groups had not started. The rest were partial (609), blocked (68), errored (23), or held (4). These figures are a snapshot, not a live production count. No jobs from this crawl were posted to TalentOS.
+The November 12, 2026, 11:53 a.m. ET checkpoint selected results for 1,251 groups and 486 complete listings. Its earlier claim that 53,341 payloads were integration-ready is **superseded**: that report did not require a usable description or exclude job links leading to application forms. No jobs from this crawl were posted to TalentOS.
 
-A later frozen v14 checkpoint brought the historical result union to **1,295 groups**. The November 12 baseline report selected **491 complete groups** and **53,919 unique ready payloads** from that union, with no live ingestion. The v14 coverage cohort contains 8,852 groups: 220 already attempted in that checkpoint and 8,632 placed in four host-exclusive shards. The historical union plus those shards covers all 9,919 groups after eight overlaps. The first four-shard run at 256 total workers produced 247 robots-check failures mislabeled as blocks; its four output folders are marked `INVALID_ROBOTS_RUN.json` and must never be included in readiness. Adapter v15 preserves the underlying robots-fetch error and treats transient network/HTTP failures as retryable errors. A clean v15 shard pass is the continuation; do not call the 9,919 groups scraped until that pass finishes and its dispositions are reviewed.
+A later frozen v14 checkpoint brought the historical result union to **1,295 groups**. The v14 coverage cohort contains 8,852 groups: 220 already attempted in that checkpoint and 8,632 placed in four host-exclusive shards. The historical union plus those shards covers all 9,919 groups after eight overlaps. The first four-shard run at 256 total workers produced 247 robots-check failures mislabeled as blocks; its four output folders are marked `INVALID_ROBOTS_RUN.json` and must never be included in readiness. Adapter v15 preserves the underlying robots-fetch error and treats transient network/HTTP failures as retryable errors.
+
+The stopped v15 checkpoint plus historical results covers **1,310 groups**. An attempt-lineage audit found that 21 of its 492 source-reported complete groups lacked **8,538 saved job rows**; those groups are held for revalidation. The remaining **471 groups** have matching source and payload counts, with 55,512 candidate rows. The reporter holds 31,307 records with invalid or unverified job URLs, 4,683 whose descriptions would trigger Job CEO to fetch the URL, and 394 with application-form URLs; **19,128 payloads pass these minimum readiness checks**. The 31,307 URL holds include 29,313 historical and 1,994 v15 Workday listings whose URLs omitted the Workday site segment. The four v15 shards stopped after 20 valid source results to add an application-form redirect guard and Workday detail validation. The v16 continuation repairs Workday job details and rejects Taleo portal-shell false positives. Of the 471 count-matched complete groups, 164 still have at least one held payload. All remaining groups still need a first pass, and a complete listing result alone does not prove its job payloads are ready or that Job CEO will log them.
+
+The ongoing scrape-only work includes four v16 continuation shards (8,632 groups), four v16 Workday revalidation shards (116 historical groups), one v16 Taleo revalidation shard (four historical groups), four v18 TalentBrew shards (37 verified groups), four v19 payload-count revalidation shards (21 historical groups), and a v20 TalentBrew HTML-detail pilot. These cohorts overlap; **do not add their group counts** to the 9,919 denominator. The v19 SmartRecruiters revalidation finished 18 groups: 13 complete and five partial because public job URLs or details could not be verified. The v20 Workable revalidation finished all 15 groups with 797 distinct jobs whose public URLs and descriptions passed the minimum checks; its pilot resolved 99 location rows into 34 jobs while preserving every location in `raw`. The one-board v20 TalentBrew pilot is still running. No jobs from these runs have been posted to TalentOS, and their results are not in the frozen v15 private ZIP.
 
 ## What is on this branch
 
-- `scripts/employer_career_ingest.py`: the discovery crawler and a dry-run-by-default Job CEO batch uploader. It checkpoints each source in `source_results.jsonl` and payloads in `jobs.jsonl`. `--skip-attempted` resumes one inventory pass after interruption without redoing recorded failures; the default mode retries incomplete groups. `--shared-host-rate-dir` enforces cross-process per-host request spacing.
-- `scripts/report_employer_career_ingest.py`: combines crawl checkpoints, selects complete results by adapter version, and writes `ready_jobs.jsonl`, `source_dispositions.csv`, and `readiness_summary.json`. Use `--min-sitemap-adapter-version employer-career-ingest-v14` to hold historical generic sitemap results until revalidated.
+- `scripts/employer_career_ingest.py`: the discovery crawler and a dry-run-by-default Job CEO batch uploader. It checkpoints each source in `source_results.jsonl` and payloads in `jobs.jsonl`. Since v19, every result and its job rows share a crawl-attempt ID; the writer saves payloads before publishing the result, and it does not suppress refreshed rows from another source or attempt. `--skip-attempted` resumes one inventory pass after interruption without redoing recorded failures; the default mode retries incomplete groups. `--shared-host-rate-dir` enforces cross-process per-host request spacing.
+- `scripts/report_employer_career_ingest.py`: combines crawl checkpoints, selects complete results by adapter version **and exact attempt**, and writes `ready_jobs.jsonl`, `source_dispositions.csv`, and `readiness_summary.json`. It holds a source if the selected complete result's job count differs from its saved payload rows. Legacy results without attempt IDs qualify only when their source/version appears in exactly one result attempt across the selected runs. Ready payloads require a valid HTTPS job URL outside application-form routes and at least 201 description characters, so Job CEO uses the supplied description without fetching the URL. Use `--min-sitemap-adapter-version employer-career-ingest-v14` to hold historical generic sitemap results until revalidated.
 - `scripts/shard_employer_career_tracker.py`: creates balanced, host-exclusive private cohort trackers and a hash manifest. `--exclude-adapter-version` names the version in the checkpoint used for exclusion.
 - `scripts/report_employer_career_safe_runs.py`: pairs result/job files and excludes run folders marked `INVALID_ROBOTS_RUN.json`; `--allow-pending` permits a live shard folder that has not created both files yet.
 - `scripts/open_position_links.py`: a conservative same-host openings fallback that remains partial until a source-specific completeness check exists.
 - `scripts/jazzhr_public_board.py`: validates public JazzHR listing pages without an undocumented feed.
-- `scripts/test_employer_career_ingest.py` and the focused JazzHR, rate-limit, robots, shard, safe-report, and Open Positions tests: offline regression coverage.
+- `scripts/workday_public_detail.py`: validates public Workday CXS details, full descriptions, and canonical job URLs before a Workday source is complete.
+- `scripts/talentbrew_public_board.py`: validates TalentBrew/Radancy HTML listing totals, pagination, and same-host details.
+- `scripts/talentbrew_public_detail.py`: validates public TalentBrew HTML job descriptions when a job page lacks schema.org JobPosting data, using the listed card title and same-host job ID.
+- `scripts/smartrecruiters_public_detail.py`: validates full public SmartRecruiters job details against the HTML listing cards; stale or mismatched detail pages leave the source partial.
+- `scripts/workable_public_job_url.py`: derives a public Workable job page from a matching `/j/<id>/apply` URL without visiting the application route. The v20 crawler merges multiple location rows for one Workable job ID and retains the location set in `raw`.
+- `scripts/careerplug_public_listing.py`: listing-only research parser. CareerPlug job links redirect to application forms, so this is not an integration-ready adapter.
+- `scripts/test_employer_career_ingest.py` and the focused adapter, attempt-lineage, application-guard, rate-limit, robots, shard, safe-report, and Open Positions tests: 194 offline tests passed for v20.
 - `data/talentos-employer-careers/README.md`, `career_page_tracker_summary.json`, and `scrape_source_manifest.json`: source definitions, counts, and the exact tracker SHA-256.
 
-The repository is **public**. The full `career_page_tracker.csv` and `source_dispositions.csv` contain internal company IDs and review notes, so they are ignored by Git and must be given to the developer through a private channel. The tracker SHA-256 in `scrape_source_manifest.json` is `6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d`. Place the private tracker at `data/talentos-employer-careers/career_page_tracker.csv` before running the crawler. The local ignored `outputs/employer-career-ingest-run-2026-11-12-v14/employer-career-private-handoff-v14-safe-2026-11-12.zip` contains the private tracker, disposition, safe ready payloads, and cohort manifest from the 11:53 snapshot; deliver it privately. The earlier November 12 ZIP is superseded. The live v15 crawl checkpoints remain outside Git and require a later private handoff.
+The repository is **public**. The full `career_page_tracker.csv` and `source_dispositions.csv` contain internal company IDs and review notes, so they are ignored by Git and must be given to the developer through a private channel. The tracker SHA-256 in `scrape_source_manifest.json` is `6adc74d03ce965b6ca920b6c803c2fee3bc3f67807f04f10440404528e441c6d`. Place the private tracker at `data/talentos-employer-careers/career_page_tracker.csv` before running the crawler. The local ignored `outputs/employer-career-ingest-run-2026-11-12-v15-readiness-v19-final/employer-career-private-handoff-v15-audited-v19-2026-11-12.zip` contains the tracker, corrected dispositions, 19,128 gated payloads, run selection, cohort manifest, and hash manifest; deliver it privately. Its SHA-256 is `583d6f91f2f46994dd35261a2ac57f263c710bc10451ebfa3e9cd349b36b8a0b`. All earlier handoff ZIPs are superseded. Later crawl checkpoints require an updated private handoff.
 
-To reproduce the local v14 cohort's exclusion while running v15 code, use the *v14* checkpoint version explicitly. The private cohort input and checkpoint must be present first. The expected manifest records 220 excluded groups and 8,632 emitted groups.
+To reproduce the local v14 cohort's exclusion while running newer code, use the *v14* checkpoint version explicitly. The private cohort input and checkpoint must be present first. The expected manifest records 220 excluded groups and 8,632 emitted groups.
 
 ```powershell
 python scripts/shard_employer_career_tracker.py `
@@ -34,7 +44,7 @@ python scripts/shard_employer_career_tracker.py `
   --output-dir outputs/employer-career-ingest-run-2026-11-12-v14/shards-4-v14-rebuilt
 ```
 
-After the clean v15 shards finish, combine only the historical checkpoints and the four clean v15 folders. The safe-run wrapper also excludes any marked invalid folder if one is listed. Keep `--allow-pending` only for an interim snapshot.
+After the active shards finish, combine historical checkpoints and every clean continuation/revalidation run in version order. The safe-run wrapper excludes the four marked invalid v14 folders. Keep `--allow-pending` only for an interim snapshot.
 
 ```powershell
 $runs = @(
@@ -43,12 +53,20 @@ $runs = @(
   'outputs/employer-career-ingest-run-2026-11-12-v14'
 )
 1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v15-shard-{0:D2}' -f $_) }
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v16-shard-{0:D2}' -f $_) }
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v16-workday-{0:D2}' -f $_) }
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v16-taleo'
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v18-talentbrew-{0:D2}' -f $_) }
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v18-workable'
+1..4 | ForEach-Object { $runs += ('outputs/employer-career-ingest-run-2026-11-12-v19-payload-{0:D2}' -f $_) }
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v19-smartrecruiters'
+$runs += 'outputs/employer-career-ingest-run-2026-11-12-v20-workable'
 $reportArgs = @(
   'scripts/report_employer_career_safe_runs.py',
   '--tracker', 'data/talentos-employer-careers/career_page_tracker.csv',
-  '--adapter-version', 'employer-career-ingest-v11,employer-career-ingest-v12,employer-career-ingest-v13,employer-career-ingest-v14,employer-career-ingest-v15',
+  '--adapter-version', 'employer-career-ingest-v11,employer-career-ingest-v12,employer-career-ingest-v13,employer-career-ingest-v14,employer-career-ingest-v15,employer-career-ingest-v16,employer-career-ingest-v17,employer-career-ingest-v18,employer-career-ingest-v19,employer-career-ingest-v20',
   '--min-sitemap-adapter-version', 'employer-career-ingest-v14',
-  '--output-dir', 'outputs/employer-career-ingest-run-2026-11-12-v15-readiness'
+  '--output-dir', 'outputs/employer-career-ingest-run-2026-11-12-v20-readiness'
 )
 foreach ($run in $runs) { $reportArgs += @('--run-dir', $run) }
 python @reportArgs
