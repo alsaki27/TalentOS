@@ -57,9 +57,9 @@ SOURCE_NAME = "adzuna"
 ADZUNA_SEARCH_URL = "https://api.adzuna.com/v1/api/jobs/us/search"
 RESULTS_PER_PAGE = 50
 DEFAULT_DAYS = 2
-# 35 calls per run stays comfortably under Adzuna's published monthly cap for
-# the configured once-daily schedule, assuming the key is dedicated to
-# TalentOS. Each keyword/page request consumes one API call.
+# Each run is capped at 35 Adzuna requests. The scheduled workflow runs twice
+# daily, so its scheduled usage can reach 70 requests/day before manual runs.
+# Each keyword/page request consumes one API call.
 DEFAULT_CALL_BUDGET = 35
 MAX_CALL_BUDGET = 35
 DEFAULT_MAX_JOBS = 40
@@ -156,8 +156,9 @@ def choose_rotating_terms(
     call_budget: int,
     runs_per_day: int,
     now: Optional[datetime] = None,
+    rotation_slot: Optional[int] = None,
 ) -> List[str]:
-    """Rotate across the complete live keyword set without storing a cursor in DB."""
+    """Rotate across live keywords; an explicit slot keeps scheduled runs distinct."""
     if not terms:
         return []
     if runs_per_day not in (1, 2):
@@ -167,7 +168,12 @@ def choose_rotating_terms(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     utc_now = now.astimezone(timezone.utc)
-    slot = min(runs_per_day - 1, utc_now.hour * runs_per_day // 24)
+    if rotation_slot is None:
+        slot = min(runs_per_day - 1, utc_now.hour * runs_per_day // 24)
+    elif 0 <= rotation_slot < runs_per_day:
+        slot = rotation_slot
+    else:
+        raise ValueError("rotation_slot must be within the runs_per_day range")
     rotation_index = utc_now.date().toordinal() * runs_per_day + slot
     start = (rotation_index * count) % len(terms)
     return [terms[(start + offset) % len(terms)] for offset in range(count)]
@@ -408,7 +414,12 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError("JOB_CEO_INGEST_SECRET (or INGEST_SECRET) is required to read TalentOS keywords and ingest jobs.")
 
     terms = fetch_effective_terms(base_url, ingest_secret, args.role_group)
-    selected_terms = choose_rotating_terms(terms, args.call_budget, args.runs_per_day)
+    selected_terms = choose_rotating_terms(
+        terms,
+        args.call_budget,
+        args.runs_per_day,
+        rotation_slot=args.rotation_slot,
+    )
     print(
         f"Adzuna -> Job CEO: {len(terms)} live terms available; "
         f"searching {len(selected_terms)} this run; freshness={args.days} day(s); "
@@ -546,6 +557,10 @@ def parse_args() -> argparse.Namespace:
         "--runs-per-day", type=int, choices=(1, 2), default=DEFAULT_RUNS_PER_DAY,
         help="Used only to rotate fairly through the live keyword list (1 or 2).",
     )
+    parser.add_argument(
+        "--rotation-slot", type=int, choices=(0, 1), default=None,
+        help="Explicit daily rotation slot for schedulers that run multiple times per day.",
+    )
     parser.add_argument("--max-jobs", type=int, default=DEFAULT_MAX_JOBS, help="Maximum postings resolved and staged per run.")
     parser.add_argument("--max-link-lookups", type=int, default=80, help="Maximum direct-source searches per run.")
     parser.add_argument("--dry-run", action="store_true", help="Search and resolve links, but do not POST to TalentOS.")
@@ -558,6 +573,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--max-jobs must be between 1 and 100")
     if not 1 <= args.max_link_lookups <= 200:
         parser.error("--max-link-lookups must be between 1 and 200")
+    if args.rotation_slot is not None and args.rotation_slot >= args.runs_per_day:
+        parser.error("--rotation-slot must be less than --runs-per-day")
     if not re.fullmatch(r"all|[A-Z]", args.role_group, re.IGNORECASE):
         parser.error("--role-group must be 'all' or a single letter group id")
     args.role_group = args.role_group.upper() if args.role_group.lower() != "all" else "all"

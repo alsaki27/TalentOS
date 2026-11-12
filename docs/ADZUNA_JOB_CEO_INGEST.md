@@ -34,17 +34,18 @@ execution, or as GitHub Actions secrets for CI. Also set
 Credentials are never part of source code or `.env.example` values.
 
 The collector allows at most 35 Adzuna requests per run and spaces requests to
-stay under the published 25-per-minute limit. The scheduled workflow runs once
-daily, for at most 35 requests/day and 1,085 in a 31-day month, before any
-manual runs or use of the same API credential elsewhere. One request is one
-keyword page, not one workflow run. Adzuna's published weekly/monthly limits
-still apply, so keep the credential dedicated to TalentOS and budget manual
-runs too.
+stay under the published 25-per-minute limit. With two scheduled runs, usage
+can reach 70 requests/day or 2,170 in a 31-day month, before manual runs or use
+of the same API credential elsewhere. One request is one keyword page, not one
+workflow run. Adzuna's account-specific weekly/monthly limits still apply, so
+check the account quota and budget manual runs too.
 
-The GitHub Actions workflow is scheduled once daily at 20:15 UTC (02:15 the
-following day in Bangladesh) and can also be started manually. Manual runs
-default to dry-run. A dry-run still uses Adzuna/search requests and consumes API
-quota, but it does not POST to TalentOS or create database rows.
+The GitHub Actions workflow is scheduled daily at 12:00 AM and 02:00 AM
+Bangladesh time (`Asia/Dhaka`) and can also be started manually. Scheduled runs
+use separate rotation slots so they search different portions of the keyword
+set. GitHub schedule events can still be delayed or dropped under load. Manual
+runs default to dry-run. A dry-run still uses Adzuna/search requests and
+consumes API quota, but it does not POST to TalentOS or create database rows.
 
 ## Local smoke command
 

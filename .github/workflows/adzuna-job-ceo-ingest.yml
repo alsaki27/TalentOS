@@ -1,11 +1,15 @@
 name: Adzuna → Job CEO ingest
 
 # Daily Adzuna discovery using TalentOS's effective Job CEO keyword set.
-# Scheduled at 23:00 UTC (05:00 Bangladesh time). Manual runs default to dry-run;
-# this still consumes Adzuna/search API calls but does not stage jobs.
+# Scheduled daily at 12:00 AM and 02:00 AM Bangladesh time. GitHub schedules
+# remain best-effort and can be delayed under load. Manual runs default to
+# dry-run; this still consumes Adzuna/search API calls but does not stage jobs.
 on:
   schedule:
-    - cron: "0 23 * * *"
+    - cron: "0 0 * * *"
+      timezone: "Asia/Dhaka"
+    - cron: "0 2 * * *"
+      timezone: "Asia/Dhaka"
   workflow_dispatch:
     inputs:
       role_group:
@@ -17,7 +21,7 @@ on:
         required: false
         default: "2"
       runs_per_day:
-        description: "Keyword rotation cadence (1 or 2 runs/day)."
+        description: "Keyword rotation slots per day (1 or 2)."
         required: false
         default: "1"
       dry_run:
@@ -55,10 +59,14 @@ jobs:
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           ROLE_GROUP: ${{ inputs.role_group || 'all' }}
           DAYS: ${{ inputs.days || '2' }}
-          RUNS_PER_DAY: ${{ inputs.runs_per_day || '1' }}
+          RUNS_PER_DAY: ${{ github.event_name == 'schedule' && '2' || inputs.runs_per_day || '1' }}
+          ROTATION_SLOT: ${{ github.event.schedule == '0 0 * * *' && '0' || github.event.schedule == '0 2 * * *' && '1' || '' }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           ARGS=(--role-group "$ROLE_GROUP" --days "$DAYS" --runs-per-day "$RUNS_PER_DAY" --call-budget 35)
+          if [ -n "$ROTATION_SLOT" ]; then
+            ARGS+=(--rotation-slot "$ROTATION_SLOT")
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             ARGS+=(--dry-run)
           fi
