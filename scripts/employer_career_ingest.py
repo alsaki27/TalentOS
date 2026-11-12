@@ -43,6 +43,7 @@ import requests
 from jazzhr_public_board import board_url_for, parse_board_listing
 from open_position_links import detail_matches_open_position, discover_open_position_links
 from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
+from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail as validate_successfactors_detail
 from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
 from talentbrew_public_detail import parse_public_detail as parse_talentbrew_public_detail
 from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
@@ -50,12 +51,14 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v21"
+ADAPTER_VERSION = "employer-career-ingest-v23"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
 MAX_SITEMAPS = 100
 MAX_JOB_URLS = 5000
+CONSECUTIVE_DETAIL_403_LIMIT = 10
+CONSECUTIVE_NO_JOB_DETAIL_LIMIT = 20
 TEAMTAILOR_PAGE_SIZE = 100
 MAX_BODY_BYTES = 8_000_000
 _robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
@@ -2243,6 +2246,43 @@ def _linked_ats_boards(html: str, current_url: str) -> list[tuple[str, tuple[str
     return [(url, platform) for platform, url in found.items()]
 
 
+def _successfactors_jobs(first_response: requests.Response, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Enumerate an explicit public All-Jobs board and verify every detail."""
+    board_url = first_response.url
+
+    def fetch_page(url: str) -> tuple[str, str]:
+        response = _request(url, timeout=15)
+        if response.status_code != 200 or response.url != url:
+            raise ScrapeFailure("SuccessFactors next page did not return HTTP 200 at its listed URL")
+        return response.text, response.url
+
+    listing = enumerate_go_pages(first_response.text, board_url, fetch_page, max_postings=MAX_JOB_URLS)
+    notes: list[str] = [] if listing.complete else [listing.reason]
+    if listing.declared_total is not None and listing.declared_total > MAX_JOB_URLS:
+        return [], False, notes
+
+    jobs: list[dict[str, Any]] = []
+    issues: Counter[str] = Counter()
+    for detail_url, card_title in listing.posting_titles:
+        try:
+            detail = _request(detail_url, timeout=15)
+            extracted = extract_postings(detail.text, detail.url, employer) if detail.status_code == 200 else []
+            validated = validate_successfactors_detail(
+                detail_url, detail.url, detail.status_code, card_title, extracted,
+            )
+            if not validated.complete or validated.job is None:
+                issues[validated.reason or "public detail did not validate"] += 1
+                continue
+            job = validated.job
+            job.setdefault("raw", {}).update({"ats": "successfactors", "board_url": board_url})
+            jobs.append(job)
+        except Exception as exc:
+            issues[f"public detail request failed: {type(exc).__name__}"] += 1
+    notes.extend(f"{count} SuccessFactors {reason}" for reason, count in sorted(issues.items()))
+    complete = listing.complete and not issues and listing.declared_total == len(jobs)
+    return jobs, complete, notes
+
+
 def _talentbrew_jobs(first_response: requests.Response, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
     """Validate a public TalentBrew listing and each same-host job detail."""
     first_url = first_response.url
@@ -2388,6 +2428,27 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
     if talentbrew_page and talentbrew_page.recognized:
         jobs, complete, notes = _talentbrew_jobs(response, employer)
         return jobs, "public_html_pagination:talentbrew-v1", complete, notes
+    if is_public_all_jobs_url(response.url):
+        jobs, complete, notes = _successfactors_jobs(response, employer)
+        return jobs, "public_html_pagination:successfactors-v1", complete, notes
+    successfactors_board = discover_all_jobs_link(response.text, response.url)
+    if successfactors_board:
+        board_response = _request(successfactors_board, timeout=15)
+        if board_response.status_code != 200:
+            return postings, "linked_public_html_pagination:successfactors-v1", False, [
+                f"SuccessFactors All-Jobs board returned HTTP {board_response.status_code}"
+            ]
+        jobs, complete, notes = _successfactors_jobs(board_response, employer)
+        combined = {str(job.get("source_url")): job for job in jobs}
+        extra_homepage_jobs = 0
+        for job in postings:
+            if str(job.get("source_url")) not in combined:
+                combined[str(job.get("source_url"))] = job
+                extra_homepage_jobs += 1
+        if extra_homepage_jobs:
+            complete = False
+            notes.append(f"{extra_homepage_jobs} homepage JobPosting records were not in the SuccessFactors All-Jobs listing")
+        return list(combined.values()), "linked_public_html_pagination:successfactors-v1", complete, notes
     if not postings and is_job_detail_url(response.url):
         heuristic = extract_html_job(response.text, response.url, employer)
         if heuristic and len(str(heuristic.get("description_text") or "").strip()) > 200:
@@ -2534,14 +2595,19 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                 open_position_titles[candidate.url] = candidate.title
             if candidate.url not in urls and len(urls) < 250:
                 urls.append(candidate.url)
-    for detail_url in urls:
+    consecutive_detail_403 = 0
+    consecutive_no_job_detail = 0
+    for detail_index, detail_url in enumerate(urls):
         if _application_form_target(detail_url):
+            consecutive_detail_403 = 0
+            consecutive_no_job_detail = 0
             complete = False
             notes.append(f"application form candidate skipped: {detail_url}")
             continue
         try:
             detail = _request(detail_url, timeout=12)
             if detail.status_code == 200:
+                consecutive_detail_403 = 0
                 new = extract_postings(detail.text, detail.url, employer)
                 if not new and is_job_detail_url(detail.url):
                     heuristic = extract_html_job(detail.text, detail.url, employer)
@@ -2558,6 +2624,16 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                 if not new:
                     complete = False
                     notes.append(f"detail page had no extractable job posting: {detail_url}")
+                    consecutive_no_job_detail += 1
+                    if consecutive_no_job_detail >= CONSECUTIVE_NO_JOB_DETAIL_LIMIT:
+                        unvisited = len(urls) - detail_index - 1
+                        notes.append(
+                            f"stopped after {CONSECUTIVE_NO_JOB_DETAIL_LIMIT} consecutive detail pages without "
+                            f"an extractable job posting; {unvisited} candidate URLs were not visited"
+                        )
+                        break
+                else:
+                    consecutive_no_job_detail = 0
                 for job in new:
                     key = job["source_url"].split("#", 1)[0]
                     if key not in seen_posting_urls:
@@ -2569,8 +2645,19 @@ def _crawl_generic(start_url: str, employer: str) -> tuple[list[dict[str, Any]],
                             urls.append(candidate)
             else:
                 complete = False
+                consecutive_no_job_detail = 0
                 notes.append(f"detail page returned HTTP {detail.status_code}: {detail_url}")
+                consecutive_detail_403 = consecutive_detail_403 + 1 if detail.status_code == 403 else 0
+                if consecutive_detail_403 >= CONSECUTIVE_DETAIL_403_LIMIT:
+                    unvisited = len(urls) - detail_index - 1
+                    notes.append(
+                        f"stopped after {CONSECUTIVE_DETAIL_403_LIMIT} consecutive detail HTTP 403 responses; "
+                        f"{unvisited} candidate URLs were not visited"
+                    )
+                    break
         except Exception as exc:
+            consecutive_detail_403 = 0
+            consecutive_no_job_detail = 0
             complete = False; notes.append(f"detail page failed: {detail_url} ({str(exc)[:100]})")
             continue
     if postings:

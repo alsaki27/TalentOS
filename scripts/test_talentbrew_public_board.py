@@ -149,6 +149,28 @@ class TalentBrewBoardTests(unittest.TestCase):
         self.assertIsNone(parsed.issue)
         self.assertEqual(dict(parsed.posting_titles)[parsed.posting_urls[0]], "Role 1001")
 
+    def test_card_title_span_ignores_brand_category_and_location(self):
+        html = page(1, 1, 1, [1001]).replace(
+            "<h2>Role 1001</h2>",
+            '<span class="job-brand"><span>Example Brand</span></span>'
+            '<span class="job-title"><em>Role 1001</em></span>'
+            '<span class="job-category">Production</span>'
+            '<span class="job-location">Beatrice, NE</span>',
+        )
+        parsed = parse_search_page(html, BASE)
+        self.assertIsNone(parsed.issue)
+        self.assertEqual(dict(parsed.posting_titles)[parsed.posting_urls[0]], "Role 1001")
+
+    def test_conflicting_card_title_spans_stay_partial(self):
+        html = page(1, 1, 1, [1001]).replace(
+            "<h2>Role 1001</h2>",
+            '<span class="job-title">Role 1001</span>'
+            '<span class="job-title">Different Role</span>',
+        )
+        parsed = parse_search_page(html, BASE)
+        self.assertIn("missing or ambiguous job card titles", parsed.issue)
+        self.assertEqual(parsed.posting_titles, ())
+
     def test_missing_or_ambiguous_card_title_is_partial(self):
         for replacement in (
             '<span class="job-location">Boston, MA</span>',

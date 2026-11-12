@@ -24,6 +24,7 @@ _JUST_JOBS = re.compile(r"^\s*(\d[\d,]*)\s+jobs?\s*$", re.I)
 _JOB_PATH = re.compile(r"(?:^|/)job/[^/]+/[^/]+/\d+/\d+/?$", re.I)
 _NEXT_PAGE = re.compile(r"(?:[?&])p=(\d+)(?:[&#]|$)", re.I)
 _SEARCH_PATH = re.compile(r"(?:^|/)search-jobs(?:/|$)", re.I)
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,9 @@ class _SearchParser(HTMLParser):
         self.card_url: str | None = None
         self.card_depth = 0
         self.card_direct_parts: list[str] = []
-        self.card_heading_tag: str | None = None
-        self.card_heading_parts: list[str] = []
-        self.card_headings: list[str] = []
+        self.card_title_depth = 0
+        self.card_title_parts: list[str] = []
+        self.card_titles: list[str] = []
         self.headings: list[str] = []
         self.heading_tag: str | None = None
         self.heading_parts: list[str] = []
@@ -76,12 +77,15 @@ class _SearchParser(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = dict(attrs)
-        if self.card_url is not None and tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+        if self.card_url is not None and tag not in _VOID_TAGS:
             self.card_depth += 1
-        if tag in ("h1", "h2", "h3") and self.card_url is not None and self.card_heading_tag is None:
-            self.card_heading_tag = tag
-            self.card_heading_parts = []
+            if self.card_title_depth:
+                self.card_title_depth += 1
         classes = set((attr.get("class") or "").lower().split())
+        if (self.card_url is not None and not self.card_title_depth
+                and (tag in ("h1", "h2", "h3") or (tag == "span" and "job-title" in classes))):
+            self.card_title_depth = 1
+            self.card_title_parts = []
         asset = ((attr.get("src") or "") + " " + (attr.get("href") or "")).lower()
         if "tbcdn.talentbrew.com" in asset or "cdn.radancy.eu" in asset:
             self.saw_talentbrew_asset = True
@@ -130,28 +134,29 @@ class _SearchParser(HTMLParser):
                 self.card_url = posting_url
                 self.card_depth = 0
                 self.card_direct_parts = []
-                self.card_heading_tag = None
-                self.card_heading_parts = []
-                self.card_headings = []
+                self.card_title_depth = 0
+                self.card_title_parts = []
+                self.card_titles = []
             else:
                 self.invalid_cards += 1
         elif attr.get("data-job-id"):
             self.invalid_cards += 1
 
     def handle_endtag(self, tag: str) -> None:
-        if self.card_heading_tag == tag:
-            self.card_headings.append(" ".join(self.card_heading_parts).strip())
-            self.card_heading_tag = None
-            self.card_heading_parts = []
+        if self.card_title_depth:
+            self.card_title_depth -= 1
+            if not self.card_title_depth:
+                self.card_titles.append(" ".join(self.card_title_parts).strip())
+                self.card_title_parts = []
         if self.card_url is not None:
             if tag == "a" and self.card_depth == 0:
-                headings = list(dict.fromkeys(" ".join(value.split()) for value in self.card_headings if value.strip()))
+                headings = list(dict.fromkeys(" ".join(value.split()) for value in self.card_titles if value.strip()))
                 title = headings[0] if len(headings) == 1 else " ".join(" ".join(self.card_direct_parts).split()) if not headings else ""
                 if title:
                     self.posting_titles.setdefault(self.card_url, title)
                 self.card_url = None
                 self.card_direct_parts = []
-                self.card_headings = []
+                self.card_titles = []
             elif self.card_depth:
                 self.card_depth -= 1
         if self.heading_tag == tag:
@@ -165,8 +170,8 @@ class _SearchParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self.card_url is not None:
-            if self.card_heading_tag is not None:
-                self.card_heading_parts.append(data)
+            if self.card_title_depth:
+                self.card_title_parts.append(data)
             elif self.card_depth == 0 and data.strip():
                 self.card_direct_parts.append(data)
         if self.heading_tag and data.strip():
