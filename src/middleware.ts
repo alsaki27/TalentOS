@@ -85,6 +85,7 @@ function isMcpApiPath(pathname: string) {
 // their handlers. Enrollment/revocation remain behind staff session auth.
 function isBrowserWorkerPreparePath(pathname: string) {
   return pathname === "/api/browser-worker/v2/claims" ||
+    pathname === "/api/browser-worker/v2/pilot/device" ||
     /^\/api\/browser-worker\/v2\/runs\/[a-f0-9-]+\/(artifact|facts|result)$/.test(pathname);
 }
 

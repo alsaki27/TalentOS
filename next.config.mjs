@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async headers() {
+    return [{
+      source: "/browser-worker/pilot",
+      headers: [{ key: "X-Frame-Options", value: "DENY" }],
+    }];
+  },
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**" },
