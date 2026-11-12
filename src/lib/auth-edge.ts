@@ -112,6 +112,9 @@ export function canAccessPath(role: string | null | undefined, pathname: string)
   // the route handler ever ran. /team itself and /api/users/<id> (role
   // edits, deactivation) are the actual admin-only team-management surface.
   const isTeamArea = pathname === "/team" || pathname.startsWith("/team/") || pathname.startsWith("/api/users/");
+  const isApiKeyArea =
+    pathname === "/settings/api-keys" || pathname.startsWith("/settings/api-keys/") ||
+    pathname === "/api/api-keys" || pathname.startsWith("/api/api-keys/");
   const isJobsArea = pathname === "/jobs" || pathname.startsWith("/jobs/") || pathname === "/api/jobs" || pathname.startsWith("/api/jobs/");
   const isCompaniesArea =
     pathname === "/companies" ||
@@ -120,6 +123,7 @@ export function canAccessPath(role: string | null | undefined, pathname: string)
     pathname.startsWith("/api/companies/");
 
   if (isTeamArea) return normalizedRole === "admin";
+  if (isApiKeyArea) return normalizedRole === "admin";
   if (normalizedRole === "application_engineer" && isCompaniesArea) return false;
   return true;
 }
