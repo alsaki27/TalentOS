@@ -22,6 +22,11 @@ export function assertBrowserWorkerPrepareEnabled(): PrepareScope {
   }
   throw new BrowserWorkerPrepareError(404, "Browser worker prepare integration is disabled");
 }
+function productionPilotScope() {
+  const scope = assertBrowserWorkerPrepareEnabled();
+  if (scope.mode !== "production-pilot") throw new BrowserWorkerPrepareError(404, "Production pilot is disabled");
+  return scope;
+}
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new BrowserWorkerPrepareError(400, "Expected a JSON object");
   return value as Record<string, unknown>;
@@ -114,6 +119,30 @@ export async function enrollPrepareApplication(input: unknown, actorId: string) 
   const scope = assertBrowserWorkerPrepareEnabled();
   const body = object(input);
   allowedKeys(body, ["applicationId", "candidateId", "exportId", "profileRef", "profileVersion"]);
+  const credential = `tbw_${randomBytes(32).toString("hex")}`;
+  const enrollment = await insertPrepareEnrollment(scope, body, actorId, hash(credential), null);
+  return { ...enrollment, credential };
+}
+
+export async function enrollPilotDevice(input: unknown, actorId: string) {
+  const scope = productionPilotScope();
+  const body = object(input);
+  allowedKeys(body, ["applicationId", "candidateId", "exportId", "profileVersion", "credentialHash", "expiresAt", "pairingCode"]);
+  if (typeof body.credentialHash !== "string" || !/^[a-f0-9]{64}$/.test(body.credentialHash) ||
+    body.pairingCode !== body.credentialHash.slice(0, 8).toUpperCase()) {
+    throw new BrowserWorkerPrepareError(400, "Invalid device pairing code");
+  }
+  const now = Date.now();
+  if (typeof body.expiresAt !== "number" || !Number.isSafeInteger(body.expiresAt) ||
+    body.expiresAt <= now || body.expiresAt > now + 10 * 60 * 1000) {
+    throw new BrowserWorkerPrepareError(400, "Device pairing link expired or invalid");
+  }
+  // The random bearer stays on the worker PC. Chrome supplies its SHA-256 only.
+  return insertPrepareEnrollment(scope, { ...body, profileRef: body.candidateId }, actorId, body.credentialHash,
+    new Date(body.expiresAt).toISOString());
+}
+
+async function insertPrepareEnrollment(scope: PrepareScope, body: Record<string, unknown>, actorId: string, credentialHash: string, expiresAt: string | null) {
   const applicationId = id(body.applicationId, "applicationId", true);
   if (scope.mode === "production-pilot" && applicationId.toLowerCase() !== scope.applicationId) {
     throw new BrowserWorkerPrepareError(403, "Application is outside the production pilot scope");
@@ -138,7 +167,6 @@ export async function enrollPrepareApplication(input: unknown, actorId: string) 
   }
   const { buffer } = await downloadResumeFile(source.storage_provider, source.file_path, source.storage_url);
   validatePreparePdf(buffer, source.content_sha256, source.byte_length);
-  const credential = `tbw_${randomBytes(32).toString("hex")}`;
   // Recheck identity/readiness after storage IO, and lock joined source rows
   // until the verified immutable snapshot insert has completed atomically.
   const enrollment = await queryOne<{ id: string; expires_at: string }>(`WITH eligible AS (
@@ -148,13 +176,15 @@ export async function enrollPrepareApplication(input: unknown, actorId: string) 
     ) INSERT INTO browser_worker_prepare_enrollments
       (application_id,candidate_id,job_id,export_id,resume_version_id,profile_ref,profile_version,
        job_version,job_snapshot,resume_snapshot,job_url,content_sha256,byte_length,artifact_bytes,credential_hash,created_by,expires_at)
-      SELECT $1,$2,$8,$3,$6,$9,$10,$11,$7::jsonb,$16::jsonb,$12,$4,$5,decode($13,'base64'),$14,$15,now() + interval '24 hours'
-      FROM eligible ON CONFLICT DO NOTHING RETURNING id, expires_at`,
+      SELECT $1,$2,$8,$3,$6,$9,$10,$11,$7::jsonb,$16::jsonb,$12,$4,$5,decode($13,'base64'),$14,$15,
+        COALESCE($17::timestamptz, now() + interval '24 hours')
+      FROM eligible WHERE $17::timestamptz IS NULL OR $17::timestamptz > clock_timestamp()
+      ON CONFLICT DO NOTHING RETURNING id, expires_at`,
     [applicationId, candidateId, exportId, source.content_sha256, source.byte_length, source.resume_version_id,
       JSON.stringify(source.job_snapshot), source.job_id, profileRef, profileVersion, hash(JSON.stringify(source.job_snapshot)),
-      source.job_url, Buffer.from(buffer).toString("base64"), hash(credential), actorId, JSON.stringify(source.resume_snapshot)]);
+      source.job_url, Buffer.from(buffer).toString("base64"), credentialHash, actorId, JSON.stringify(source.resume_snapshot), expiresAt]);
   if (!enrollment) throw new BrowserWorkerPrepareError(409, "Source changed or candidate already enrolled; revoke the existing enrollment before replacing it");
-  return { enrollmentId: enrollment.id, credential, expiresAt: enrollment.expires_at };
+  return { enrollmentId: enrollment.id, expiresAt: enrollment.expires_at };
 }
 
 export async function revokePrepareEnrollment(enrollmentId: string, actorId: string) {
@@ -166,11 +196,39 @@ export async function revokePrepareEnrollment(enrollmentId: string, actorId: str
   return { revoked: Boolean(row) };
 }
 
-async function authenticate(request: Request): Promise<{ enrollment: Enrollment; scope: PrepareScope }> {
-  const scope = assertBrowserWorkerPrepareEnabled();
+function workerCredentialHash(request: Request): string {
   const auth = request.headers.get("authorization") || "";
   if (!/^Bearer tbw_[a-f0-9]{64}$/.test(auth)) throw new BrowserWorkerPrepareError(401, "Valid scoped worker credential required");
-  const params = [hash(auth.slice(7))];
+  return hash(auth.slice(7));
+}
+
+export async function getPilotDevice(request: Request) {
+  const { applicationId } = productionPilotScope();
+  const device = await queryOne<{ enrollmentId: string; applicationId: string; queueState: Record<string, unknown> }>(
+    `SELECT e.id AS "enrollmentId", a.id AS "applicationId", jsonb_build_object(
+      'stage', COALESCE(a.application_stage, a.ae_stage), 'status', a.status,
+      'applicationStage', a.application_stage, 'aeStage', a.ae_stage, 'reviewStatus', a.review_status,
+      'appliedAt', a.applied_at, 'aeAppliedAt', a.ae_applied_at,
+      'stageChangedAt', a.application_stage_changed_at, 'aeStageChangedAt', a.ae_stage_updated_at
+    ) AS "queueState" FROM browser_worker_prepare_enrollments e JOIN applications a ON a.id = e.application_id
+      WHERE e.credential_hash = $1 AND e.application_id = $2 AND e.revoked_at IS NULL AND e.expires_at > now()`,
+    [workerCredentialHash(request), applicationId]);
+  if (!device) throw new BrowserWorkerPrepareError(401, "Worker credential is expired, revoked or invalid");
+  return device;
+}
+
+export async function revokePilotDevice(request: Request) {
+  const { applicationId } = productionPilotScope();
+  // Let this exact key clean up its own record even after expiry or a lost reply.
+  const row = await queryOne(`UPDATE browser_worker_prepare_enrollments SET revoked_at = COALESCE(revoked_at, now())
+    WHERE credential_hash = $1 AND application_id = $2 RETURNING id`, [workerCredentialHash(request), applicationId]);
+  if (!row) throw new BrowserWorkerPrepareError(401, "Worker credential is expired, revoked or invalid");
+  return { revoked: true };
+}
+
+async function authenticate(request: Request): Promise<{ enrollment: Enrollment; scope: PrepareScope }> {
+  const scope = assertBrowserWorkerPrepareEnabled();
+  const params = [workerCredentialHash(request)];
   if (scope.mode === "production-pilot") params.push(scope.applicationId);
   const enrollment = await queryOne<Enrollment>(`SELECT id, application_id, candidate_id, job_id, export_id,
     resume_version_id, profile_ref, profile_version, job_version, job_snapshot, job_url, content_sha256, byte_length
