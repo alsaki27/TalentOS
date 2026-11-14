@@ -109,12 +109,22 @@ class WorkdayDetailIntegrationTests(unittest.TestCase):
         self.assertEqual(result["method"], "redirected_public_cxs_listing_and_detail:workday-v2")
         self.assertFalse(result["jobs"][0]["raw"]["workday_detail_complete"])
 
-    def test_listing_without_title_is_partial(self):
-        with patch.object(scraper, "_request_post", return_value=listing([{"externalPath": PATH}])):
+    def test_detail_recovers_missing_listing_title(self):
+        with patch.object(scraper, "_request_post", return_value=listing([{"externalPath": PATH}])), patch.object(scraper, "_request", return_value=detail()):
+            result = scraper.scrape_source(source(BOARD))
+        self.assertEqual(result["status"], "scraped")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["job_count"], 1)
+        self.assertEqual(result["jobs"][0]["title"], "New Grad RN")
+        self.assertEqual(result["jobs"][0]["source_url"], CANONICAL)
+
+    def test_unrecoverable_missing_listing_title_remains_partial(self):
+        with patch.object(scraper, "_request_post", return_value=listing([{"externalPath": PATH}])), patch.object(scraper, "_request", return_value=detail(403)):
             result = scraper.scrape_source(source(BOARD))
         self.assertEqual(result["status"], "partial")
+        self.assertFalse(result["complete"])
         self.assertEqual(result["job_count"], 0)
-        self.assertIn("omitted titles", result["notes"][0])
+        self.assertTrue(any("omitted titles" in note for note in result["notes"]))
 
     def test_duplicate_job_path_is_partial_and_not_refetched(self):
         with patch.object(scraper, "_request_post", return_value=two_duplicate_rows()), patch.object(scraper, "_request", return_value=detail()) as fetch:

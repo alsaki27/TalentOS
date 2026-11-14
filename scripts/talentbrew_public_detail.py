@@ -55,6 +55,12 @@ def _job_url_parts(url: str) -> tuple[str, str, str, str] | None:
     return parsed.hostname.lower(), match.group(1), match.group(2), canonical
 
 
+def public_job_identity(url: str) -> tuple[str, str, str] | None:
+    """Return the validated host, organization ID, and job ID for a public URL."""
+    parts = _job_url_parts(url)
+    return parts[:3] if parts is not None else None
+
+
 class _DetailParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)

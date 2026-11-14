@@ -45,13 +45,16 @@ from open_position_links import detail_matches_open_position, discover_open_posi
 from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
 from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail_html as validate_successfactors_detail
 from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
-from talentbrew_public_detail import parse_public_detail as parse_talentbrew_public_detail
+from talentbrew_public_detail import (
+    parse_public_detail as parse_talentbrew_public_detail,
+    public_job_identity as _talentbrew_public_job_identity,
+)
 from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
 from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v23"
+ADAPTER_VERSION = "employer-career-ingest-v25"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -94,6 +97,13 @@ def _application_form_target(url: str) -> bool:
     if not segments:
         return False
     host = (parsed.hostname or "").casefold()
+    # Google's official public job search lives under /applications/jobs/results.
+    # The segment "applications" is part of this listing route, not a candidate
+    # submission form, so allow its board and job-detail pages.
+    if host in {"google.com", "www.google.com"} and segments[:5] == [
+        "about", "careers", "applications", "jobs", "results",
+    ]:
+        return False
     form_segments = {
         "apply", "apply-now", "apply-online", "application", "applications",
         "application-form", "job-application", "start-application",
@@ -474,10 +484,19 @@ def extract_postings(html: str, fallback_url: str, employer: str) -> list[dict[s
     found: list[dict[str, Any]] = []
     seen: set[str] = set()
     for block in JSON_LD_RE.findall(html):
+        raw_block = block.strip()
         try:
-            root = json.loads(unescape(block.strip()))
+            # JSON-LD script elements are raw text in HTML. Decoding entities
+            # before parsing can turn &quot; inside a JSON string into an
+            # unescaped quote, or &#13; into a literal control character.
+            root = json.loads(raw_block)
         except (json.JSONDecodeError, ValueError):
-            continue
+            # Retain compatibility with pages that incorrectly entity-encode
+            # the JSON document itself.
+            try:
+                root = json.loads(unescape(raw_block))
+            except (json.JSONDecodeError, ValueError):
+                continue
         for node in _nodes(root):
             typ = node.get("@type", [])
             types = typ if isinstance(typ, list) else [typ]
@@ -1687,9 +1706,12 @@ def _workday_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, A
                 raise ScrapeFailure(f"Workday ended at {fetched_count} of {expected_total} postings")
             return finish()
         for job in rows:
-            if not isinstance(job, dict) or not _text(job.get("title")):
+            if not isinstance(job, dict):
                 missing_titles += 1
                 continue
+            # A missing listing title is not enough to discard the posting:
+            # the same-host CXS detail is already validated against its
+            # externalPath and can safely supply the title.
             title = _text(job.get("title")) or ""
             external = str(job.get("bulletFields", [""])[0] if job.get("bulletFields") else "")
             external_path = job.get("externalPath")
@@ -1713,10 +1735,14 @@ def _workday_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, A
                     source_url = detail.source_url
             except (ValueError, requests.RequestException, ScrapeFailure) as exc:
                 detail_error = str(exc) or type(exc).__name__
+            resolved_title = detail.title if detail and detail.title else title
+            if not resolved_title:
+                missing_titles += 1
+                continue
             if detail_error:
                 missing_details += 1
             output.append({
-                "title": detail.title if detail and detail.title else title,
+                "title": resolved_title,
                 "company": employer,
                 "location": (detail.location if detail else None) or _text(job.get("locationsText")),
                 "source_url": source_url,
@@ -2317,20 +2343,22 @@ def _talentbrew_jobs(first_response: requests.Response, employer: str) -> tuple[
         if _application_form_target(detail_url):
             issues["application form candidate skipped"] += 1
             continue
+        listed_identity = _talentbrew_public_job_identity(detail_url)
+        if listed_identity is None:
+            issues["listed TalentBrew URL was not a public HTTPS job detail"] += 1
+            continue
         try:
             detail = _request(detail_url, timeout=15)
             parsed_detail = urllib.parse.urlparse(detail.url)
             if detail.status_code != 200 or parsed_detail.scheme != "https" or parsed_detail.hostname != expected_host:
                 issues["job detail did not return HTTP 200 on the listing host"] += 1
                 continue
-            expected_id = urllib.parse.urlparse(detail_url).path.rstrip("/").split("/")[-1]
-            if parsed_detail.path.rstrip("/").split("/")[-1] != expected_id:
+            if _talentbrew_public_job_identity(detail.url) != listed_identity:
                 issues["job detail redirected away from its listed ID"] += 1
                 continue
             extracted = extract_postings(detail.text, detail.url, employer)
             matches = [job for job in extracted
-                       if urllib.parse.urlparse(str(job.get("source_url") or "")).hostname == expected_host
-                       and urllib.parse.urlparse(str(job.get("source_url") or "")).path.rstrip("/").split("/")[-1] == expected_id
+                       if _talentbrew_public_job_identity(str(job.get("source_url") or "")) == listed_identity
                        and not _application_form_target(str(job.get("source_url") or ""))]
             card_title = listing_titles.get(detail_url)
             structured = matches[0] if len(matches) == 1 else None

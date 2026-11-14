@@ -28,6 +28,18 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(jobs[0]["source_url"], "https://example.com/jobs/123")
         self.assertEqual(len(jobs[0]["external_job_id"]), 32)
 
+    def test_parses_raw_json_ld_before_decoding_html_entities(self):
+        posting = {
+            "@type": "JobPosting",
+            "title": "Cashier Team Member",
+            "url": "https://jobs.example.com/job/store/cashier/123/456",
+            "description": "<p>Maintain &quot;high quality&quot; service and accurate records.</p>",
+        }
+        html = '<script type="application/ld+json">' + json.dumps(posting) + "</script>"
+        jobs = extract_postings(html, posting["url"], "Fallback")
+        self.assertEqual(len(jobs), 1)
+        self.assertIn('"high quality"', jobs[0]["description_text"])
+
     def test_extracts_jobposting_microdata_with_nested_fields(self):
         html = '''<article itemscope itemtype="https://schema.org/JobPosting">
           <h1 itemprop="title">Senior GIS Engineer</h1>
