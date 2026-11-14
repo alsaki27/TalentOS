@@ -52,9 +52,9 @@ from talentbrew_public_detail import (
 from workday_public_detail import fallback_source_url, parse_public_detail, public_detail_url
 from workable_public_job_url import job_page_from_application_url
 
-UA = "TalentOS-JobIngest/1.0 (+https://talent.skarion.com)"
+UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v25"
+ADAPTER_VERSION = "employer-career-ingest-v26"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)

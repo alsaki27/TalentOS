@@ -1100,6 +1100,19 @@ class CareerScraperTests(unittest.TestCase):
         self.assertIsNotNone(rules)
         self.assertTrue(rules.can_fetch(scraper.UA, root + "/careers"))
 
+    def test_robots_wildcard_is_not_overridden_by_bing_group_substring(self):
+        root = "https://robots-bing-match.example.com"
+        rules = scraper.urllib.robotparser.RobotFileParser()
+        rules.set_url(root + "/robots.txt")
+        rules.parse([
+            "User-agent: *",
+            "Disallow: /",
+            "User-agent: bing",
+            "Allow: /",
+        ])
+        self.assertNotIn("bing", scraper.UA.casefold())
+        self.assertFalse(rules.can_fetch(scraper.UA, root + "/careers"))
+
     def test_public_https_url_retries_transient_dns_failure(self):
         resolved = [(None, None, None, None, ("93.184.216.34", 443))]
         with patch.object(scraper.socket, "getaddrinfo", side_effect=[OSError(11001, "temporary DNS failure"), resolved]) as lookup, patch.object(scraper.time, "sleep"):
