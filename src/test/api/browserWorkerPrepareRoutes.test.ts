@@ -73,6 +73,7 @@ describe("production pilot device pairing", () => {
     vi.stubEnv("BROWSER_WORKER_PREPARE_ENABLED", "true");
     vi.stubEnv("BROWSER_WORKER_ENVIRONMENT", "production-pilot");
     vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_APPLICATION_ID", applicationId);
+    vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_LINKEDIN_ENABLED", undefined);
     vi.mocked(requireCurrentUser).mockResolvedValue({ response: null, context: {
       user: { id: operatorId, email: null },
       profile: { user_id: operatorId, email: null, display_name: "Test Manager", role: "manager", is_active: true },
@@ -135,7 +136,10 @@ describe("production pilot device pairing", () => {
     await expect(response.json()).resolves.toEqual(snapshot);
     const revocation = await revokeDevice(deviceRequest(`Bearer ${token}`));
     await expect(revocation.json()).resolves.toEqual({ revoked: true });
-    for (const [, params] of vi.mocked(queryOne).mock.calls) expect(params).toEqual([credentialHash, applicationId]);
+    const calls = vi.mocked(queryOne).mock.calls;
+    expect(calls[0][1]).toEqual([credentialHash, applicationId, null]);
+    expect(calls[1][1]).toEqual([credentialHash, applicationId, null]);
+    expect(calls[2][1]).toEqual([credentialHash, applicationId, sha(`talentos-prepare-linkedin-v1:${credentialHash}`)]);
     expect(vi.mocked(queryOne).mock.calls[2][0]).toMatch(/^UPDATE browser_worker_prepare_enrollments/);
   });
 
