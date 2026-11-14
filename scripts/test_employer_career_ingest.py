@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+import urllib.parse
 from unittest.mock import patch
 
 import employer_career_ingest as scraper
@@ -460,6 +461,175 @@ class CareerScraperTests(unittest.TestCase):
             self.assertEqual(result["jobs"], [])
             self.assertIn("NEOGOV", result["error"])
             request.assert_not_called()
+
+    def test_usajobs_requires_registered_api_configuration_before_any_request(self):
+        url = "https://www.usajobs.gov/Search/Results?a=agency"
+        source = {
+            "url": url,
+            "normalized_url": url,
+            "source_urls": [url],
+            "evidence_urls": [],
+            "employers": ["Example Agency"],
+            "employer_keys": ["company_id:10"],
+        }
+        with patch.dict("os.environ", {
+            "USAJOBS_API_KEY": "",
+            "USAJOBS_API_EMAIL": "",
+            "TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON": "",
+        }), patch.object(scraper, "_request", side_effect=AssertionError("missing API config must not request")) as request:
+            result = scraper.scrape_source(source)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["method"], "policy_hold")
+        self.assertIn("registered API key", result["error"])
+        request.assert_not_called()
+
+    def test_usajobs_search_api_paginates_with_exact_org_mapping_and_auth_headers(self):
+        url = "https://www.usajobs.gov/Search/Results?a=agency"
+        self.assertEqual(scraper._platform(url), ("usajobs", "www.usajobs.gov"))
+        long_summary = "Manage and maintain federal engineering systems, coordinate technical reviews, document work, and support a national operations team. " * 2
+
+        def response(posting_id: str, title: str) -> SimpleNamespace:
+            item = {
+                "MatchedObjectId": posting_id,
+                "MatchedObjectDescriptor": {
+                    "PositionID": posting_id,
+                    "PositionTitle": title,
+                    "PositionURI": f"https://www.usajobs.gov/job/{posting_id}/",
+                    "OrganizationName": "Example Federal Agency",
+                    "DepartmentName": "Example Department",
+                    "PositionLocation": [{"LocationName": "Washington, DC"}],
+                    "PositionFormattedDescription": [],
+                    "UserArea": {"Details": {"JobSummary": long_summary}},
+                },
+            }
+            payload = {
+                "SearchResult": {
+                    "SearchResultCount": 1,
+                    "SearchResultCountAll": 2,
+                    "SearchResultItems": [item],
+                },
+                "UserArea": {"NumberOfPages": 2},
+            }
+            return SimpleNamespace(status_code=200, json=lambda: payload)
+
+        source = {
+            "url": url,
+            "normalized_url": url,
+            "source_urls": [url],
+            "evidence_urls": [],
+            "employers": ["Example Agency"],
+            "employer_keys": ["company_id:10"],
+        }
+        with patch.dict("os.environ", {
+            "USAJOBS_API_KEY": "test-api-key",
+            "USAJOBS_API_EMAIL": "jobs@example.test",
+            "TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON": json.dumps({"www.usajobs.gov": "EXAMPLE"}),
+        }), patch.object(scraper, "_request", side_effect=[response("R1", "Engineer"), response("R2", "Architect")]) as request:
+            result = scraper.scrape_source(source)
+
+        self.assertEqual(result["status"], "scraped")
+        self.assertEqual(result["method"], "official_search_api:usajobs-v1")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["job_count"], 2)
+        self.assertEqual({job["external_job_id"] for job in result["jobs"]}, {"R1", "R2"})
+        self.assertEqual(result["jobs"][0]["company"], "Example Federal Agency")
+        self.assertEqual(result["jobs"][0]["location"], "Washington, DC")
+        self.assertEqual(result["jobs"][0]["raw"]["source_provider"], "USAJOBS")
+        self.assertEqual(request.call_count, 2)
+        for call, expected_page in zip(request.call_args_list, ("1", "2")):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(call.args[0]).query)
+            self.assertEqual(query["Organization"], ["EXAMPLE"])
+            self.assertEqual(query["Fields"], ["Full"])
+            self.assertEqual(query["Page"], [expected_page])
+            self.assertEqual(query["ResultsPerPage"], ["500"])
+            self.assertEqual(call.kwargs["headers"]["Authorization-Key"], "test-api-key")
+            self.assertEqual(call.kwargs["headers"]["User-Agent"], "jobs@example.test")
+            self.assertEqual(call.kwargs["allowed_hosts"], {"data.usajobs.gov"})
+
+    def test_request_checks_robots_for_the_custom_api_user_agent(self):
+        seen_user_agents = []
+
+        class Rules:
+            def can_fetch(self, user_agent: str, url: str) -> bool:
+                seen_user_agents.append(user_agent)
+                return user_agent == "jobs@example.test"
+
+            def crawl_delay(self, user_agent: str) -> int:
+                return 0
+
+        class RawBody:
+            def read(self, size: int, *, decode_content: bool = True) -> bytes:
+                return b"{}"
+
+        response = SimpleNamespace(
+            status_code=200,
+            headers={},
+            raw=RawBody(),
+            is_redirect=False,
+            is_permanent_redirect=False,
+            close=lambda: None,
+        )
+
+        class Session:
+            request_headers: dict[str, str] = {}
+
+            def get(self, url: str, **kwargs: object) -> SimpleNamespace:
+                self.request_headers = kwargs["headers"]  # type: ignore[assignment]
+                return response
+
+        session = Session()
+        url = "https://data.usajobs.gov/api/Search"
+        with patch.object(scraper, "_robots_parser", return_value=Rules()), \
+             patch.object(scraper, "_public_https_url", side_effect=lambda value: urllib.parse.urlparse(value)), \
+             patch.object(scraper.time, "sleep"), patch.object(scraper, "_shared_host_rate_dir", None), \
+             patch.dict(scraper._last_host_request, {}, clear=True):
+            fetched = scraper._request(url, headers={"User-Agent": "jobs@example.test"}, session=session)
+        self.assertEqual(seen_user_agents, ["jobs@example.test"])
+        self.assertEqual(session.request_headers["User-Agent"], "jobs@example.test")
+        self.assertEqual(fetched._content, b"{}")
+
+    def test_request_rejects_off_host_redirect_before_resending_api_credentials(self):
+        seen_user_agents = []
+
+        class Rules:
+            def can_fetch(self, user_agent: str, url: str) -> bool:
+                seen_user_agents.append(user_agent)
+                return True
+
+            def crawl_delay(self, user_agent: str) -> int:
+                return 0
+
+        response = SimpleNamespace(
+            status_code=302,
+            headers={"Location": "https://outside.example/collect"},
+            is_redirect=True,
+            is_permanent_redirect=False,
+            close=lambda: None,
+        )
+
+        class Session:
+            requests: list[tuple[str, dict[str, str]]] = []
+
+            def get(self, url: str, **kwargs: object) -> SimpleNamespace:
+                self.requests.append((url, kwargs["headers"]))  # type: ignore[arg-type]
+                return response
+
+        session = Session()
+        with patch.object(scraper, "_robots_parser", return_value=Rules()), \
+             patch.object(scraper, "_public_https_url", side_effect=lambda value: urllib.parse.urlparse(value)), \
+             patch.object(scraper.time, "sleep"), patch.object(scraper, "_shared_host_rate_dir", None), \
+             patch.dict(scraper._last_host_request, {}, clear=True):
+            with self.assertRaisesRegex(scraper.ScrapeFailure, "redirect target is outside"):
+                scraper._request(
+                    "https://data.usajobs.gov/api/Search",
+                    headers={"User-Agent": "jobs@example.test", "Authorization-Key": "secret-test-key"},
+                    allowed_hosts={"data.usajobs.gov"},
+                    session=session,
+                )
+        self.assertEqual(len(session.requests), 1)
+        self.assertEqual(session.requests[0][0], "https://data.usajobs.gov/api/Search")
+        self.assertEqual(session.requests[0][1]["Authorization-Key"], "secret-test-key")
+        self.assertEqual(seen_user_agents, ["jobs@example.test"])
 
     def test_personio_feed_unavailable_falls_back_to_public_career_page(self):
         source = {

@@ -51,6 +51,9 @@ prove that each source is the named vendor or that collection is authorized.
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
 ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo.
+The v27 USAJOBS adapter uses the official Search API, but it stays held until
+the private runner has a registered API key, API email, and exact URL-or-host-
+to-organization-code map.
 The generic page discovery path also recognizes linked TalentBrew and SAP
 SuccessFactors boards. This is the current code surface, not a claim that every
 tenant layout has been validated. Built-in holds for NEOGOV GovernmentJobs /
@@ -112,6 +115,22 @@ python scripts/employer_career_scheduled_run.py `
 The default behavior only fetches the URLs approved in the ledger and writes a
 private crawl checkpoint. It does not post to TalentOS. If there are zero
 approved sources, it records a summary and makes no career-page requests.
+
+For USAJOBS sources, register TalentOS for an API key and keep `USAJOBS_API_KEY`,
+`USAJOBS_API_EMAIL`, and `TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON` in the
+runner's private secret/config store. The map must match each source's exact
+normalized URL or hostname to its official USAJOBS `Organization` code. The
+adapter requests only the documented Search API, checks page totals, uses the
+official announcement URL for each job, and refuses to run without all three
+settings. The current API terms allow lawful commercial use of Public Data;
+TalentOS still needs API credentials and must credit USAJOBS and link each
+announcement. The adapter records `source_provider=USAJOBS`, retrieval time,
+and the official announcement URL. The TalentOS job view should display this
+attribution and avoid implying OPM endorsement. See the [Search API reference](https://developer.usajobs.gov/api-reference/get-api-search),
+[API terms](https://developer.usajobs.gov/guides/terms-of-service), and
+[quick start](https://developer.usajobs.gov/general/quick-start).
+The scheduler still requires a reviewed approved row for each exact tracker
+URL; record the API registration and accepted terms as the evidence reference.
 
 ## Start recurring runs
 

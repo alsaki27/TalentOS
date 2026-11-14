@@ -55,7 +55,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v26"
+ADAPTER_VERSION = "employer-career-ingest-v27"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -163,7 +163,13 @@ def _thread_session() -> requests.Session:
     return session
 
 
-def _shared_host_request(host: str, rules: urllib.robotparser.RobotFileParser | None, send: Callable[[], requests.Response]) -> requests.Response:
+def _shared_host_request(
+    host: str,
+    rules: urllib.robotparser.RobotFileParser | None,
+    send: Callable[[], requests.Response],
+    *,
+    user_agent: str = UA,
+) -> requests.Response:
     """Serialize one host across shard processes; the caller holds its thread lock."""
     if _shared_host_rate_dir is None:
         raise RuntimeError("shared host rate directory is not configured")
@@ -213,7 +219,7 @@ def _shared_host_request(host: str, rules: urllib.robotparser.RobotFileParser | 
                     last_request = float(tail.strip())
                 except ValueError:
                     pass
-            gap = _minimum_host_gap(rules) - (time.time() - last_request)
+            gap = _minimum_host_gap(rules, user_agent=user_agent) - (time.time() - last_request)
             if gap > 0:
                 time.sleep(gap)
             # Persist before I/O so killing the worker during send leaves a
@@ -261,28 +267,44 @@ def _robots_parser(root: str) -> urllib.robotparser.RobotFileParser | None:
         return parser
 
 
-def _minimum_host_gap(rules: urllib.robotparser.RobotFileParser | None) -> float:
+def _minimum_host_gap(rules: urllib.robotparser.RobotFileParser | None, *, user_agent: str = UA) -> float:
     """Honor a robots Crawl-delay directive, with a one-second default."""
     try:
-        delay = float(rules.crawl_delay(UA) or 0) if rules else 0.0
+        delay = float(rules.crawl_delay(user_agent) or 0) if rules else 0.0
     except (AttributeError, TypeError, ValueError):
         delay = 0.0
     return max(1.0, delay)
 
 
-def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session: requests.Session | None = None) -> requests.Response:
+def _request(
+    url: str,
+    *,
+    check_robots: bool = True,
+    timeout: int = 10,
+    session: requests.Session | None = None,
+    headers: dict[str, str] | None = None,
+    allowed_hosts: set[str] | None = None,
+) -> requests.Response:
     current = url
+    allowed_hostnames = {host.lower().rstrip(".") for host in allowed_hosts} if allowed_hosts is not None else None
     for _ in range(6):
         if _application_form_target(current):
             raise ScrapeFailure("application form target refused")
+        current_parts = urllib.parse.urlparse(current)
+        current_host = (current_parts.hostname or "").lower().rstrip(".")
+        if allowed_hostnames is not None and current_host not in allowed_hostnames:
+            raise ScrapeFailure("request host is outside the approved host allowlist")
+        if allowed_hostnames is not None and current_parts.port not in (None, 443):
+            raise ScrapeFailure("request port is outside the approved HTTPS endpoint")
         parsed = _public_https_url(current)
         root = f"https://{parsed.netloc}"
+        request_user_agent = (headers or {}).get("User-Agent", UA)
         rules = None
         if check_robots:
             rp = _robots_parser(root)
             if rp is None:
                 raise ScrapeFailure("robots policy could not be checked; source held for review")
-            if not rp.can_fetch(UA, current):
+            if not rp.can_fetch(request_user_agent, current):
                 raise ScrapeFailure("robots.txt disallows this URL")
             rules = rp
         lock = _host_lock(parsed.hostname or "")
@@ -291,11 +313,13 @@ def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session:
                 with lock:
                     requester = session if session is not None else _thread_session()
                     def send() -> requests.Response:
-                        return requester.get(current, headers={"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}, timeout=timeout, allow_redirects=False, stream=True)
+                        request_headers = {"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}
+                        request_headers.update(headers or {})
+                        return requester.get(current, headers=request_headers, timeout=timeout, allow_redirects=False, stream=True)
                     if _shared_host_rate_dir is not None:
-                        response = _shared_host_request(parsed.hostname or "", rules, send)
+                        response = _shared_host_request(parsed.hostname or "", rules, send, user_agent=request_user_agent)
                     else:
-                        gap = _minimum_host_gap(rules) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
+                        gap = _minimum_host_gap(rules, user_agent=request_user_agent) - (time.monotonic() - _last_host_request.get(parsed.hostname or "", 0.0))
                         if gap > 0:
                             time.sleep(gap)
                         response = send()
@@ -323,6 +347,11 @@ def _request(url: str, *, check_robots: bool = True, timeout: int = 10, session:
             target = urllib.parse.urljoin(current, location)
             if _application_form_target(target):
                 raise ScrapeFailure("redirect to application form refused")
+            if allowed_hostnames is not None:
+                target_parsed = urllib.parse.urlparse(target)
+                target_host = (target_parsed.hostname or "").lower().rstrip(".")
+                if target_host not in allowed_hostnames or target_parsed.port not in (None, 443):
+                    raise ScrapeFailure("redirect target is outside the approved host allowlist")
             current = target
             continue
         body = response.raw.read(MAX_BODY_BYTES + 1, decode_content=True)
@@ -578,6 +607,8 @@ def _platform(url: str) -> tuple[str, str] | None:
     p = urllib.parse.urlparse(url)
     host = (p.hostname or "").lower()
     parts = [urllib.parse.unquote(x) for x in p.path.split("/") if x]
+    if host == "usajobs.gov" or host.endswith(".usajobs.gov"):
+        return "usajobs", host
     if host.endswith("greenhouse.io") and parts:
         return "greenhouse", parts[0]
     if host.endswith("lever.co") and parts:
@@ -2936,11 +2967,203 @@ def _taleo_jobs(url: str, portal: str, employer: str) -> tuple[list[dict[str, An
     return jobs, complete, list(dict.fromkeys(notes))
 
 
-def _source_policy_hold(host: str) -> tuple[str, str] | None:
+def _is_usajobs_host(host: str) -> bool:
+    normalized = host.lower().rstrip(".")
+    return normalized == "usajobs.gov" or normalized.endswith(".usajobs.gov")
+
+
+def _usajobs_api_config(url: str) -> tuple[str, str, str] | None:
+    """Return registered USAJOBS credentials and an exact employer org code."""
+    api_key = (os.environ.get("USAJOBS_API_KEY") or "").strip()
+    email = (os.environ.get("USAJOBS_API_EMAIL") or "").strip()
+    raw_mapping = os.environ.get("TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON", "")
+    if not api_key or not email or not raw_mapping:
+        return None
+    try:
+        mapping = json.loads(raw_mapping)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(mapping, dict):
+        return None
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    org_code = mapping.get(normalize_source_url(url)) or mapping.get(host)
+    if not isinstance(org_code, str) or not org_code.strip():
+        return None
+    return api_key, email, org_code.strip()
+
+
+def _usajobs_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Read an agency's open postings from the official USAJOBS Search API."""
+    config = _usajobs_api_config(url)
+    if config is None:
+        raise ScrapeFailure("USAJOBS requires registered API credentials and an exact organization-code mapping")
+    api_key, email, org_code = config
+    headers = {
+        "Host": "data.usajobs.gov",
+        "User-Agent": email,
+        "Authorization-Key": api_key,
+        "Accept": "application/json",
+    }
+    base = "https://data.usajobs.gov/api/Search"
+    page_size = 500
+    max_results = 10_000
+    page = 1
+    expected_total: int | None = None
+    expected_pages: int | None = None
+    descriptors: list[dict[str, Any]] = []
+    notes: list[str] = []
+
+    while page <= 20:
+        query = urllib.parse.urlencode({
+            "Organization": org_code,
+            "Fields": "Full",
+            "ResultsPerPage": page_size,
+            "Page": page,
+        })
+        response = _request(
+            f"{base}?{query}",
+            timeout=30,
+            headers=headers,
+            allowed_hosts={"data.usajobs.gov"},
+        )
+        if response.status_code != 200:
+            raise ScrapeFailure(f"USAJOBS Search API returned HTTP {response.status_code}")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ScrapeFailure("USAJOBS Search API returned invalid JSON") from exc
+        search = payload.get("SearchResult") if isinstance(payload, dict) else None
+        if not isinstance(search, dict):
+            raise ScrapeFailure("USAJOBS Search API omitted SearchResult")
+        items = search.get("SearchResultItems")
+        if not isinstance(items, list):
+            raise ScrapeFailure("USAJOBS Search API omitted SearchResultItems")
+        try:
+            reported_page_count = int(search.get("SearchResultCount"))
+        except (TypeError, ValueError) as exc:
+            raise ScrapeFailure("USAJOBS Search API omitted a valid page count") from exc
+        if reported_page_count != len(items):
+            raise ScrapeFailure("USAJOBS Search API page count does not match returned items")
+        try:
+            total = int(search.get("SearchResultCountAll"))
+        except (TypeError, ValueError) as exc:
+            raise ScrapeFailure("USAJOBS Search API omitted a valid total count") from exc
+        if expected_total is None:
+            expected_total = total
+            if total > max_results:
+                raise ScrapeFailure("USAJOBS query exceeds its documented 10000-result ceiling")
+            user_area = payload.get("UserArea") if isinstance(payload, dict) else None
+            if not isinstance(user_area, dict):
+                user_area = search.get("UserArea") if isinstance(search.get("UserArea"), dict) else {}
+            try:
+                expected_pages = max(1, int(user_area.get("NumberOfPages")))
+            except (TypeError, ValueError):
+                expected_pages = max(1, math.ceil(total / page_size))
+            if expected_pages > 20:
+                raise ScrapeFailure("USAJOBS Search API pagination exceeds its documented 10000-result ceiling")
+        elif total != expected_total:
+            raise ScrapeFailure("USAJOBS Search API total changed during pagination")
+
+        for item in items:
+            descriptor = item.get("MatchedObjectDescriptor") if isinstance(item, dict) else None
+            if isinstance(descriptor, dict):
+                descriptors.append(descriptor)
+            else:
+                notes.append("USAJOBS result omitted MatchedObjectDescriptor")
+        if expected_pages is not None and page >= expected_pages:
+            break
+        if not items:
+            raise ScrapeFailure("USAJOBS Search API pagination ended before the reported final page")
+        page += 1
+    else:
+        raise ScrapeFailure("USAJOBS Search API exceeded its page safety cap")
+
+    jobs: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for descriptor in descriptors:
+        title = _text(descriptor.get("PositionTitle"))
+        external_id = _text(descriptor.get("PositionID"))
+        source_url = _text(descriptor.get("PositionURI"))
+        parsed_job_url = urllib.parse.urlparse(source_url or "")
+        if not title or not external_id or parsed_job_url.scheme != "https" or not _is_usajobs_host(parsed_job_url.hostname or ""):
+            notes.append("USAJOBS result omitted a valid title, posting ID, or official announcement URL")
+            continue
+        if external_id in seen_ids:
+            notes.append("USAJOBS API returned a duplicate posting ID")
+            continue
+        seen_ids.add(external_id)
+
+        details = descriptor.get("UserArea", {}).get("Details", {}) if isinstance(descriptor.get("UserArea"), dict) else {}
+        description_parts: list[str] = []
+        for field_name in (
+            "JobSummary", "MajorDuties", "Requirements", "KeyRequirements",
+            "Education", "Evaluations", "Benefits", "OtherInformation",
+        ):
+            value = details.get(field_name) if isinstance(details, dict) else None
+            if isinstance(value, list):
+                value = "\n".join(str(part) for part in value)
+            clean = _clean_description(value)
+            if clean and clean not in description_parts:
+                description_parts.append(clean)
+        formatted = descriptor.get("PositionFormattedDescription")
+        if isinstance(formatted, list):
+            for section in formatted:
+                if isinstance(section, dict):
+                    clean = _clean_description(section.get("Content"))
+                    if clean and clean not in description_parts:
+                        description_parts.append(clean)
+        description = "\n\n".join(description_parts) or None
+        if not description or len(description) < 80:
+            notes.append(f"USAJOBS announcement {external_id} returned a short or empty description")
+
+        locations = descriptor.get("PositionLocation")
+        if isinstance(locations, dict):
+            locations = [locations]
+        location_names = [
+            name for location in locations or []
+            if isinstance(location, dict)
+            for name in [_text(location.get("LocationName"))]
+            if name
+        ]
+        remuneration = descriptor.get("PositionRemuneration")
+        schedule = descriptor.get("PositionSchedule")
+        offering = descriptor.get("PositionOfferingType")
+        jobs.append({
+            "title": title,
+            "company": _text(descriptor.get("OrganizationName")) or _text(descriptor.get("DepartmentName")) or employer,
+            "location": ", ".join(dict.fromkeys(location_names)) or None,
+            "source_url": source_url,
+            "external_job_id": external_id,
+            "description_text": description,
+            "snippet": (description or "")[:300] or None,
+            "raw": {
+                "source": SOURCE,
+                "source_provider": "USAJOBS",
+                "ats": "usajobs",
+                "posted_at": descriptor.get("PublicationStartDate"),
+                "closing_at": descriptor.get("ApplicationCloseDate") or descriptor.get("PositionEndDate"),
+                "department": _text(descriptor.get("DepartmentName")),
+                "schedule": schedule,
+                "offering_type": offering,
+                "remuneration": remuneration,
+                "api_retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+        })
+
+    complete = expected_total is not None and len(descriptors) == expected_total and len(jobs) == expected_total and not any("short or empty description" in note for note in notes)
+    if expected_total is not None and len(descriptors) != expected_total:
+        notes.append(f"USAJOBS API returned {len(descriptors)} of {expected_total} announcements")
+    return jobs, complete, list(dict.fromkeys(notes))
+
+
+def _source_policy_hold(host: str, url: str = "") -> tuple[str, str] | None:
     """Return a policy reason for sources that must not be crawled anonymously."""
     host = host.lower().rstrip(".")
     if host == "governmentjobs.com" or host.endswith(".governmentjobs.com") or host == "schooljobs.com" or host.endswith(".schooljobs.com"):
         return "NEOGOV terms prohibit automated scraping and competitive-product use of public career pages", "NEOGOV GovernmentJobs/SchoolJobs source held pending an authorized feed agreement"
+    if _is_usajobs_host(host) and _usajobs_api_config(url) is None:
+        return "USAJOBS requires a registered API key and exact organization-code mapping", "USAJOBS source held until the official API integration is configured"
     if host == "jobvite.com" or host.endswith(".jobvite.com"):
         return "Jobvite terms prohibit automated scraping and commercial reuse of postings", "Jobvite terms prohibit automated scraping; source held for authorized integration"
     if host == "paycom.com" or host.endswith(".paycom.com") or host == "paycomonline.net" or host.endswith(".paycomonline.net"):
@@ -2960,7 +3183,7 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
     url = source["url"]
     employer = source["employers"][0] if source["employers"] else "Unknown employer"
     host = (urllib.parse.urlparse(url).hostname or "").lower()
-    policy_hold = _source_policy_hold(host)
+    policy_hold = _source_policy_hold(host, url)
     if policy_hold:
         error, note = policy_hold
         return {
@@ -2982,7 +3205,10 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
     try:
         p = _platform(url)
         if p:
-            if p[0] == "rippling":
+            if p[0] == "usajobs":
+                jobs, complete, notes = _usajobs_jobs(url, employer)
+                method = "official_search_api:usajobs-v1"
+            elif p[0] == "rippling":
                 jobs, complete, notes = _rippling_jobs(url, p[1], employer)
                 method = "public_board_pagination:rippling"
             elif p[0] == "smartrecruiters":
