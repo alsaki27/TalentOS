@@ -9,13 +9,17 @@ function readPairing(fragment: string, applicationId: string) {
   const params = new URLSearchParams(fragment.slice(1));
   const candidateId = params.get("candidateId") || "";
   const exportId = params.get("exportId") || "";
+  const mode = params.get("mode") || "fixture";
+  const jobUrl = params.get("jobUrl") || "";
   const profileVersion = params.get("profileVersion") || "";
   const credentialHash = params.get("credentialHash") || "";
   const expiresAt = Number(params.get("expiresAt"));
-  if (params.get("applicationId") !== applicationId || !UUID.test(candidateId) || !UUID.test(exportId) ||
+  if ((mode !== "fixture" && mode !== "linkedin") || params.get("applicationId") !== applicationId || !UUID.test(candidateId) ||
+    (mode === "fixture" ? !UUID.test(exportId) || Boolean(jobUrl) : Boolean(exportId) || !/^https:\/\/www\.linkedin\.com\/jobs\/view\/[0-9]+\/?$/.test(jobUrl)) ||
     !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(profileVersion) || !/^[a-f0-9]{64}$/.test(credentialHash) ||
     !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) return null;
-  return { applicationId, candidateId, exportId, profileVersion, credentialHash, expiresAt };
+  return { applicationId, candidateId, profileVersion, credentialHash, expiresAt,
+    ...(mode === "linkedin" ? { mode, jobUrl } : { mode, exportId }) };
 }
 
 export default function PilotPairing({ applicationId }: { applicationId: string }) {
@@ -94,7 +98,9 @@ export default function PilotPairing({ applicationId }: { applicationId: string 
       <h1 className="text-xl font-semibold">TalentOS worker pilot</h1>
       {pairing === undefined && <p role="status">Checking the worker pairing link…</p>}
       {pairing === null && <p>Open a fresh pairing link from the worker terminal on this PC.</p>}
-      {pairing && ticket !== undefined && <p>Ticket <strong>A#{ticket}</strong> will run on a simulated form up to Review.</p>}
+      {pairing && ticket !== undefined && <p>Ticket <strong>A#{ticket}</strong> will {pairing.mode === "linkedin"
+        ? "use its currently approved PDF and screening answers on LinkedIn and stop at Review."
+        : "run on a simulated form up to Review."}</p>}
       {pairing && ticket !== undefined && !enrollmentId && (
         <form onSubmit={approve} className="space-y-4">
           <p>Only approve a code from the worker terminal you started on this PC.</p>

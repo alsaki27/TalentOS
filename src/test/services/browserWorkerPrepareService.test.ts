@@ -5,7 +5,7 @@ vi.mock("@/server/db/neon", () => ({ query: vi.fn(), queryOne: vi.fn() }));
 vi.mock("@/lib/resumeStorage", () => ({ downloadResumeFile: vi.fn() }));
 import { query, queryOne } from "@/server/db/neon";
 import { downloadResumeFile } from "@/lib/resumeStorage";
-import { authorizeLivePrepareLease, claimPrepareApplication, enrollPrepareApplication, getPrepareArtifact,
+import { authorizeLivePrepareLease, claimPrepareApplication, enrollPilotDevice, enrollPrepareApplication, getPilotDevice, getPrepareArtifact,
   recordPrepareResult, revokePrepareEnrollment, validatePreparePdf, validatePrepareResult } from "@/server/services/browserWorkerPrepareService";
 
 const app = "11111111-1111-4111-8111-111111111111";
@@ -169,6 +169,7 @@ describe("production fixture pilot", () => {
     vi.stubEnv("BROWSER_WORKER_PREPARE_ENABLED", "true");
     vi.stubEnv("BROWSER_WORKER_ENVIRONMENT", "production-pilot");
     vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_APPLICATION_ID", app);
+    vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_LINKEDIN_ENABLED", undefined);
   });
   afterEach(() => vi.unstubAllEnvs());
 
@@ -237,6 +238,135 @@ describe("production fixture pilot", () => {
     const [mutation, params] = vi.mocked(query).mock.calls[0];
     expect(mutation).toMatch(/^UPDATE browser_worker_prepare_runs/);
     expect(mutation).not.toMatch(/(?:UPDATE|INSERT INTO) (?:applications|application_stage_history|activity_logs)\b/);
+    expect(params?.[4]).toBe(JSON.stringify(payload));
+  });
+});
+
+describe("attended LinkedIn production pilot", () => {
+  const jobUrl = "https://www.linkedin.com/jobs/view/1234567890/";
+  const linkedSource = { ...source, job_url: jobUrl };
+  const linkedEnrollment = { ...pinned, job_url: jobUrl, linkedin: true };
+  const sourceMetadata = {
+    mode: "linkedin",
+    jobUrl,
+    artifact: { exportId, resumeVersionId: version, sha256: sha(pdf), byteLength: pdf.byteLength, contentType: "application/pdf" },
+  };
+  const pairing = () => ({
+    applicationId: app, candidateId: candidate, profileVersion: "local-v1", mode: "linkedin",
+    jobUrl, credentialHash: sha(credential), pairingCode: sha(credential).slice(0, 8).toUpperCase(),
+    expiresAt: Date.now() + 5 * 60_000,
+  });
+  const deviceUrl = "https://talent.skarion.com/api/browser-worker/v2/pilot/device";
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv("BROWSER_WORKER_PREPARE_ENABLED", "true");
+    vi.stubEnv("BROWSER_WORKER_ENVIRONMENT", "production-pilot");
+    vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_APPLICATION_ID", app);
+    vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_LINKEDIN_ENABLED", "true");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([undefined, "", "True", "1"])("requires the explicit LinkedIn gate (%s)", async (gate) => {
+    vi.stubEnv("BROWSER_WORKER_PRODUCTION_PILOT_LINKEDIN_ENABLED", gate);
+    await expect(enrollPilotDevice(pairing(), app)).rejects.toMatchObject({ status: 404 });
+    await expect(getPilotDevice(new Request(`${deviceUrl}?mode=linkedin`))).rejects.toMatchObject({ status: 404 });
+    expect(queryOne).not.toHaveBeenCalled();
+  });
+
+  it("exposes only the gate status without a pairing credential", async () => {
+    await expect(getPilotDevice(new Request(`${deviceUrl}?mode=linkedin`)))
+      .rejects.toMatchObject({ status: 401, message: "Valid scoped worker credential required" });
+    expect(queryOne).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined, "https://linkedin.com/jobs/view/1", "http://www.linkedin.com/jobs/view/1/",
+    "https://www.linkedin.com/jobs/view/1/?abc", "https://www.linkedin.com/jobs/search/",
+  ])("rejects missing or unsupported expected destinations (%s) before lookup", async (jobUrl) => {
+    await expect(enrollPilotDevice({ ...pairing(), jobUrl }, app)).rejects.toMatchObject({ status: 400 });
+    expect(queryOne).not.toHaveBeenCalled();
+  });
+
+  it("chooses and rechecks the same latest eligible approved export before storing its immutable snapshot", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(linkedSource)
+      .mockResolvedValueOnce({ id: enrollment, expires_at: "2026-11-14T01:00:00Z" });
+    vi.mocked(downloadResumeFile).mockResolvedValue({ buffer: pdf, contentType: "application/pdf" });
+    await expect(enrollPilotDevice(pairing(), app)).resolves.toEqual({
+      enrollmentId: enrollment, expiresAt: "2026-11-14T01:00:00Z", ...sourceMetadata,
+    });
+    const [select, insert] = vi.mocked(queryOne).mock.calls;
+    expect(select[1]).toEqual([app, candidate]);
+    for (const [sql] of [select, insert]) {
+      expect(sql).toContain("v.status = 'approved'");
+      expect(sql).toContain("COALESCE(a.review_status, '') IN ('approved', 'not_required')");
+      expect(sql).toContain("ORDER BY COALESCE(x.updated_at, x.created_at) DESC NULLS LAST, x.id DESC LIMIT 1");
+    }
+    expect(insert[1]?.[2]).toBe(exportId);
+    expect(insert[1]?.[13]).toBe(sha(`talentos-prepare-linkedin-v1:${sha(credential)}`));
+  });
+
+  it("rejects unapproved review and a mismatched stored posting without downloading", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null).mockResolvedValueOnce({ review_status: "pending" });
+    await expect(enrollPilotDevice(pairing(), app))
+      .rejects.toMatchObject({ status: 409, message: "The ticket needs review approval before LinkedIn preparation" });
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedSource, job_url: "https://www.linkedin.com/jobs/view/12/" });
+    await expect(enrollPilotDevice(pairing(), app)).rejects.toMatchObject({ status: 409 });
+    expect(downloadResumeFile).not.toHaveBeenCalled();
+  });
+
+  it("reports an oversized current export without downloading a different PDF", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedSource, byte_length: 2_000_000 });
+    await expect(enrollPilotDevice(pairing(), app)).rejects.toMatchObject({
+      status: 409, message: "The current approved PDF must be smaller than 2 MB for LinkedIn",
+    });
+    expect(downloadResumeFile).not.toHaveBeenCalled();
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns safe pinned metadata to the enrolled device and verifies mode on claim", async () => {
+    const queueState = { stage: "ready_for_application" };
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedEnrollment, enrollmentId: enrollment, applicationId: app, queueState })
+      .mockResolvedValueOnce(linkedEnrollment).mockResolvedValueOnce({ id: run, lease_expires_at: "2026-11-14T01:05:00Z" });
+    await expect(getPilotDevice(new Request(deviceUrl, request()))).resolves.toEqual({
+      enrollmentId: enrollment, applicationId: app, queueState, ...sourceMetadata,
+    });
+    await expect(claimPrepareApplication(request(), claimInput)).resolves.toMatchObject({
+      manifest: { portalMode: "linkedin", artifact: sourceMetadata.artifact },
+    });
+    expect(vi.mocked(queryOne).mock.calls[1][1]).toEqual([sha(credential), app, sha(`talentos-prepare-linkedin-v1:${sha(credential)}`)]);
+  });
+
+  it("keeps fixture responses on the default mode when LinkedIn is also enabled", async () => {
+    const body = { enrollmentId: enrollment, applicationId: app, queueState: {} };
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedEnrollment, ...body, linkedin: false });
+    await expect(getPilotDevice(new Request(deviceUrl, request()))).resolves.toEqual(body);
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedEnrollment, linkedin: false });
+    await expect(recordPrepareResult(request(), run, { status: "prepared", reason: "linkedin_final_review_ready" }))
+      .rejects.toMatchObject({ status: 400 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "applied", reason: "linkedin_final_review_ready" },
+    { status: "prepared", reason: "fixture_final_review_ready" },
+    { status: "prepared", reason: "linkedin_external_apply_link" },
+    { status: "prepared", reason: "linkedin_posting_unavailable" },
+    { status: "needs_human", reason: "linkedin_missing_required_answers", missingQuestions: [] },
+  ])("rejects results outside the attended prepare contract %j", async (payload) => {
+    vi.mocked(queryOne).mockResolvedValueOnce(linkedEnrollment);
+    await expect(recordPrepareResult(request(), run, payload)).rejects.toMatchObject({ status: 400 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("records a missing question on the current lease without writing any candidate or queue records", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(linkedEnrollment);
+    vi.mocked(query).mockResolvedValueOnce([{ id: run }]);
+    const payload = { status: "needs_human", reason: "linkedin_missing_required_answers", missingQuestions: ["Can you commute?"] };
+    await expect(recordPrepareResult(request(), run, payload)).resolves.toMatchObject({ status: "needs_human" });
+    const [mutation, params] = vi.mocked(query).mock.calls[0];
+    expect(mutation).toMatch(/^UPDATE browser_worker_prepare_runs/);
+    expect(mutation).not.toMatch(/(?:UPDATE|INSERT INTO) (?:applications|candidate_application_facts|application_stage_history)\b/);
     expect(params?.[4]).toBe(JSON.stringify(payload));
   });
 });
