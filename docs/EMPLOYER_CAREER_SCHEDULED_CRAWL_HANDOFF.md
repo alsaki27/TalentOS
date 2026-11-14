@@ -41,10 +41,14 @@ Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
 ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo.
 The generic page discovery path also recognizes linked TalentBrew and SAP
 SuccessFactors boards. This is the current code surface, not a claim that every
-tenant layout has been validated. Built-in holds for Jobvite, Paycom, UKG,
-UKG Ready, iSolved, and ADP remain in force even if an entry is mistakenly
-marked approved in the ledger; do not remove those holds without applicable
-authorization and a code review.
+tenant layout has been validated. Built-in holds for NEOGOV GovernmentJobs /
+SchoolJobs, Jobvite, Paycom, UKG, UKG Ready, iSolved, and ADP remain in force
+even if an entry is mistakenly marked approved in the ledger. NEOGOV's terms
+prohibit automated page scraping and competitive-product use of its public
+career pages; its RSS documentation describes customer integrations, not a
+blanket third-party TalentOS grant. Keep the cohort held until a suitable
+authorized feed agreement exists. See [NEOGOV terms](https://www.neogov.com/terms-of-use)
+and its [RSS feed customer notice](https://success.neogov.com/insight-product-updates-112/insight-summer-2025-release-notes-15859).
 
 ## Private inputs
 

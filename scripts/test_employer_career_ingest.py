@@ -438,6 +438,29 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(result["method"], "public_rss_pagination:teamtailor-v1")
         self.assertTrue(result["complete"])
 
+    def test_neogov_governmentjobs_and_schooljobs_are_policy_held_without_requests(self):
+        for url in (
+            "https://www.governmentjobs.com/careers/example",
+            "https://careers.governmentjobs.com/careers/example",
+            "https://www.schooljobs.com/careers/example",
+        ):
+            source = {
+                "url": url,
+                "normalized_url": url,
+                "source_urls": [url],
+                "evidence_urls": [],
+                "employers": ["Example"],
+                "employer_keys": ["company_id:9"],
+            }
+            with patch.object(scraper, "_request", side_effect=AssertionError("held source must not be requested")) as request:
+                result = scraper.scrape_source(source)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["method"], "policy_hold")
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["jobs"], [])
+            self.assertIn("NEOGOV", result["error"])
+            request.assert_not_called()
+
     def test_personio_feed_unavailable_falls_back_to_public_career_page(self):
         source = {
             "url": "https://sample.jobs.personio.de/", "normalized_url": "https://sample.jobs.personio.de/",

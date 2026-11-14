@@ -2939,6 +2939,8 @@ def _taleo_jobs(url: str, portal: str, employer: str) -> tuple[list[dict[str, An
 def _source_policy_hold(host: str) -> tuple[str, str] | None:
     """Return a policy reason for sources that must not be crawled anonymously."""
     host = host.lower().rstrip(".")
+    if host == "governmentjobs.com" or host.endswith(".governmentjobs.com") or host == "schooljobs.com" or host.endswith(".schooljobs.com"):
+        return "NEOGOV terms prohibit automated scraping and competitive-product use of public career pages", "NEOGOV GovernmentJobs/SchoolJobs source held pending an authorized feed agreement"
     if host == "jobvite.com" or host.endswith(".jobvite.com"):
         return "Jobvite terms prohibit automated scraping and commercial reuse of postings", "Jobvite terms prohibit automated scraping; source held for authorized integration"
     if host == "paycom.com" or host.endswith(".paycom.com") or host == "paycomonline.net" or host.endswith(".paycomonline.net"):
