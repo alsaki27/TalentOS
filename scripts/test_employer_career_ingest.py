@@ -79,6 +79,8 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(_platform("https://jobs.ashbyhq.com/acme"), ("ashby", "acme"))
         self.assertEqual(_platform("https://careers.smartrecruiters.com/acme"), ("smartrecruiters", "acme"))
         self.assertEqual(_platform("https://careers.smartrecruiters.com/Keenfinity/audio_career"), ("smartrecruiters", "Keenfinity|audio_career"))
+        self.assertEqual(_platform("https://www.dayforcehcm.com/CandidatePortal/en-US/example"), ("dayforce", "www.dayforcehcm.com"))
+        self.assertIsNone(_platform("https://dayforcehcm.com.attacker.example/careers"))
         self.assertEqual(_platform("https://jobs.smartrecruiters.com/acme/123-title"), ("smartrecruiters", "acme"))
         self.assertEqual(_platform("https://apply.workable.com/acme-systems/"), ("workable", "acme-systems"))
         self.assertEqual(_platform("https://acme.recruitee.com/o/engineer"), ("recruitee", "acme"))
@@ -546,7 +548,7 @@ class CareerScraperTests(unittest.TestCase):
             self.assertEqual(call.kwargs["headers"]["User-Agent"], "jobs@example.test")
             self.assertEqual(call.kwargs["allowed_hosts"], {"data.usajobs.gov"})
 
-    def test_request_checks_robots_for_the_custom_api_user_agent(self):
+    def test_request_passes_custom_api_headers_and_basic_auth(self):
         seen_user_agents = []
 
         class Rules:
@@ -572,9 +574,11 @@ class CareerScraperTests(unittest.TestCase):
 
         class Session:
             request_headers: dict[str, str] = {}
+            request_auth: tuple[str, str] | None = None
 
             def get(self, url: str, **kwargs: object) -> SimpleNamespace:
                 self.request_headers = kwargs["headers"]  # type: ignore[assignment]
+                self.request_auth = kwargs.get("auth")  # type: ignore[assignment]
                 return response
 
         session = Session()
@@ -582,11 +586,40 @@ class CareerScraperTests(unittest.TestCase):
         with patch.object(scraper, "_robots_parser", return_value=Rules()), \
              patch.object(scraper, "_public_https_url", side_effect=lambda value: urllib.parse.urlparse(value)), \
              patch.object(scraper.time, "sleep"), patch.object(scraper, "_shared_host_rate_dir", None), \
-             patch.dict(scraper._last_host_request, {}, clear=True):
-            fetched = scraper._request(url, headers={"User-Agent": "jobs@example.test"}, session=session)
+             patch.dict(scraper._last_host_request, {}, clear=True), \
+             patch.object(scraper, "_content_request_count", 0):
+            fetched = scraper._request(
+                url, headers={"User-Agent": "jobs@example.test"}, auth=("tenant-user", "tenant-secret"), session=session
+            )
+            self.assertEqual(scraper._content_request_count, 1)
         self.assertEqual(seen_user_agents, ["jobs@example.test"])
         self.assertEqual(session.request_headers["User-Agent"], "jobs@example.test")
+        self.assertEqual(session.request_auth, ("tenant-user", "tenant-secret"))
         self.assertEqual(fetched._content, b"{}")
+
+    def test_read_only_workday_search_post_counts_as_a_content_request(self):
+        class Rules:
+            def can_fetch(self, user_agent: str, url: str) -> bool:
+                return True
+
+            def crawl_delay(self, user_agent: str) -> int:
+                return 0
+
+        response = SimpleNamespace(
+            status_code=200, headers={}, content=b"{}", raise_for_status=lambda: None, close=lambda: None,
+        )
+        url = "https://acme.wd5.myworkdayjobs.com/wday/cxs/acme/External/jobs"
+        with patch.object(scraper, "_public_https_url", side_effect=lambda value: urllib.parse.urlparse(value)), \
+             patch.object(scraper, "_robots_parser", return_value=Rules()), \
+             patch.object(scraper, "_shared_host_rate_dir", None), \
+             patch.object(scraper, "_content_request_count", 0), \
+             patch.dict(scraper._last_host_request, {}, clear=True), \
+             patch.object(scraper.time, "sleep"), \
+             patch.object(scraper.requests, "post", return_value=response) as post:
+            fetched = scraper._request_post(url, "{}")
+            self.assertEqual(scraper._content_request_count, 1)
+        post.assert_called_once()
+        self.assertIs(fetched, response)
 
     def test_request_rejects_off_host_redirect_before_resending_api_credentials(self):
         seen_user_agents = []
@@ -608,10 +641,10 @@ class CareerScraperTests(unittest.TestCase):
         )
 
         class Session:
-            requests: list[tuple[str, dict[str, str]]] = []
+            requests: list[tuple[str, dict[str, str], object]] = []
 
             def get(self, url: str, **kwargs: object) -> SimpleNamespace:
-                self.requests.append((url, kwargs["headers"]))  # type: ignore[arg-type]
+                self.requests.append((url, kwargs["headers"], kwargs.get("auth")))  # type: ignore[arg-type]
                 return response
 
         session = Session()
@@ -621,15 +654,140 @@ class CareerScraperTests(unittest.TestCase):
              patch.dict(scraper._last_host_request, {}, clear=True):
             with self.assertRaisesRegex(scraper.ScrapeFailure, "redirect target is outside"):
                 scraper._request(
-                    "https://data.usajobs.gov/api/Search",
+                    "https://www.dayforcehcm.com/api/Example/V1/JobFeeds",
                     headers={"User-Agent": "jobs@example.test", "Authorization-Key": "secret-test-key"},
-                    allowed_hosts={"data.usajobs.gov"},
+                    auth=("tenant-user", "tenant-secret"),
+                    allowed_hosts={"www.dayforcehcm.com"},
                     session=session,
                 )
         self.assertEqual(len(session.requests), 1)
-        self.assertEqual(session.requests[0][0], "https://data.usajobs.gov/api/Search")
+        self.assertEqual(session.requests[0][0], "https://www.dayforcehcm.com/api/Example/V1/JobFeeds")
         self.assertEqual(session.requests[0][1]["Authorization-Key"], "secret-test-key")
+        self.assertEqual(session.requests[0][2], ("tenant-user", "tenant-secret"))
         self.assertEqual(seen_user_agents, ["jobs@example.test"])
+
+    def test_dayforce_requires_authorized_tenant_configuration_before_any_request(self):
+        url = "https://www.dayforcehcm.com/CandidatePortal/en-US/example"
+        source = {
+            "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
+            "employers": ["Example"], "employer_keys": ["company_id:12"],
+        }
+        with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": ""}), \
+             patch.object(scraper, "_request", side_effect=AssertionError("missing tenant config must not request")) as request:
+            result = scraper.scrape_source(source)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["method"], "policy_hold")
+        self.assertIn("tenant credentials", result["error"])
+        request.assert_not_called()
+
+    def test_dayforce_jobfeeds_uses_configured_basic_auth_and_maps_public_postings(self):
+        url = "https://prdemo.dayforcehcm.com/CandidatePortal/en-US/example"
+        long_description = "Support the engineering team by planning, documenting, and delivering reliable customer services. " * 2
+        payload = [{
+            "Title": "Field Engineer",
+            "Description": long_description,
+            "CompanyName": "Example Co.",
+            "JobDetailsUrl": "https://prdemo.dayforcehcm.com/CandidatePortal/en-US/example/Posting/View/17",
+            "ApplyUrl": "https://prdemo.dayforcehcm.com/CandidatePortal/en-US/example/JobPosting/Apply?jobId=17",
+            "City": "Austin",
+            "State": "TX",
+            "Country": "USA",
+            "DatePosted": "2026-11-13T00:00:00",
+            "LastUpdated": "2026-11-13T08:30:00",
+            "ReferenceNumber": 17,
+            "EmploymentIndicator": "Full-time",
+            "JobFunction": "Engineering",
+        }, {
+            "Title": "Data Analyst",
+            "Description": long_description,
+            "JobDetailsUrl": "http://localhost:51009/en-US/Posting/View/18",
+            "ApplyUrl": "https://prdemo.dayforcehcm.com/CandidatePortal/en-US/example/JobPosting/Apply?jobId=18",
+            "ReferenceNumber": 18,
+        }]
+        response = SimpleNamespace(status_code=200, json=lambda: payload)
+        source = {
+            "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
+            "employers": ["Example"], "employer_keys": ["company_id:12"],
+        }
+        config = {scraper.normalize_source_url(url): {
+            "company_name": "Example Co", "username": "tenant-user", "password": "tenant-secret",
+            "internal_job_board_code": "CANDIDATEPORTAL",
+        }}
+        with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
+             patch.object(scraper, "_request", return_value=response) as request:
+            result = scraper.scrape_source(source)
+
+        self.assertEqual(result["status"], "scraped")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["method"], "authorized_customer_api:dayforce-jobfeeds-v1")
+        self.assertEqual(result["job_count"], 2)
+        job = result["jobs"][0]
+        self.assertEqual(job["external_job_id"], "17")
+        self.assertEqual(job["company"], "Example Co.")
+        self.assertEqual(job["location"], "Austin, TX, USA")
+        self.assertEqual(job["source_url"], payload[0]["JobDetailsUrl"])
+        self.assertEqual(job["raw"]["job_details_url"], payload[0]["JobDetailsUrl"])
+        self.assertEqual(result["jobs"][1]["source_url"], payload[1]["ApplyUrl"])
+        self.assertNotIn("tenant-secret", json.dumps(result))
+        request.assert_called_once()
+        call = request.call_args
+        parsed_api = urllib.parse.urlsplit(call.args[0])
+        self.assertEqual(parsed_api.scheme, "https")
+        self.assertEqual(parsed_api.netloc, "www.dayforcehcm.com")
+        self.assertEqual(parsed_api.path, "/api/Example%20Co/V1/JobFeeds")
+        self.assertEqual(urllib.parse.parse_qs(parsed_api.query), {
+            "includeActivePostingOnly": ["true"], "internalJobBoardCode": ["CANDIDATEPORTAL"],
+        })
+        self.assertEqual(call.kwargs["headers"]["Accept"], "application/json")
+        self.assertEqual(call.kwargs["auth"], ("tenant-user", "tenant-secret"))
+        self.assertEqual(call.kwargs["allowed_hosts"], {"www.dayforcehcm.com"})
+
+    def test_dayforce_invalid_and_duplicate_rows_make_the_feed_partial(self):
+        url = "https://www.dayforcehcm.com/CandidatePortal/en-US/example"
+        long_description = "Build and maintain internal systems, coordinate releases, and document engineering work. " * 2
+        valid = {
+            "Title": "Engineer", "Description": long_description, "ReferenceNumber": "R-1",
+            "ApplyUrl": "https://www.dayforcehcm.com/CandidatePortal/en-US/example/job/1",
+        }
+        payload = [
+            valid,
+            dict(valid),
+            {"Title": "Bad URL", "Description": long_description, "ReferenceNumber": "R-2", "ApplyUrl": "https://attacker.example/jobs/2"},
+            {"Title": "Short", "Description": "Short", "ReferenceNumber": "R-3", "JobDetailsUrl": "https://www.dayforcehcm.com/jobs/3"},
+        ]
+        response = SimpleNamespace(status_code=200, json=lambda: payload)
+        source = {
+            "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
+            "employers": ["Example"], "employer_keys": ["company_id:12"],
+        }
+        config = {"www.dayforcehcm.com": {
+            "company_name": "Example", "username": "tenant-user", "password": "tenant-secret",
+        }}
+        with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
+             patch.object(scraper, "_request", return_value=response):
+            result = scraper.scrape_source(source)
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["job_count"], 2)
+        self.assertEqual({job["external_job_id"] for job in result["jobs"]}, {"R-1", "R-3"})
+        self.assertTrue(any("duplicate reference" in note for note in result["notes"]))
+        self.assertTrue(any("valid title" in note for note in result["notes"]))
+        self.assertTrue(any("short or empty description" in note for note in result["notes"]))
+
+    def test_dayforce_non_list_response_fails_closed(self):
+        url = "https://www.dayforcehcm.com/CandidatePortal/en-US/example"
+        source = {
+            "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
+            "employers": ["Example"], "employer_keys": ["company_id:12"],
+        }
+        config = {"www.dayforcehcm.com": {
+            "company_name": "Example", "username": "tenant-user", "password": "tenant-secret",
+        }}
+        with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
+             patch.object(scraper, "_request", return_value=SimpleNamespace(status_code=200, json=lambda: {"jobs": []})):
+            result = scraper.scrape_source(source)
+        self.assertEqual(result["status"], "error")
+        self.assertIn("not a posting list", result["error"])
 
     def test_personio_feed_unavailable_falls_back_to_public_career_page(self):
         source = {

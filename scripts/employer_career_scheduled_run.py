@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import errno
 from typing import Any, Iterator
 
 import employer_career_ingest as crawler
@@ -45,6 +46,19 @@ VERIFIED_ROUTE_STATUSES = {"verified_official", "verified_official_ats_link"}
 
 class PolicyManifestError(ValueError):
     pass
+
+
+class RunLockBusy(OSError):
+    """Raised only when another scheduler process owns the run lock."""
+
+
+def _is_lock_contention(exc: OSError) -> bool:
+    if os.name == "nt":
+        return (
+            getattr(exc, "winerror", None) in {33, 36}
+            or (getattr(exc, "winerror", None) is None and exc.errno in {errno.EACCES, errno.EDEADLOCK})
+        )
+    return isinstance(exc, BlockingIOError) or exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
 
 
 def _parse_datetime(value: str, field: str, row_number: int) -> datetime:
@@ -173,17 +187,22 @@ def exclusive_lock(path: Path) -> Iterator[None]:
     handle = path.open("a+b")
     locked = False
     try:
-        if os.name == "nt":
-            import msvcrt
+        try:
+            if os.name == "nt":
+                import msvcrt
 
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if _is_lock_contention(exc):
+                raise RunLockBusy("another scheduled employer career run holds the lock") from exc
+            raise
         locked = True
         yield
     finally:
@@ -199,6 +218,43 @@ def exclusive_lock(path: Path) -> Iterator[None]:
 def _write_summary(path: Path, summary: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _current_crawler_summary(path: Path, tracker_path: Path, run_started: datetime) -> dict[str, Any] | None:
+    """Accept only a structurally valid summary for this exact child run/input."""
+    try:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(summary, dict):
+            return None
+        child_started = _parse_datetime(summary.get("started_at_utc"), "started_at_utc", 0)
+        tracker_hash = hashlib.sha256(tracker_path.read_bytes()).hexdigest()
+    except (OSError, json.JSONDecodeError, PolicyManifestError, TypeError):
+        return None
+    status_counts = summary.get("status_counts_by_source_group")
+    source_count = summary.get("unique_source_groups_with_result")
+    content_request_count = summary.get("content_request_count")
+    if not isinstance(status_counts, dict) or type(source_count) is not int or source_count < 0:
+        return None
+    if any(not isinstance(status, str) or type(count) is not int or count < 0 for status, count in status_counts.items()):
+        return None
+    if sum(status_counts.values()) != source_count:
+        return None
+    if (
+        child_started < run_started
+        or summary.get("adapter_version") != crawler.ADAPTER_VERSION
+        or summary.get("tracker_sha256") != tracker_hash
+        or type(content_request_count) is not int
+        or content_request_count < 0
+        or type(summary.get("content_fetch_started")) is not bool
+        or summary.get("content_fetch_started") is not (content_request_count > 0)
+        or type(summary.get("ingest_post_phase_invoked")) is not bool
+        or type(summary.get("jobs_staged")) is not int
+        or summary.get("jobs_staged") < 0
+        or type(summary.get("jobs_skipped")) is not int
+        or summary.get("jobs_skipped") < 0
+    ):
+        return None
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -225,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         lock = exclusive_lock(lock_path)
         lock.__enter__()
-    except OSError:
+    except RunLockBusy:
         print("A scheduled employer career run already holds the lock; this invocation is skipped.")
         return 0
 
@@ -250,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
             base_summary.update({
                 "run_finished_at_utc": datetime.now(timezone.utc).isoformat(),
                 "crawler_exit_code": 0,
+                "crawler_invoked": False,
+                "crawler_summary_valid": False,
                 "result": "no approved source URLs; no content requests made",
             })
             _write_summary(summary_path, base_summary)
@@ -273,25 +331,30 @@ def main(argv: list[str] | None = None) -> int:
         with log_path.open("w", encoding="utf-8") as log:
             completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False)
         crawler_summary_path = output_dir / "crawl_state" / "run_summary.json"
-        crawler_summary: dict[str, Any] = {}
-        if crawler_summary_path.is_file():
-            try:
-                crawler_summary = json.loads(crawler_summary_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                crawler_summary = {}
+        crawler_summary = _current_crawler_summary(crawler_summary_path, filtered_tracker, started)
+        summary_valid = crawler_summary is not None
+        crawler_summary = crawler_summary or {}
+        run_ok = completed.returncode == 0 and summary_valid
         base_summary.update({
             "run_finished_at_utc": datetime.now(timezone.utc).isoformat(),
             "crawler_exit_code": completed.returncode,
-            "content_fetch_started": True,
-            "ingest_post_phase_invoked": crawler_summary.get("ingest_post_phase_invoked", False),
-            "jobs_staged": crawler_summary.get("jobs_staged", 0),
-            "jobs_skipped": crawler_summary.get("jobs_skipped", 0),
+            "crawler_invoked": True,
+            "crawler_summary_valid": summary_valid,
+            "content_fetch_started": crawler_summary.get("content_fetch_started") if summary_valid else None,
+            "ingest_post_phase_invoked": crawler_summary.get("ingest_post_phase_invoked") if summary_valid else None,
+            "jobs_staged": crawler_summary.get("jobs_staged") if summary_valid else None,
+            "jobs_skipped": crawler_summary.get("jobs_skipped") if summary_valid else None,
             "crawler_log": str(log_path),
-            "result": "completed" if completed.returncode == 0 else "crawler failed; inspect private log",
+            "content_request_count": crawler_summary.get("content_request_count") if summary_valid else None,
+            "result": (
+                "completed" if run_ok else
+                ("crawler summary missing or invalid; inspect private log" if completed.returncode == 0 else "crawler failed; inspect private log")
+            ),
         })
         _write_summary(summary_path, base_summary)
-        print(f"Scheduled employer career run exit={completed.returncode}; source groups={selected_summary['selected_source_groups']}; summary={summary_path}")
-        return completed.returncode
+        result_code = completed.returncode if completed.returncode != 0 else (0 if summary_valid else 2)
+        print(f"Scheduled employer career run result={base_summary['result']}; exit={result_code}; source groups={selected_summary['selected_source_groups']}; summary={summary_path}")
+        return result_code
     except (PolicyManifestError, FileNotFoundError, ValueError) as exc:
         base_summary = {
             "run_started_at_utc": started.isoformat(),

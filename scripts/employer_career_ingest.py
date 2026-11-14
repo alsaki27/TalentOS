@@ -55,7 +55,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v27"
+ADAPTER_VERSION = "employer-career-ingest-v28"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -73,6 +73,8 @@ _host_locks: dict[str, threading.Lock] = {}
 _host_lock_guard = threading.Lock()
 _last_host_request: dict[str, float] = {}
 _request_session_local = threading.local()
+_content_request_count = 0
+_content_request_counter_lock = threading.Lock()
 _shared_host_rate_dir: Path | None = None
 SHARED_HOST_LOCK_TIMEOUT_SECONDS = 300.0
 
@@ -283,8 +285,10 @@ def _request(
     timeout: int = 10,
     session: requests.Session | None = None,
     headers: dict[str, str] | None = None,
+    auth: tuple[str, str] | None = None,
     allowed_hosts: set[str] | None = None,
 ) -> requests.Response:
+    global _content_request_count
     current = url
     allowed_hostnames = {host.lower().rstrip(".") for host in allowed_hosts} if allowed_hosts is not None else None
     for _ in range(6):
@@ -313,9 +317,21 @@ def _request(
                 with lock:
                     requester = session if session is not None else _thread_session()
                     def send() -> requests.Response:
+                        global _content_request_count
+                        if check_robots:
+                            with _content_request_counter_lock:
+                                _content_request_count += 1
                         request_headers = {"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}
                         request_headers.update(headers or {})
-                        return requester.get(current, headers=request_headers, timeout=timeout, allow_redirects=False, stream=True)
+                        request_kwargs: dict[str, Any] = {
+                            "headers": request_headers,
+                            "timeout": timeout,
+                            "allow_redirects": False,
+                            "stream": True,
+                        }
+                        if auth is not None:
+                            request_kwargs["auth"] = auth
+                        return requester.get(current, **request_kwargs)
                     if _shared_host_rate_dir is not None:
                         response = _shared_host_request(parsed.hostname or "", rules, send, user_agent=request_user_agent)
                     else:
@@ -609,6 +625,8 @@ def _platform(url: str) -> tuple[str, str] | None:
     parts = [urllib.parse.unquote(x) for x in p.path.split("/") if x]
     if host == "usajobs.gov" or host.endswith(".usajobs.gov"):
         return "usajobs", host
+    if host == "dayforcehcm.com" or host.endswith(".dayforcehcm.com"):
+        return "dayforce", host
     if host.endswith("greenhouse.io") and parts:
         return "greenhouse", parts[0]
     if host.endswith("lever.co") and parts:
@@ -1800,6 +1818,7 @@ def _workday_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, A
 
 def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Response:
     """POST a read-only Workday search request after the same host/robots checks."""
+    global _content_request_count
     parsed = _public_https_url(url)
     root = f"https://{parsed.netloc}"
     rp = _robots_parser(root)
@@ -1809,6 +1828,9 @@ def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Respons
         for attempt in range(3):
             try:
                 def send() -> requests.Response:
+                    global _content_request_count
+                    with _content_request_counter_lock:
+                        _content_request_count += 1
                     return requests.post(url, data=body, headers={"User-Agent": UA, "Accept": "application/json", "Content-Type": "application/json"}, timeout=timeout, allow_redirects=False)
                 if _shared_host_rate_dir is not None:
                     response = _shared_host_request(parsed.hostname or "", rp, send)
@@ -2972,6 +2994,147 @@ def _is_usajobs_host(host: str) -> bool:
     return normalized == "usajobs.gov" or normalized.endswith(".usajobs.gov")
 
 
+def _is_dayforce_host(host: str) -> bool:
+    normalized = host.lower().rstrip(".")
+    return normalized == "dayforcehcm.com" or normalized.endswith(".dayforcehcm.com")
+
+
+def _dayforce_api_config(url: str) -> tuple[str, str, str, str | None] | None:
+    """Return an explicitly configured Dayforce tenant path and customer credentials."""
+    raw_mapping = os.environ.get("TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON", "")
+    if not raw_mapping:
+        return None
+    try:
+        mapping = json.loads(raw_mapping)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(mapping, dict):
+        return None
+
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not _is_dayforce_host(host):
+        return None
+    config = mapping.get(normalize_source_url(url)) or mapping.get(host)
+    if not isinstance(config, dict):
+        return None
+    username = config.get("username")
+    password = config.get("password")
+    company_name = config.get("company_name")
+    if not all(isinstance(value, str) and value.strip() for value in (username, password, company_name)):
+        return None
+    company_name = company_name.strip()
+    if len(company_name) > 128 or any(ord(char) < 32 for char in company_name):
+        return None
+    board_code = config.get("internal_job_board_code")
+    if board_code is not None and (not isinstance(board_code, str) or not board_code.strip()):
+        return None
+    return username.strip(), password, company_name, board_code.strip() if isinstance(board_code, str) else None
+
+
+def _valid_dayforce_job_url(value: Any) -> str | None:
+    candidate = _text(value)
+    if not candidate:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(candidate)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        if (parsed.scheme != "https" or parsed.port not in (None, 443)
+                or parsed.username or parsed.password or not _is_dayforce_host(host)):
+            return None
+    except ValueError:
+        return None
+    return candidate
+
+
+def _dayforce_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Read active job postings from the employer-authorized Dayforce JobFeeds API."""
+    config = _dayforce_api_config(url)
+    if config is None:
+        raise ScrapeFailure("Dayforce requires an authorized tenant JobFeeds configuration")
+    username, password, company_name, board_code = config
+    parsed_source = urllib.parse.urlparse(url)
+    host = (parsed_source.hostname or "").lower().rstrip(".")
+    if parsed_source.scheme != "https" or parsed_source.port not in (None, 443):
+        raise ScrapeFailure("Dayforce JobFeeds requires an HTTPS source on port 443")
+    company_path = urllib.parse.quote(company_name, safe="")
+    query_values = {"includeActivePostingOnly": "true"}
+    if board_code:
+        query_values["internalJobBoardCode"] = board_code
+    query = urllib.parse.urlencode(query_values)
+    # Dayforce's documented root redirects each customer to its current versioned
+    # API path. Keep the credential-bearing request on that documented host.
+    api_host = "www.dayforcehcm.com"
+    api_url = f"https://{api_host}/api/{company_path}/V1/JobFeeds?{query}"
+    response = _request(
+        api_url,
+        timeout=30,
+        headers={"Accept": "application/json"},
+        auth=(username, password),
+        allowed_hosts={api_host},
+    )
+    if response.status_code != 200:
+        raise ScrapeFailure(f"Dayforce JobFeeds API returned HTTP {response.status_code}")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ScrapeFailure("Dayforce JobFeeds API returned invalid JSON") from exc
+    if not isinstance(payload, list):
+        raise ScrapeFailure("Dayforce JobFeeds API response was not a posting list")
+
+    jobs: list[dict[str, Any]] = []
+    notes: list[str] = []
+    seen_ids: set[str] = set()
+    for row in payload:
+        if not isinstance(row, dict):
+            notes.append("Dayforce JobFeeds returned a non-object posting")
+            continue
+        title = _text(row.get("Title"))
+        external_id = _text(row.get("ReferenceNumber"))
+        # Preserve the public job details page where available; ApplyUrl is a
+        # fallback for tenants whose details field is missing or non-public.
+        job_details_url = _valid_dayforce_job_url(row.get("JobDetailsUrl"))
+        apply_url = _valid_dayforce_job_url(row.get("ApplyUrl"))
+        job_url = job_details_url or apply_url
+        if not title or not external_id or not job_url:
+            notes.append("Dayforce posting omitted a valid title, reference number, or HTTPS Dayforce job URL")
+            continue
+        if external_id in seen_ids:
+            notes.append("Dayforce JobFeeds returned a duplicate reference number")
+            continue
+        seen_ids.add(external_id)
+
+        description = _clean_description(row.get("Description"))
+        if not description or len(description) < 80:
+            notes.append(f"Dayforce posting {external_id} returned a short or empty description")
+        location = ", ".join(dict.fromkeys(
+            value for value in (_text(row.get("City")), _text(row.get("State")), _text(row.get("Country"))) if value
+        )) or None
+        jobs.append({
+            "title": title,
+            "company": _text(row.get("CompanyName")) or _text(row.get("ParentCompanyName")) or employer,
+            "location": location,
+            "source_url": job_url,
+            "external_job_id": external_id,
+            "description_text": description,
+            "snippet": (description or "")[:300] or None,
+            "raw": {
+                "source_provider": "Dayforce",
+                "ats": "dayforce",
+                "posted_at": row.get("DatePosted"),
+                "last_updated_at": row.get("LastUpdated"),
+                "reference_number": external_id,
+                "job_details_url": job_details_url,
+                "employment_indicator": _text(row.get("EmploymentIndicator")),
+                "job_function": _text(row.get("JobFunction")),
+                "api_retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+            },
+        })
+
+    complete = not notes
+    return jobs, complete, list(dict.fromkeys(notes))
+
+
 def _usajobs_api_config(url: str) -> tuple[str, str, str] | None:
     """Return registered USAJOBS credentials and an exact employer org code."""
     api_key = (os.environ.get("USAJOBS_API_KEY") or "").strip()
@@ -3164,6 +3327,8 @@ def _source_policy_hold(host: str, url: str = "") -> tuple[str, str] | None:
         return "NEOGOV terms prohibit automated scraping and competitive-product use of public career pages", "NEOGOV GovernmentJobs/SchoolJobs source held pending an authorized feed agreement"
     if _is_usajobs_host(host) and _usajobs_api_config(url) is None:
         return "USAJOBS requires a registered API key and exact organization-code mapping", "USAJOBS source held until the official API integration is configured"
+    if _is_dayforce_host(host) and _dayforce_api_config(url) is None:
+        return "Dayforce requires employer-authorized JobFeeds access and tenant credentials", "Dayforce source held until an authorized tenant configuration is supplied"
     if host == "jobvite.com" or host.endswith(".jobvite.com"):
         return "Jobvite terms prohibit automated scraping and commercial reuse of postings", "Jobvite terms prohibit automated scraping; source held for authorized integration"
     if host == "paycom.com" or host.endswith(".paycom.com") or host == "paycomonline.net" or host.endswith(".paycomonline.net"):
@@ -3208,6 +3373,9 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
             if p[0] == "usajobs":
                 jobs, complete, notes = _usajobs_jobs(url, employer)
                 method = "official_search_api:usajobs-v1"
+            elif p[0] == "dayforce":
+                jobs, complete, notes = _dayforce_jobs(url, employer)
+                method = "authorized_customer_api:dayforce-jobfeeds-v1"
             elif p[0] == "rippling":
                 jobs, complete, notes = _rippling_jobs(url, p[1], employer)
                 method = "public_board_pagination:rippling"
@@ -3395,6 +3563,7 @@ def summarize_results(results_path: Path, jobs_path: Path) -> dict[str, Any]:
 
 def main() -> int:
     global _shared_host_rate_dir
+    global _content_request_count
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_TRACKER)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/employer-career-ingest"))
@@ -3413,6 +3582,8 @@ def main() -> int:
     if args.ingest and args.limit:
         parser.error("--ingest cannot be combined with --limit; complete the full scrape first")
     _shared_host_rate_dir = args.shared_host_rate_dir.resolve() if args.shared_host_rate_dir else None
+    with _content_request_counter_lock:
+        _content_request_count = 0
     if _shared_host_rate_dir is not None:
         _shared_host_rate_dir.mkdir(parents=True, exist_ok=True)
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -3502,6 +3673,8 @@ def main() -> int:
                 results.write(json.dumps(result_row, ensure_ascii=False) + "\n"); results.flush()
                 print(f"[{result_row['status']}] {result_row['job_count']} jobs | {result_row['url']} | {result_row['method']}" + (f" | {result_row['error']}" if result_row.get("error") else ""))
     summary = {**run_manifest, **summarize_results(results_path, jobs_path)}
+    summary["content_request_count"] = _content_request_count
+    summary["content_fetch_started"] = _content_request_count > 0
     summary["ingest_post_phase_invoked"] = False
     summary["jobs_staged"] = 0
     summary["jobs_skipped"] = 0

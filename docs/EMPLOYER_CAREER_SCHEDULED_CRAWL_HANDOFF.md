@@ -16,6 +16,10 @@ repository.
 - Scheduled runs refresh completed sources after a configurable age while
   retaining attempt/job lineage. The default scheduled refresh interval is 24
   hours.
+- The scheduled summary reports `crawler_invoked` separately from the
+  crawler's measured `content_request_count`; it calls a run complete only
+  when the child summary matches the current adapter version and filtered
+  tracker hash.
 - TalentOS staging remains off unless the operator supplies `--ingest` and
   `INGEST_SECRET`.
 
@@ -51,6 +55,9 @@ prove that each source is the named vendor or that collection is authorized.
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
 ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo.
+The v28 Dayforce adapter calls the customer `GET JobFeeds` API for the five
+identified routes, but remains held until each employer provides its authorized
+tenant configuration and the source has an approved permission-manifest row.
 The v27 USAJOBS adapter uses the official Search API, but it stays held until
 the private runner has a registered API key, API email, and exact URL-or-host-
 to-organization-code map.
@@ -131,6 +138,22 @@ attribution and avoid implying OPM endorsement. See the [Search API reference](h
 [quick start](https://developer.usajobs.gov/general/quick-start).
 The scheduler still requires a reviewed approved row for each exact tracker
 URL; record the API registration and accepted terms as the evidence reference.
+
+For Dayforce, the private runner must provide
+`TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON`, keyed by the exact normalized source
+URL or its Dayforce hostname. Each value must provide `company_name` (the
+Dayforce API CompanyName path segment), `username`, and `password`; use the
+optional `internal_job_board_code` when one tenant serves distinct career
+sites. Store this
+JSON in the private secret store; do not add credentials to the tracker or
+repository. The employer must enable external job-board sourcing and grant the
+required web-services role access. The adapter requests active postings only,
+starts at Dayforce's documented `www.dayforcehcm.com` API root even when the
+public portal uses a tenant subdomain, honors robots and same-host redirect
+allowlists, and copies the returned public job URL without opening it. The
+scheduled runner still requires an approved permission
+manifest row for the source URL. See Dayforce's [Get Job Postings API guide](https://dayforce.fluidtopics.net/r/documents/Dayforce-RESTful-Web-Services-Developer-Guide/RESTful-Get-Job-Postings)
+and [customer configuration guide](https://help.dayforce.com/r/documents/Recruiting-Guide/Track-Candidate-Source).
 
 ## Start recurring runs
 
