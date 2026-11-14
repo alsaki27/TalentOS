@@ -36,6 +36,18 @@ fallback may extract some of these, but the route inventory does not prove full
 adapter coverage. Treat a source as ready only after the result is complete and
 the visible job count/detail checks pass.
 
+An offline v28 history snapshot for those 9,492 routes recorded 838 `scraped`,
+215 `no_jobs`, 5,649 `partial`, 2,141 `error`, 587 `blocked`, 56
+`needs_revalidation`, five `held`, and one `payload_count_mismatch`. These are
+historical outcomes, not current readiness or permission. Of 9,074 hosts, 8,834
+occur only once, so the remaining adapter work is mostly a long tail of custom
+employer pages. The largest recognizable unclassified host groups were
+GovernmentJobs (69), ADP (25), UKG/UltiPro (27), Paycom (22), and Jobvite (7);
+these should stay held under the source policy. Smaller technical candidates
+for evidence-backed adapter work include Dayforce (5), Taleo Business Edition
+(5), AppliTrack (4), USAJobs (3), and JobDiva (3). Host-pattern counts do not
+prove that each source is the named vendor or that collection is authorized.
+
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
 ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo.
