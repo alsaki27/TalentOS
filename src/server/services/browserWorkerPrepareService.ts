@@ -198,6 +198,9 @@ async function insertPrepareEnrollment(
   if (posting && (!linkedInJobUrl.test(source.job_url) || jobUrl.href !== posting)) {
     throw new BrowserWorkerPrepareError(409, "The ticket's stored apply URL does not match the LinkedIn posting");
   }
+  if (posting && source.byte_length >= 2_000_000) {
+    throw new BrowserWorkerPrepareError(409, "The current approved PDF must be smaller than 2 MB for LinkedIn");
+  }
   if (!((source.storage_provider === "sharepoint" && source.storage_url) || (source.storage_provider === "r2" && source.file_path))) {
     throw new BrowserWorkerPrepareError(409, "An archived SharePoint or R2 PDF is required; regeneration is not allowed");
   }

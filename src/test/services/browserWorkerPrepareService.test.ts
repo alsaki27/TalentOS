@@ -315,6 +315,15 @@ describe("attended LinkedIn production pilot", () => {
     expect(downloadResumeFile).not.toHaveBeenCalled();
   });
 
+  it("reports an oversized current export without downloading a different PDF", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedSource, byte_length: 2_000_000 });
+    await expect(enrollPilotDevice(pairing(), app)).rejects.toMatchObject({
+      status: 409, message: "The current approved PDF must be smaller than 2 MB for LinkedIn",
+    });
+    expect(downloadResumeFile).not.toHaveBeenCalled();
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
+
   it("returns safe pinned metadata to the enrolled device and verifies mode on claim", async () => {
     const queueState = { stage: "ready_for_application" };
     vi.mocked(queryOne).mockResolvedValueOnce({ ...linkedEnrollment, enrollmentId: enrollment, applicationId: app, queueState })
