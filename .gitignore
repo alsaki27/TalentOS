@@ -67,6 +67,8 @@ apify_tokens.txt
 
 # Employer career crawl checkpoints and private TalentOS source mapping.
 /outputs/employer-career-ingest-run*/
+/outputs/employer-career-scheduled/
+/outputs/career-scheduled-test-tmp/
 /data/talentos-employer-careers/career_page_tracker.csv
 /data/talentos-employer-careers/career_source_dispositions_*.csv
 /data/talentos-employer-careers/readiness_snapshot_*.json

@@ -46,6 +46,12 @@ Run/resume the full source inventory locally:
 python scripts/employer_career_ingest.py --workers 4
 ```
 
+For recurring work, use the policy-gated runner in
+[`docs/EMPLOYER_CAREER_SCHEDULED_CRAWL_HANDOFF.md`](../../docs/EMPLOYER_CAREER_SCHEDULED_CRAWL_HANDOFF.md).
+The raw crawler command above is a development interface; it does not read the
+per-URL collection-permission manifest. The scheduled runner filters to
+approved, unexpired evidence and keeps TalentOS ingestion off by default.
+
 The default output directory is `outputs/employer-career-ingest/`:
 
 - `source_results.jsonl` — per-URL status, completeness, adapter, job count,

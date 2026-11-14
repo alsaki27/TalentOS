@@ -22,13 +22,14 @@ import errno
 import hashlib
 from html.parser import HTMLParser
 import json
+import math
 import os
 import re
 import socket
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import urllib.parse
 import urllib.robotparser
 import uuid
@@ -2740,13 +2741,42 @@ def _interleave_sources_by_host(sources: list[dict[str, Any]], workers: int) -> 
     return ordered
 
 
-def _read_done(results_path: Path) -> dict[str, dict[str, Any]]:
+def _read_done(
+    results_path: Path,
+    refresh_completed_after_hours: float = 0,
+    *,
+    now: datetime | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return reusable complete outcomes, optionally expiring old successes.
+
+    Scheduled runs should periodically recheck complete boards so closed and
+    newly posted roles are reflected. Legacy results without a completion
+    timestamp are treated as stale only when a positive refresh TTL is set.
+    """
     done: dict[str, dict[str, Any]] = {}
+    cutoff = None
+    if refresh_completed_after_hours > 0:
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        cutoff = current.astimezone(timezone.utc) - timedelta(hours=refresh_completed_after_hours)
     if results_path.exists():
         for line in results_path.read_text(encoding="utf-8").splitlines():
             try:
                 item = json.loads(line)
                 if item.get("status") in ("scraped", "no_jobs") and item.get("complete") is True and item.get("adapter_version") == ADAPTER_VERSION:
+                    if cutoff is not None:
+                        completed_at = item.get("completed_at_utc") or item.get("crawled_at_utc")
+                        try:
+                            completed = datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+                            if completed.tzinfo is None:
+                                completed = completed.replace(tzinfo=timezone.utc)
+                        except (TypeError, ValueError):
+                            # Historical checkpoints predate timestamps and
+                            # should be refreshed once when a TTL is enabled.
+                            continue
+                        if completed <= cutoff:
+                            continue
                     done[item["url"]] = item
             except (json.JSONDecodeError, KeyError):
                 continue
@@ -3144,11 +3174,14 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="debug cap on unique career URLs")
     parser.add_argument("--ingest", action="store_true", help="POST scraped jobs to Job CEO after scraping")
     parser.add_argument("--include-completed", action="store_true", help="re-scrape completed URLs")
+    parser.add_argument("--refresh-completed-after-hours", type=float, default=0, help="re-scrape complete sources whose latest current-version result is older than this many hours; 0 preserves legacy skip behavior")
     parser.add_argument("--skip-attempted", action="store_true", help="finish one inventory pass without retrying current-version partial, blocked, or failed groups; ignored with --include-completed")
     parser.add_argument("--shared-host-rate-dir", type=Path, default=Path(os.environ["TALENTOS_SHARED_HOST_RATE_DIR"]) if os.environ.get("TALENTOS_SHARED_HOST_RATE_DIR") else None, help="shared writable directory for cross-process per-host crawl delays (also TALENTOS_SHARED_HOST_RATE_DIR)")
     args = parser.parse_args()
     if args.workers < 1 or args.workers > 64:
         parser.error("--workers must be between 1 and 64")
+    if not math.isfinite(args.refresh_completed_after_hours) or args.refresh_completed_after_hours < 0:
+        parser.error("--refresh-completed-after-hours must be a finite non-negative number")
     if args.ingest and args.limit:
         parser.error("--ingest cannot be combined with --limit; complete the full scrape first")
     _shared_host_rate_dir = args.shared_host_rate_dir.resolve() if args.shared_host_rate_dir else None
@@ -3178,12 +3211,16 @@ def main() -> int:
         "limit": args.limit,
         "ingest_requested": args.ingest,
         "include_completed": args.include_completed,
+        "refresh_completed_after_hours": args.refresh_completed_after_hours,
         "skip_attempted": bool(args.skip_attempted and not args.include_completed),
         "shared_host_rate_dir": str(_shared_host_rate_dir) if _shared_host_rate_dir else None,
     }
     (args.output_dir / "run_manifest.json").write_text(json.dumps(run_manifest, indent=2), encoding="utf-8")
     if args.limit: sources = sources[:args.limit]
-    done = {} if args.include_completed else _read_done(results_path)
+    done = {} if args.include_completed else _read_done(
+        results_path,
+        refresh_completed_after_hours=args.refresh_completed_after_hours,
+    )
     pending = sources if args.include_completed else _pending_sources(sources, done)
     already_complete = len(sources) - len(pending)
     attempted_skipped = 0
@@ -3214,6 +3251,7 @@ def main() -> int:
                     unique_jobs.append(job)
                 result_row = {k: v for k, v in result.items() if k != "jobs"}
                 result_row["crawl_attempt_id"] = attempt_id
+                result_row["completed_at_utc"] = datetime.now(timezone.utc).isoformat()
                 if len(unique_jobs) != len(result["jobs"]):
                     # Duplicate details cannot account for every listed role.
                     result_row["complete"] = False
@@ -3236,6 +3274,9 @@ def main() -> int:
                 results.write(json.dumps(result_row, ensure_ascii=False) + "\n"); results.flush()
                 print(f"[{result_row['status']}] {result_row['job_count']} jobs | {result_row['url']} | {result_row['method']}" + (f" | {result_row['error']}" if result_row.get("error") else ""))
     summary = {**run_manifest, **summarize_results(results_path, jobs_path)}
+    summary["ingest_post_phase_invoked"] = False
+    summary["jobs_staged"] = 0
+    summary["jobs_skipped"] = 0
     (args.output_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print("source status counts: " + json.dumps(summary["status_counts_by_source_group"], sort_keys=True))
     print(f"jobs added this run: {jobs_written}; all unique job records: {jobs_path}")
@@ -3249,6 +3290,10 @@ def main() -> int:
         readiness = build_report(args.input, results_path, jobs_path, args.output_dir / "readiness", ADAPTER_VERSION)
         ready_path = Path(readiness["ready_jobs_path"])
         staged, skipped = post_batches(ready_path, base, secret)
+        summary["ingest_post_phase_invoked"] = True
+        summary["jobs_staged"] = staged
+        summary["jobs_skipped"] = skipped
+        (args.output_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         print(f"ingest summary: staged={staged}, skipped={skipped}")
     else:
         print("dry-run only: no data was posted to TalentOS (pass --ingest to stage jobs)")
