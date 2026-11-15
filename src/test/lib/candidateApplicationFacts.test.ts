@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  APPLICATION_PROFILE_NOTES_SECTION,
   parseApplicationFactDraft,
   resolveApplicationFacts,
   type CandidateApplicationFact,
@@ -33,6 +34,15 @@ function fact(overrides: Partial<CandidateApplicationFact> = {}): CandidateAppli
 }
 
 describe("Candidate application facts", () => {
+  it("keeps staff notes out of the worker even when a legacy client approved a note", () => {
+    const note = fact({ section: APPLICATION_PROFILE_NOTES_SECTION, valueKind: "text", value: "Private staff context" });
+    expect(parseApplicationFactDraft(note)).not.toBeNull();
+    expect(parseApplicationFactDraft({ ...note, jobId: job })).toBeNull();
+    expect(resolveApplicationFacts([note], candidate, job, {}, undefined, now))
+      .toEqual({ answers: {}, evidence: {}, blocked: [] });
+    expect(resolveApplicationFacts([note], candidate, job, {}, [note.question], now).answers).toEqual({});
+  });
+
   it("validates typed values and keeps false and zero distinct from unknown", () => {
     const draft = fact();
     expect(parseApplicationFactDraft(draft)?.value).toBe(false);
