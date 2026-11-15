@@ -1,14 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import ApplicationsDataTable, { type DashboardApplication } from "./shared/ApplicationsDataTable";
-import type { InterviewDetails } from "./shared/ScheduleInterviewModal";
-import ApplicationNotesModal from "./shared/ApplicationNotesModal";
+import { useState, type FormEvent } from "react";
+import { X } from "lucide-react";
+import CandidateApplicationsDashboard, { type CandidateApplicationRow } from "./CandidateApplicationsDashboard";
+import styles from "./CandidateApplicationWorkspace.module.css";
 
-type InterviewRecord = DashboardApplication & {
-  application_resume_filename?: string | null;
-  application_stage?: string | null;
-};
+type InterviewRecord = CandidateApplicationRow;
 
 function dateInputValue(value: string | null | undefined) {
   if (!value) return "";
@@ -16,14 +13,14 @@ function dateInputValue(value: string | null | undefined) {
   return match?.[1] ?? "";
 }
 
-function CustomInterviewForm({
+export function CustomInterviewForm({
   candidateId,
   interview,
   onClose,
   onSaved,
 }: {
   candidateId: string;
-  interview: InterviewRecord | null;
+  interview: Pick<InterviewRecord, "application_id" | "job_title" | "company_name" | "location" | "applied_at" | "source_url" | "application_resume_filename"> | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -73,13 +70,18 @@ function CustomInterviewForm({
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <form className="modal" onSubmit={save} onClick={(event) => event.stopPropagation()} style={{ maxWidth: 620, maxHeight: "90vh", overflowY: "auto" }}>
-        <h2>{interview ? "Edit custom interview" : "Add custom interview"}</h2>
-        <p className="muted" style={{ fontSize: 12, marginTop: -6, marginBottom: 16 }}>
+    <div className={styles.modalBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <form className={styles.customInterviewModal} onSubmit={save} onMouseDown={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="custom-interview-title-heading">
+        <header className={styles.stageModalHeader}>
+          <div><span className={styles.eyebrow}>APPLICATION RECORD</span><h2 id="custom-interview-title-heading">{interview ? "Edit interview record" : "Add interview record"}</h2>
+            <p>Keep the application, resume, and interview tracking details together.</p></div>
+          <button className={styles.iconButton} type="button" aria-label="Close form" onClick={onClose} disabled={saving}><X size={19} /></button>
+        </header>
+        <div className={styles.customInterviewBody}>
+          <p className="muted" style={{ fontSize: 12, margin: 0 }}>
           This creates an interview-stage application record and syncs it to Application Records and the candidate portal.
-        </p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          </p>
+        <div className={styles.customInterviewFields}>
           <div className="field-group">
             <label htmlFor="custom-interview-title">Job title *</label>
             <input id="custom-interview-title" value={jobTitle} onChange={(event) => setJobTitle(event.target.value)} maxLength={300} required />
@@ -115,60 +117,23 @@ function CustomInterviewForm({
           )}
         </div>
         {error && <div role="alert" style={{ color: "var(--danger, #ef4444)", fontSize: 12, marginTop: 8 }}>{error}</div>}
-        <div className="modal-actions">
-          <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? "Saving…" : interview ? "Save changes" : "Add interview"}</button>
         </div>
+        <footer className={styles.modalFooter}>
+          <button type="button" onClick={onClose} disabled={saving}>Cancel</button>
+          <button type="submit" className="btn-primary" disabled={saving}>{saving ? "Saving…" : interview ? "Save changes" : "Add interview"}</button>
+        </footer>
       </form>
     </div>
   );
 }
 
 export default function CustomInterviewHub({ candidateId, candidateName }: { candidateId: string; candidateName: string }) {
-  const [interviews, setInterviews] = useState<InterviewRecord[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [formInterview, setFormInterview] = useState<InterviewRecord | null | "new">(null);
-  const [notesApplicationId, setNotesApplicationId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const response = await fetch(`/api/candidates/${candidateId}/custom-interviews`, { cache: "no-store" });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result.error || "Failed to load interviews.");
-      setInterviews(result.interviews ?? []);
-    } catch (cause: any) {
-      setError(cause?.message || "Failed to load interviews.");
-    } finally {
-      setLoading(false);
-    }
-  }, [candidateId]);
-
-  useEffect(() => { void load(); }, [load]);
-
-  async function changeStatus(applicationId: string, status: string, interviewDetails?: InterviewDetails) {
-    setError("");
-    try {
-      const response = await fetch(`/api/applications/${applicationId}`, {
-        method: "PATCH",
-        cache: "no-store",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(interviewDetails ? { status, interview: interviewDetails } : { status }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setError(result.error || "The application stage could not be updated.");
-        return;
-      }
-      await load();
-    } catch {
-      setError("The application stage could not be updated. Check your connection and try again.");
-    }
-  }
-
-  async function removeInterview(interview: InterviewRecord) {
+  async function removeInterview(interview: CandidateApplicationRow) {
     const label = `${interview.company_name} · ${interview.job_title}`;
     const confirmed = window.confirm(`Remove ${label}? Its application record, interview schedules, panel assignments, and submitted interview feedback will be permanently deleted.`);
     if (!confirmed) return;
@@ -178,7 +143,7 @@ export default function CustomInterviewHub({ candidateId, candidateName }: { can
       const response = await fetch(`/api/candidates/${candidateId}/custom-interviews/${interview.application_id}`, { method: "DELETE", cache: "no-store" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(result.error || "The interview could not be removed.");
-      await load();
+      setRefreshToken((value) => value + 1);
     } catch (cause: any) {
       setError(cause?.message || "The interview could not be removed.");
     } finally {
@@ -190,52 +155,32 @@ export default function CustomInterviewHub({ candidateId, candidateName }: { can
     <section style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div className="page-header" style={{ alignItems: "center" }}>
         <div>
-          <h2 style={{ margin: 0 }}>Interview Hub</h2>
+          <h2 style={{ margin: 0 }}>Custom Interview</h2>
           <p className="muted" style={{ margin: "5px 0 0", fontSize: 12 }}>
-            Current interview-stage applications for {candidateName}, including manually added interviews.
+            Manage custom interview records for {candidateName}, with the same filters, details, stages, and activity as Application Records.
           </p>
         </div>
         <button type="button" className="btn btn-primary" onClick={() => setFormInterview("new")}>+ Add interview</button>
       </div>
 
       {error && <div role="alert" style={{ padding: 10, borderRadius: 8, color: "var(--danger, #ef4444)", background: "rgba(244,63,94,0.08)", fontSize: 12 }}>{error}</div>}
-      {loading ? (
-        <div className="card" style={{ padding: 24, color: "var(--ink-soft)" }}>Loading interview records…</div>
-      ) : interviews.length === 0 ? (
-        <div className="card" style={{ padding: 28, textAlign: "center", color: "var(--ink-soft)" }}>
-          No applications are currently at the interview stage. Add an interview to start tracking one here.
-        </div>
-      ) : (
-        <div className="card" style={{ padding: 16 }}>
-          <ApplicationsDataTable
-            applications={interviews}
-            onStatusChange={changeStatus}
-            onNotesOpen={setNotesApplicationId}
-            onInterviewsChanged={() => { void load(); }}
-            onCustomInterviewEdit={(application) => setFormInterview(application as InterviewRecord)}
-            onCustomInterviewRemove={(application) => { void removeInterview(application as InterviewRecord); }}
-            readOnly={false}
-            totalCount={interviews.length}
-            page={1}
-            pageSize={Math.max(1, interviews.length)}
-            onPageChange={() => undefined}
-            sort="applied_at"
-            order="desc"
-            onSort={() => undefined}
-          />
-          {removingId && <p className="muted" style={{ fontSize: 11, margin: "10px 0 0" }}>Removing interview…</p>}
-        </div>
-      )}
+      <CandidateApplicationsDashboard
+        candidateId={candidateId}
+        customInterviewOnly
+        refreshToken={refreshToken}
+        onCustomInterviewEdit={setFormInterview}
+        onCustomInterviewRemove={(application) => { void removeInterview(application); }}
+      />
+      {removingId && <p className="muted" style={{ fontSize: 11, margin: "-8px 0 0" }}>Removing interview…</p>}
 
       {formInterview !== null && (
         <CustomInterviewForm
           candidateId={candidateId}
           interview={formInterview === "new" ? null : formInterview}
           onClose={() => setFormInterview(null)}
-          onSaved={() => { setFormInterview(null); void load(); }}
+          onSaved={() => { setFormInterview(null); setRefreshToken((value) => value + 1); }}
         />
       )}
-      {notesApplicationId && <ApplicationNotesModal applicationId={notesApplicationId} onClose={() => setNotesApplicationId(null)} />}
     </section>
   );
 }

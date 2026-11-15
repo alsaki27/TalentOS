@@ -1,0 +1,53 @@
+.track {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  color: var(--p-ink-soft, var(--ink-soft));
+}
+.track li {
+  position: relative;
+  display: grid;
+  grid-template-rows: 28px auto auto;
+  gap: 5px;
+  justify-items: center;
+  align-items: center;
+  text-align: center;
+  font-size: clamp(.67rem, 1.5vw, .85rem);
+  font-weight: 650;
+}
+.track li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 19px);
+  width: calc(100% - 38px);
+  height: 2px;
+  background: var(--p-border, var(--border));
+}
+.track li[data-state="complete"]::after {
+  background: var(--p-navy, var(--accent, #4bab83));
+}
+.dot {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+}
+.track li[data-state="complete"] .dot {
+  color: var(--p-navy, var(--accent, #4bab83));
+}
+.track li[data-state="current"] {
+  color: var(--p-ink, var(--ink));
+  font-weight: 800;
+}
+.track li[data-state="current"] .dot {
+  background: var(--p-navy-fill, #5966cd);
+  color: white;
+  border-color: transparent;
+}
+.track small { font-weight: 600; line-height: 1.2; }
+.visuallyHidden { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }

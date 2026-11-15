@@ -60,7 +60,7 @@ describe("candidate portal read model", () => {
   });
 
   it("carries each interview's saved timezone into the application progress timeline", async () => {
-    (queryOne as any).mockResolvedValueOnce({ id: "application-a", status: "interview", submitted_at: "2026-08-01T00:00:00.000Z", updated_at: "2026-08-02T00:00:00.000Z", job_id: "job-a", job_title: "Analyst", company_name: "Acme" });
+    (queryOne as any).mockResolvedValueOnce({ id: "application-a", status: "interview", can_access_interview_details: true, submitted_at: "2026-08-01T00:00:00.000Z", updated_at: "2026-08-02T00:00:00.000Z", job_id: "job-a", job_title: "Analyst", company_name: "Acme" });
     (query as any)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
@@ -95,6 +95,34 @@ describe("candidate portal read model", () => {
     expect(sql).toContain("a.candidate_id = $1");
     expect(sql).toContain("c.visible_to_candidate = true");
     expect(sql).toContain("NOT IN ('assigned', 'stacked', 'in_progress')");
+    expect(sql).toContain("a.status IN ('applied', 'screening', 'replied', 'interview', 'offer', 'rejected', 'withdrawn', 'on_hold', 'closed')");
     expect(params).toEqual(["candidate-a"]);
+  });
+
+  it("returns shared job documents once an interview-stage application has no interview round yet", async () => {
+    const file = { id: "prep-a", schedule_id: null, filename: "Guide.pdf", content_type: "application/pdf" };
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: "application-a", status: "interview", can_access_interview_details: true });
+    vi.mocked(query).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([file]);
+
+    const result = await getCandidatePortalApplicationDetail("candidate-a", "application-a");
+
+    expect(result?.interviews).toEqual([]);
+    expect(result?.preparation_files).toEqual([file]);
+    const [filesSql, filesParams] = vi.mocked(query).mock.calls[3];
+    expect(filesSql).toContain("f.visible_to_candidate");
+    expect(filesSql).toContain("f.removed_at IS NULL");
+    expect(filesParams).toEqual(["application-a", true]);
+  });
+
+  it("does not return interview rounds or preparation files before Interview", async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: "application-a", status: "applied", can_access_interview_details: false });
+    vi.mocked(query).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    const result = await getCandidatePortalApplicationDetail("candidate-a", "application-a");
+
+    expect(result?.interviews).toEqual([]);
+    expect(result?.preparation_files).toEqual([]);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(query).mock.calls[1][0]).toContain("FROM application_events");
   });
 });

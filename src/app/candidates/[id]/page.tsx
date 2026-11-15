@@ -3,7 +3,7 @@
 
 import { Fragment, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
@@ -349,6 +349,7 @@ function ConfirmDeleteModal({
 export default function CandidateProfilePage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const id = params?.id;
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -365,7 +366,9 @@ export default function CandidateProfilePage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [passwordResetting, setPasswordResetting] = useState(false);
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Interview Hub" | "Contract" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Custom Interview" | "Contract" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">(
+    searchParams.get("tab") === "Custom Interview" ? "Custom Interview" : "Applications",
+  );
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -1047,16 +1050,17 @@ export default function CandidateProfilePage() {
 
   return (
     <div className="candidate-detail-page">
-      <div className="page-header">
-        <h1>{candidate.name}</h1>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            {candidate.account_created_at ? (
-              <span className="muted" style={{ fontSize: 12 }}>
-                Portal active since {new Date(candidate.account_created_at).toLocaleDateString()}
-                {candidate.last_login_at ? ` · last login ${new Date(candidate.last_login_at).toLocaleDateString()}` : " · never logged in"}
-              </span>
-            ) : (
+      <div className="page-header candidate-profile-header">
+        <div className="candidate-profile-heading">
+          <h1>{candidate.name}</h1>
+          {candidate.account_created_at && <span className="candidate-portal-meta">
+            Portal active since {new Date(candidate.account_created_at).toLocaleDateString()}
+            {candidate.last_login_at ? ` · last login ${new Date(candidate.last_login_at).toLocaleDateString()}` : " · never logged in"}
+          </span>}
+        </div>
+        <div className="candidate-profile-actions">
+          <div className="candidate-profile-controls">
+            {!candidate.account_created_at && (
               <>
                 <button onClick={sendPortalInvite} disabled={inviteSending}>
                   {inviteSending ? "Inviting..." : "Invite to portal"}
@@ -1087,7 +1091,7 @@ export default function CandidateProfilePage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Interview Hub", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Custom Interview", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1109,6 +1113,10 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Profile Overview" && (
         <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 12, marginBottom: 16 }}>
+            <CandidateTimezoneCard candidateName={candidate.name} timezone={candidate.timezone} currentLocation={candidate.current_location} />
+            <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} />
+          </div>
           <CandidateApplicationFactsPanel
             key={candidate.id}
             candidateId={candidate.id}
@@ -1335,7 +1343,7 @@ export default function CandidateProfilePage() {
         </>
       )}
 
-      {activeTab === "Interview Hub" && (
+      {activeTab === "Custom Interview" && (
         <CustomInterviewHub candidateId={candidate.id} candidateName={candidate.name} />
       )}
 
@@ -1637,13 +1645,6 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Applications" && (
         <>
-          <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} marginBottom={20} />
-          <CandidateTimezoneCard
-            candidateName={candidate.name}
-            timezone={candidate.timezone}
-            currentLocation={candidate.current_location}
-            marginBottom={20}
-          />
           <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
             <CandidateApplicationsDashboard candidateId={candidate.id} />
           </Suspense>

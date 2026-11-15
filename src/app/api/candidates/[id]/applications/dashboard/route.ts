@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 interface DashboardRow {
   application_id: string;
   status: string;
+  application_stage: string | null;
   source_type: string | null;
   ae_stage: string;
   priority: string | null;
@@ -57,6 +58,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   var search = (url.searchParams.get("search") || "").trim().toLowerCase();
   var statusGroup = url.searchParams.get("statusGroup") || "";
   var source = url.searchParams.get("source") || "";
+  var sourceType = url.searchParams.get("sourceType") || "";
   var matchLevel = url.searchParams.get("matchLevel") || "";
   var page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   var pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "25", 10) || 25));
@@ -77,6 +79,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         -- in its status dropdown is the source of truth for this view; do not
         -- mask it back to "applied" from the historical AE hand-off mirror.
         a.status AS status,
+        a.application_stage,
         a.ae_stage,
         a.priority,
         COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,
@@ -133,11 +136,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         FROM interview_schedules s
         WHERE s.application_id = a.id
           AND COALESCE(s.status, 'scheduled') <> 'cancelled'
-        ORDER BY s.created_at DESC
+        ORDER BY
+          CASE WHEN s.scheduled_at >= now() AND COALESCE(s.status, 'scheduled') IN ('scheduled', 'in_progress') THEN 0 ELSE 1 END,
+          CASE WHEN s.scheduled_at >= now() AND COALESCE(s.status, 'scheduled') IN ('scheduled', 'in_progress') THEN s.scheduled_at END ASC,
+          s.scheduled_at DESC NULLS LAST, s.created_at DESC
         LIMIT 1
       ) iv ON true
-      -- Every non-cancelled stage (round) - see api/candidate-dashboard/route.ts
-      -- for the identical join.
+      -- Include cancelled rounds in the interview history and stage count.
       LEFT JOIN LATERAL (
         SELECT json_agg(json_build_object(
           'round_number', s.round_number,
@@ -145,31 +150,35 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           'time_zone', s.time_zone,
           'interview_format', s.interview_format,
           'status', COALESCE(s.status, 'scheduled'),
-          'notes', s.notes,
           'rescheduled_at', s.rescheduled_at
         ) ORDER BY s.round_number) AS interview_stages
         FROM interview_schedules s
         WHERE s.application_id = a.id
-          AND COALESCE(s.status, 'scheduled') <> 'cancelled'
       ) stages ON true
       WHERE a.candidate_id = $1`,
       [candidateId]
     );
 
+    // The Custom Interview view reuses this dashboard's row shape and columns,
+    // but scopes all counts, filters, and pagination to manually added records.
+    var scopedRows = sourceType === "custom_interview"
+      ? allRows.filter((row) => row.source_type === "custom_interview")
+      : allRows;
+
     // Compute status counts from display groups
     var statusCounts: Record<string, number> = emptyStatusCounts();
     var sourceCounts: Record<string, number> = {};
 
-    for (var i = 0; i < allRows.length; i++) {
-      var r = allRows[i];
-      var group = DISPLAY_GROUPS[r.status] || r.status;
+    for (var i = 0; i < scopedRows.length; i++) {
+      var r = scopedRows[i];
+      var group = dashboardStatusGroup(r);
       statusCounts[group] = (statusCounts[group] || 0) + 1;
-      var src = (r.job_source || "unknown").toLowerCase();
+      var src = dashboardSource(r);
       sourceCounts[src] = (sourceCounts[src] || 0) + 1;
     }
 
     // Apply filters
-    var filtered = allRows;
+    var filtered = scopedRows;
     if (search) {
       filtered = filtered.filter(function (r) {
         return ((r.company_name || "").toLowerCase().indexOf(search) !== -1 ||
@@ -177,11 +186,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
                 ((r.location || "").toLowerCase().indexOf(search) !== -1));
       });
     }
-    if (statusGroup) {
-      filtered = filtered.filter(function (r) { return DISPLAY_GROUPS[r.status] === statusGroup; });
+    if (statusGroup && statusGroup !== "All") {
+      filtered = filtered.filter(function (r) { return dashboardStatusGroup(r) === statusGroup; });
     }
     if (source) {
-      filtered = filtered.filter(function (r) { return r.job_source?.toLowerCase() === source.toLowerCase(); });
+      filtered = filtered.filter(function (r) { return dashboardSource(r) === source.toLowerCase(); });
     }
     if (matchLevel) {
       filtered = filtered.filter(function (r) {
@@ -195,28 +204,53 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     }
 
     // Sort
-    filtered.sort(function (a, b) {
-      var va: any = a[sort as keyof DashboardRow] ?? "";
-      var vb: any = b[sort as keyof DashboardRow] ?? "";
-      if (sort === "applied_at") {
-        va = a.applied_at ? new Date(a.applied_at).getTime() : 0;
-        vb = b.applied_at ? new Date(b.applied_at).getTime() : 0;
-      }
-      if (typeof va === "number" && typeof vb === "number") {
-        return order === "asc" ? va - vb : vb - va;
-      }
-      return order === "asc"
-        ? String(va).localeCompare(String(vb))
-        : String(vb).localeCompare(String(va));
+    function sortValue(row: DashboardRow) {
+      if (sort === "status") return dashboardStatusGroup(row);
+      if (sort === "applied_at") return row.applied_at ? new Date(row.applied_at).getTime() : 0;
+      return row[sort as "company_name" | "job_title" | "fit_score"] ?? "";
+    }
+    filtered.sort((a, b) => {
+      const left = sortValue(a);
+      const right = sortValue(b);
+      const difference = typeof left === "number" && typeof right === "number"
+        ? left - right : String(left).localeCompare(String(right));
+      return difference ? (order === "asc" ? difference : -difference) : a.application_id.localeCompare(b.application_id);
     });
 
     var total = filtered.length;
     var offset = (page - 1) * pageSize;
     var paged = filtered.slice(offset, offset + pageSize);
 
-    return NextResponse.json({ applications: paged, total, page, pageSize, statusCounts, sourceCounts });
+    const documents = paged.length ? await query<{ application_id: string }>(
+      `SELECT DISTINCT application_id FROM interview_preparation_files
+       WHERE application_id = ANY($1::uuid[]) AND removed_at IS NULL AND content_type NOT LIKE 'audio/%'`,
+      [paged.map((row) => row.application_id)]
+    ).catch((cause: { code?: string }) => {
+      if (cause.code === "42P01") return [];
+      throw cause;
+    }) : [];
+    const prepared = new Set(documents.map((row) => row.application_id));
+    const applications = paged.map((row) => ({
+      ...row,
+      status_group: dashboardStatusGroup(row),
+      has_preparation: prepared.has(row.application_id),
+    }));
+    return NextResponse.json({ applications, total, page, pageSize, statusCounts, sourceCounts });
   } catch (error: any) {
     console.error("[Dashboard API] Error:", error.message);
     return NextResponse.json({ error: "Failed to load applications" }, { status: 500 });
   }
+}
+
+function dashboardStatusGroup(row: DashboardRow) {
+  const group = DISPLAY_GROUPS[row.status] || row.status;
+  if (group === "Offer" || group === "Rejected" || row.application_stage === "closed") return group;
+  if (row.application_stage === "interview" || row.interview_stages?.some((stage) =>
+    ["planned", "scheduled", "in_progress"].includes(stage.status)
+  )) return "Interview";
+  return group;
+}
+
+function dashboardSource(row: DashboardRow) {
+  return (row.source_type === "custom_interview" ? "custom_interview" : row.job_source || "unknown").toLowerCase();
 }

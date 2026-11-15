@@ -1,47 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import StatCard from "@/components/StatCard";
+import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronRight, Copy, ExternalLink, FileText } from "lucide-react";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ApplicationStatusChart from "./shared/ApplicationStatusChart";
 import ApplicationSourceChart from "./shared/ApplicationSourceChart";
-import ApplicationsDataTable from "./shared/ApplicationsDataTable";
-import ApplicationNotesModal from "./shared/ApplicationNotesModal";
-import type { InterviewDetails } from "./shared/ScheduleInterviewModal";
-import { DISPLAY_GROUPS } from "@/lib/applicationDisplayStatus";
+import styles from "./CandidateApplicationWorkspace.module.css";
 
-interface DashboardRow {
+export interface CandidateApplicationRow {
   application_id: string;
-  status: string;
-  source_type: string | null;
-  priority: string | null;
-  applied_at: string | null;
-  follow_up_at: string | null;
-  next_action: string | null;
   job_id: string;
-  job_title: string;
-  company_name: string;
-  company_website: string | null;
+  status_group: string;
+  source_type: string | null;
   job_source: string;
   source_url: string | null;
+  job_title: string;
+  company_name: string;
   location: string | null;
-  salary_min: number | null;
-  salary_max: number | null;
-  salary_currency: string | null;
-  fit_score: number | null;
-  recommendation: string | null;
+  applied_at: string | null;
+  next_action: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
-  resume_id: string | null;
   application_resume_url: string | null;
   application_resume_filename: string | null;
-  interview_scheduled_at: string | null;
-  interview_time_zone: string | null;
-  interview_format: "online" | "onsite" | null;
+  interview_stages: { round_number: number }[] | null;
+  has_preparation: boolean;
 }
 
 interface DashboardData {
-  applications: DashboardRow[];
+  applications: CandidateApplicationRow[];
   total: number;
   page: number;
   pageSize: number;
@@ -49,228 +38,248 @@ interface DashboardData {
   sourceCounts: Record<string, number>;
 }
 
-var STATUS_ICONS: Record<string, string> = { Applied: "✅", "In Progress": "⏳", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
+const statusGroups = ["All", "Applied", "In Progress", "Screening", "Interview", "Offer", "Rejected"];
+const statusIcons: Record<string, string> = {
+  Applied: "✅", "In Progress": "⌛", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌",
+};
 
-export default function CandidateApplicationsDashboard({ candidateId }: { candidateId: string }) {
-  var router = useRouter();
-  var searchParams = useSearchParams();
-  var [data, setData] = useState<DashboardData | null>(null);
-  var [loading, setLoading] = useState(true);
-  var [error, setError] = useState<string | null>(null);
-  var [notesAppId, setNotesAppId] = useState<string | null>(null);
+function shortId(value: string) {
+  return value.slice(0, 8).toUpperCase();
+}
 
-  var statusGroup = searchParams.get("statusGroup") || "";
-  var source = searchParams.get("source") || "";
-  var page = parseInt(searchParams.get("page") || "1", 10) || 1;
-  var sort = searchParams.get("sort") || "applied_at";
-  var order = searchParams.get("order") || "desc";
-  var search = searchParams.get("search") || "";
+function dateLabel(value: string | null) {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Not recorded" : new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(date);
+}
 
-  var fetchData = useCallback(function () {
+function safeExternalUrl(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function sourceLabel(row: CandidateApplicationRow) {
+  if (row.source_type === "custom_interview") return "Custom interview";
+  const source = (row.job_source || "Unknown").replace(/[_-]+/g, " ");
+  return source[0].toUpperCase() + source.slice(1);
+}
+
+export default function CandidateApplicationsDashboard({ candidateId, customInterviewOnly = false, refreshToken = 0, onCustomInterviewEdit, onCustomInterviewRemove }: {
+  candidateId: string;
+  customInterviewOnly?: boolean;
+  refreshToken?: number;
+  onCustomInterviewEdit?: (application: CandidateApplicationRow) => void;
+  onCustomInterviewRemove?: (application: CandidateApplicationRow) => void;
+}) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const status = searchParams.get("statusGroup") || "Interview";
+  const source = searchParams.get("source") || "";
+  const search = searchParams.get("search") || "";
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const sort = searchParams.get("sort") || "applied_at";
+  const order = searchParams.get("order") || "desc";
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [attempt, setAttempt] = useState(0);
+  const [copiedJob, setCopiedJob] = useState("");
+  const candidatePath = "/candidates/" + candidateId;
+
+  useEffect(() => {
+    const abort = new AbortController();
     setLoading(true);
-    setError(null);
-    var params = new URLSearchParams();
-    params.set("pageSize", "25");
-    if (search) params.set("search", search);
-    if (statusGroup) params.set("statusGroup", statusGroup);
-    if (source) params.set("source", source);
-    if (page > 1) params.set("page", String(page));
-    if (sort !== "applied_at") params.set("sort", sort);
-    if (order !== "desc") params.set("order", order);
+    setError("");
+    const params = new URLSearchParams({ page: String(page), pageSize: "25", search, source, sort, order });
+    if (customInterviewOnly) params.set("sourceType", "custom_interview");
+    if (status !== "All") params.set("statusGroup", status);
+    fetch("/api" + candidatePath + "/applications/dashboard?" + params, { signal: abort.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not load application records.");
+        return response.json();
+      })
+      .then((result: DashboardData) => { if (!abort.signal.aborted) setData(result); })
+      .catch((cause: Error) => { if (!abort.signal.aborted) setError(cause.message); })
+      .finally(() => { if (!abort.signal.aborted) setLoading(false); });
+    return () => abort.abort();
+  }, [attempt, candidatePath, customInterviewOnly, order, page, refreshToken, search, sort, source, status]);
 
-    fetch("/api/candidates/" + candidateId + "/applications/dashboard?" + params.toString())
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (d) { setData(d); setLoading(false); })
-      .catch(function (err) { setError(err.message ?? String(err)); setLoading(false); });
-  }, [candidateId, search, statusGroup, source, page, sort, order]);
-
-  useEffect(function () { fetchData(); }, [fetchData]);
-
-  function setParam(key: string, value: string) {
-    var next = new URLSearchParams(searchParams.toString());
-    if (value) next.set(key, value); else next.delete(key);
-    if (key !== "page") next.delete("page");
-    router.push("?" + next.toString());
+  function updateFilters(values: Record<string, string>) {
+    const next = new URLSearchParams(searchParams.toString());
+    if (!("page" in values)) next.delete("page");
+    for (const [key, value] of Object.entries(values)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    router.push(candidatePath + (next.size ? "?" + next.toString() : ""), { scroll: false });
   }
 
-  function setParamMultiple(updates: Record<string, string>) {
-    var next = new URLSearchParams(searchParams.toString());
-    var resetPage = false;
-    for (var k in updates) { if (k !== "page") resetPage = true; if (updates[k]) next.set(k, updates[k]); else next.delete(k); }
-    if (resetPage) next.delete("page");
-    router.push("?" + next.toString());
+  const sources = Object.entries(data?.sourceCounts ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  const statusChart = statusGroups.filter((value) => value !== "All").map((label) => ({ label, count: data?.statusCounts[label] ?? 0 }));
+  const pageCount = Math.max(1, Math.ceil((data?.total ?? 0) / (data?.pageSize ?? 25)));
+  const returnParams = new URLSearchParams(searchParams.toString());
+  if (customInterviewOnly) returnParams.set("tab", "Custom Interview");
+  else returnParams.delete("tab");
+  const returnFilters = returnParams.toString();
+  const totalApplications = sources.reduce((sum, [, count]) => sum + count, 0);
+
+  function sortHeader(label: string, column: string) {
+    return <th scope="col" aria-sort={sort === column ? (order === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" className={styles.sortHeader}
+        onClick={() => updateFilters({ sort: column, order: sort === column && order === "asc" ? "desc" : "asc" })}>
+        {label} {sort !== column ? <ArrowUpDown size={12} /> : order === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />}
+      </button>
+    </th>;
   }
-
-  function handleStatusChange(applicationId: string, newStatus: string, interview?: InterviewDetails) {
-    var previousStatus = data?.applications.find(function (application) {
-      return application.application_id === applicationId;
-    })?.status;
-    if (previousStatus === undefined) return;
-    var rollbackStatus = previousStatus;
-    setData(function (previous) {
-      if (!previous) return previous;
-      var fromGroup = DISPLAY_GROUPS[rollbackStatus] || rollbackStatus;
-      var toGroup = DISPLAY_GROUPS[newStatus] || newStatus;
-      var statusCounts = { ...previous.statusCounts };
-      if (fromGroup !== toGroup) {
-        if (fromGroup in statusCounts) statusCounts[fromGroup] = Math.max(0, (statusCounts[fromGroup] || 0) - 1);
-        statusCounts[toGroup] = (statusCounts[toGroup] || 0) + 1;
-      }
-      return {
-        ...previous,
-        statusCounts,
-        applications: previous.applications.map(function (application) {
-          return application.application_id === applicationId
-            ? {
-                ...application, status: newStatus,
-                ...(interview ? { interview_scheduled_at: interview.scheduledAt, interview_time_zone: interview.timeZone, interview_format: interview.format } : {}),
-              }
-            : application;
-        }),
-      };
-    });
-
-    void fetch("/api/applications/" + applicationId, {
-        method: "PATCH", cache: "no-store", keepalive: true,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(interview ? { status: newStatus, interview: interview } : { status: newStatus }),
-      }).then(function (res) {
-        if (!res.ok) throw new Error("Failed");
-        return res.json();
-      }).then(function (updated) {
-        setData(function (previous) {
-          if (!previous) return previous;
-          return {
-            ...previous,
-            applications: previous.applications.map(function (application) {
-              return application.application_id === applicationId
-                ? { ...application, status: newStatus, applied_at: updated?.applied_at ?? application.applied_at }
-                : application;
-            }),
-          };
-        });
-      }).catch(function (err) {
-      setData(function (previous) {
-        if (!previous) return previous;
-        var fromGroup = DISPLAY_GROUPS[newStatus] || newStatus;
-        var toGroup = DISPLAY_GROUPS[rollbackStatus] || rollbackStatus;
-        var statusCounts = { ...previous.statusCounts };
-        if (fromGroup !== toGroup) {
-          if (fromGroup in statusCounts) statusCounts[fromGroup] = Math.max(0, (statusCounts[fromGroup] || 0) - 1);
-          statusCounts[toGroup] = (statusCounts[toGroup] || 0) + 1;
-        }
-        return {
-          ...previous,
-          statusCounts,
-          applications: previous.applications.map(function (application) {
-            return application.application_id === applicationId
-              ? { ...application, status: rollbackStatus }
-              : application;
-          }),
-        };
-      });
-      console.error("Status change failed:", err);
-      });
-  }
-
-  var statusCounts = data?.statusCounts ?? {};
-  var sourceCounts = data?.sourceCounts ?? {};
-
-  var statusChartData = ["Applied", "In Progress", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
-  var sourceChartData = Object.keys(sourceCounts).sort().map(function (k) { return { label: k === "company_site" ? "Company Site" : k === "custom_interview" ? "Custom interview" : k.charAt(0).toUpperCase() + k.slice(1), count: sourceCounts[k] }; });
-
-  if (error) return <div style={{ color: "var(--danger)", padding: 16, background: "rgba(244,63,94,0.08)", borderRadius: 10, fontSize: 13, border: "1px solid rgba(244,63,94,0.25)" }}>Failed to load: {error}</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      {/* Metrics */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
-        {[
-          { label: "Total", value: String(data?.total ?? 0), group: "" },
-          { label: "Applied", value: String(statusCounts["Applied"] || 0), group: "Applied" },
-          { label: "In Progress", value: String(statusCounts["In Progress"] || 0), group: "In Progress" },
-          { label: "Screening", value: String(statusCounts["Screening"] || 0), group: "Screening" },
-          { label: "Interview", value: String(statusCounts["Interview"] || 0), group: "Interview" },
-          { label: "Offer", value: String(statusCounts["Offer"] || 0), group: "Offer" },
-          { label: "Rejected", value: String(statusCounts["Rejected"] || 0), group: "Rejected" },
-        ].map(function (card) { return (
-          <div key={card.label} onClick={function () { if (card.group) setParamMultiple({ statusGroup: card.group, source: "" }); }} style={{ cursor: card.group ? "pointer" : "default", opacity: loading ? 0.7 : 1 }} title={card.group ? "Filter by " + card.group : ""}>
-            <StatCard label={card.label} value={card.value} icon={STATUS_ICONS[card.label] ? <span style={{ fontSize: 18 }}>{STATUS_ICONS[card.label]}</span> : undefined} />
-          </div>
-        ); })}
-      </div>
-
-      {/* Charts */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
-        <div className="card" style={{ padding: 18, border: "1px solid var(--border)", borderRadius: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <span style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(99,102,241,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>📊</span>
-            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--ink)" }}>Status Distribution</h3>
-          </div>
-          <ApplicationStatusChart data={statusChartData} onSliceClick={function (label) { setParamMultiple({ statusGroup: label, source: "" }); }} activeLabel={statusGroup} />
+    <div className={styles.stack}>
+        <div className={styles.summaryGrid} role="group" aria-label="Quick application status filters">
+          {statusGroups.map((group) => (
+            <button key={group} type="button" aria-pressed={status === group}
+              className={styles.summaryCard}
+              onClick={() => updateFilters({ statusGroup: group === "Interview" ? "" : group })}>
+              {statusIcons[group] && <span className={styles.summaryIcon} aria-hidden="true">{statusIcons[group]}</span>}
+              <span><span className="stat-label">{group === "All" ? "Total" : group}</span>
+                <strong className="stat-value">{data ? (group === "All" ? totalApplications : data.statusCounts[group] ?? 0).toLocaleString() : "—"}</strong></span>
+            </button>
+          ))}
         </div>
-        <div className="card" style={{ padding: 18, border: "1px solid var(--border)", borderRadius: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <span style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(16,185,129,0.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>📡</span>
-            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--ink)" }}>Source Breakdown</h3>
-          </div>
-          <ApplicationSourceChart data={sourceChartData} onBarClick={function (s) { setParamMultiple({ source: s.toLowerCase().replace(/ site$/, "_site"), statusGroup: "" }); }} activeSource={source} />
+        {data && <div className={styles.chartGrid} aria-label="Application analytics">
+          <section className={styles.card}>
+            <h2>Status distribution</h2>
+            <ApplicationStatusChart data={statusChart} onSliceClick={(label) => updateFilters({ statusGroup: label, source: "" })} activeLabel={status} />
+          </section>
+          <section className={styles.card}>
+            <h2>Source breakdown</h2>
+            <ApplicationSourceChart data={sources.map(([label, count]) => ({ label, count }))}
+              onBarClick={(label) => updateFilters({ source: label, statusGroup: "All" })} activeSource={source} />
+          </section>
+        </div>}
+        <form className={styles.filterGrid} onSubmit={(event) => {
+          event.preventDefault();
+          updateFilters({ search: String(new FormData(event.currentTarget).get("search") ?? "").trim() });
+        }}>
+          <label className={styles.filterField}><span>Search applications</span><span className={styles.searchControl}>
+            <input key={search} name="search" defaultValue={search} aria-label="Search applications" placeholder="Company, role or location" />
+            <button type="submit">Search</button>
+          </span></label>
+          <label className={styles.filterField}><span>Status</span><select aria-label="Filter by status" value={status} onChange={(event) => updateFilters({ statusGroup: event.target.value === "Interview" ? "" : event.target.value })}>
+            {statusGroups.map((group) => <option key={group} value={group}>{group === "Interview" ? "Interviews" : group === "All" ? "All applications" : group}</option>)}
+          </select></label>
+          <label className={styles.filterField}><span>Source</span><select aria-label="Filter by source" value={source} onChange={(event) => updateFilters({ source: event.target.value })}>
+            <option value="">All sources</option>
+            {sources.map(([label]) => <option key={label} value={label}>{label.replace(/_/g, " ")}</option>)}
+          </select></label>
+          <label className={styles.filterField}><span>Sort by</span><select aria-label="Sort applications" value={sort + ":" + order} onChange={(event) => {
+            const [nextSort, nextOrder] = event.target.value.split(":");
+            updateFilters({ sort: nextSort, order: nextOrder });
+          }}>
+            <option value="applied_at:desc">Newest applied</option><option value="applied_at:asc">Oldest applied</option>
+            <option value="company_name:asc">Company A–Z</option><option value="job_title:asc">Role A–Z</option>
+            <option value="status:asc">By status</option><option value="fit_score:desc">Highest fit</option>
+          </select></label>
+          {search && <button className={styles.clearFilter} type="button" onClick={() => updateFilters({ search: "" })}>Clear search</button>}
+        </form>
+      <section className={styles.card + " " + styles.stack} aria-busy={loading}>
+        <div className={styles.recordsHeading}>
+          <h2>{customInterviewOnly ? "Custom Interview Records" : "Application Records"}</h2>
+          <span className={styles.statusBadge}>{loading ? "Loading…" : error ? "Unavailable" : (data?.total ?? 0).toLocaleString()}</span>
         </div>
-      </div>
-
-      {/* Filters */}
-      <div className="card" style={{ padding: "14px 18px", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", border: "1px solid var(--border)", borderRadius: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, minWidth: 200 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--ink-soft)", display: "flex", alignItems: "center", gap: 4 }}>🔍 Search</label>
-          <input type="text" placeholder="Company, role, location..." defaultValue={search} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none" }}
-            onKeyDown={function (e) { if (e.key === "Enter") { setParamMultiple({ search: (e.target as HTMLInputElement).value, statusGroup: "", source: "" }); } }} />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--ink-soft)" }}>Status</label>
-          <select value={statusGroup} onChange={function (e) { setParamMultiple({ statusGroup: e.target.value, source: "" }); }} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none", cursor: "pointer", minWidth: 130 }}>
-            <option value="">All Statuses</option>
-            <option value="Applied">Applied</option><option value="Screening">Screening</option><option value="Interview">Interview</option><option value="Offer">Offer</option><option value="Rejected">Rejected</option>
-          </select>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--ink-soft)" }}>Source</label>
-          <select value={source} onChange={function (e) { setParamMultiple({ source: e.target.value, statusGroup: "" }); }} style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 13, outline: "none", cursor: "pointer", minWidth: 130 }}>
-            <option value="">All Sources</option>
-            <option value="linkedin">LinkedIn</option><option value="indeed">Indeed</option><option value="hiringcafe">HiringCafe</option><option value="glassdoor">Glassdoor</option><option value="openjobdata">OpenJobData</option><option value="extension">Extension</option><option value="company_site">Company Site</option><option value="custom_interview">Custom added</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Data Table */}
-      <div className="card" style={{ padding: 18, border: "1px solid var(--border)", borderRadius: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
-            📋 Application Records
-            <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.25)" }}>{data?.total ?? 0}</span>
-          </h3>
-        </div>
-        {data ? (
-          <ApplicationsDataTable
-            applications={data.applications}
-            onStatusChange={handleStatusChange}
-            onInterviewsChanged={function () { void fetchData(); }}
-            onNotesOpen={function (id) { setNotesAppId(id); }}
-            readOnly={false}
-            totalCount={data.total} page={data.page} pageSize={data.pageSize}
-            onPageChange={function (p) { setParam("page", String(p)); }}
-            sort={sort} order={order}
-            onSort={function (col) {
-              var next = new URLSearchParams(searchParams.toString());
-              if (sort === col) next.set("order", order === "asc" ? "desc" : "asc");
-              else { next.set("sort", col); next.delete("order"); }
-              next.delete("page");
-              router.push("?" + next.toString());
-            }}
-          />
-        ) : loading ? <div style={{ textAlign: "center", padding: 40, color: "var(--ink-soft)" }}>Loading...</div> : null}
-      </div>
-
-      {notesAppId && <ApplicationNotesModal applicationId={notesAppId} onClose={function () { setNotesAppId(null); }} />}
+        {error && <div role="alert" className={styles.toolbar}><p className={styles.error}>{error}</p><button onClick={() => setAttempt((count) => count + 1)}>Retry</button></div>}
+        {!error && !loading && data && (
+          <>
+            {!data.applications.length && <p className={styles.muted}>{status === "Interview" ? "No interview applications match these filters." : "No applications match these filters."}</p>}
+            {!!data.applications.length && <div className={styles.tableScroll} tabIndex={0} role="region" aria-label="Application Records table">
+              <table className={styles.recordsTable}>
+                <thead><tr>
+                  {sortHeader("Company", "company_name")}
+                  {sortHeader("Job role", "job_title")}
+                  <th scope="col">Job ID</th><th scope="col">Source</th><th scope="col">Location</th><th scope="col">Resume</th>
+                  {sortHeader("Status", "status")}
+                  <th scope="col">Interview</th><th scope="col">Prep docs</th>
+                  {sortHeader("Applied", "applied_at")}
+                  <th scope="col">Next action</th>
+                  <th scope="col">Actions</th>
+                </tr></thead>
+                <tbody>
+              {data.applications.map((row) => {
+                const postingUrl = safeExternalUrl(row.source_url);
+                const resumeUrl = safeExternalUrl(row.application_resume_url);
+                const sharepointUrl = safeExternalUrl(row.sharepoint_resume_url);
+                const interviewStageCount = row.interview_stages?.length ?? 0;
+                const lastRound = row.interview_stages?.reduce((latest, item) => Math.max(latest, item.round_number), 0);
+                return (
+                  <tr key={row.application_id}>
+                    <td>{postingUrl ? <a className={styles.companyLink} href={postingUrl} target="_blank" rel="noreferrer" title="Open job posting">{row.company_name}</a> : row.company_name}</td>
+                    <td><strong>{row.job_title}</strong></td>
+                    <td><button type="button" className={styles.jobId} title={`Copy ${row.job_id}`} aria-label={`Copy job ID ${row.job_id}`}
+                      onClick={() => navigator.clipboard?.writeText(row.job_id).then(() => setCopiedJob(row.job_id), () => setCopiedJob(""))}>
+                      {shortId(row.job_id)} {copiedJob === row.job_id ? <Check size={13} /> : <Copy size={13} />}
+                    </button></td>
+                    <td className={styles.sourceColumn}>{sourceLabel(row)}</td>
+                    <td>{row.location || "—"}</td>
+                    <td><div className={styles.resumeLinks}>
+                      {row.tailored_resume_version_id && <button type="button" className={styles.studioLink}
+                        onClick={() => { if (row.tailored_resume_version_id) void openFaloodStudio("application_resume_version", row.tailored_resume_version_id); }}>
+                        <FileText size={13} /> Studio
+                      </button>}
+                      {sharepointUrl && <a href={sharepointUrl} target="_blank" rel="noreferrer"><ExternalLink size={13} /> SharePoint</a>}
+                      {!sharepointUrl && resumeUrl && <a href={resumeUrl} target="_blank" rel="noreferrer" title={row.application_resume_filename || "Application resume"}>
+                        <FileText size={13} /> Resume file
+                      </a>}
+                      {!row.tailored_resume_version_id && !resumeUrl && !sharepointUrl && "—"}
+                    </div></td>
+                    <td><span className={styles.tableStatus} data-status={row.status_group}>{row.status_group}</span></td>
+                    <td>{interviewStageCount > 0 ? <span className={styles.interviewCount}>
+                      <strong>{interviewStageCount} {interviewStageCount === 1 ? "stage" : "stages"}</strong>
+                      {!!lastRound && <small>Stage {lastRound}</small>}
+                    </span> : "—"}</td>
+                    <td><span className={styles.prepIndicator} data-ready={row.has_preparation}>
+                      <span aria-hidden="true">{row.has_preparation && <Check size={12} />}</span>
+                      {row.has_preparation ? "Yes" : "No"}
+                    </span></td>
+                    <td>{dateLabel(row.applied_at)}</td>
+                    <td className={styles.recordNextAction}>{row.next_action?.trim() || "—"}</td>
+                    <td><div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <Link className={styles.linkButton} href={candidatePath + "/applications/" + row.application_id +
+                        (returnFilters ? "?from=" + encodeURIComponent(returnFilters) : "")}
+                        aria-label={"Details for " + row.job_title + " at " + row.company_name}>Show details <ChevronRight size={14} /></Link>
+                      {customInterviewOnly && onCustomInterviewEdit && <button type="button" className={styles.linkButton}
+                        onClick={() => onCustomInterviewEdit(row)} aria-label={"Edit custom interview " + row.job_title}>Edit</button>}
+                      {customInterviewOnly && onCustomInterviewRemove && <button type="button" className={styles.linkButton}
+                        onClick={() => onCustomInterviewRemove(row)} aria-label={"Remove custom interview " + row.job_title}>Remove</button>}
+                    </div></td>
+                  </tr>
+                );
+              })}
+                </tbody>
+              </table>
+            </div>}
+            {(pageCount > 1 || page > 1) && <div className={styles.pagination}>
+              <span className={styles.muted}>{data.total.toLocaleString()} total · Page {page} of {pageCount}</span>
+              <div className={styles.paginationButtons}>
+                <button disabled={page <= 1} onClick={() => updateFilters({ page: "1" })}>« First</button>
+                <button disabled={page <= 1} onClick={() => updateFilters({ page: String(page - 1) })}>‹ Prev</button>
+                {Array.from({ length: Math.min(pageCount, 5) }, (_, index) => {
+                  const start = Math.max(1, Math.min(page - 2, pageCount - 4));
+                  const number = start + index;
+                  return number <= pageCount ? <button key={number} aria-current={number === page ? "page" : undefined}
+                    className={number === page ? styles.pageNumberActive : styles.pageNumber}
+                    onClick={() => updateFilters({ page: String(number) })}>{number}</button> : null;
+                })}
+                <button disabled={page >= pageCount} onClick={() => updateFilters({ page: String(page + 1) })}>Next ›</button>
+                <button disabled={page >= pageCount} onClick={() => updateFilters({ page: String(pageCount) })}>Last »</button>
+              </div>
+            </div>}
+          </>
+        )}
+      </section>
     </div>
   );
 }

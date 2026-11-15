@@ -807,6 +807,33 @@ body::before {
   padding-right: 16px;
 }
 
+.candidate-profile-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
+.candidate-profile-controls { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: nowrap; min-width: 0; }
+.candidate-profile-header .candidate-profile-heading { display: grid; gap: 4px; min-width: 0; }
+.candidate-profile-header .candidate-profile-heading h1 { margin: 0; }
+.candidate-profile-header .candidate-portal-meta { color: var(--ink-soft); font-size: 11px; line-height: 1.4; }
+.candidate-profile-header .candidate-profile-actions { flex: 0 0 auto; }
+.candidate-profile-header .candidate-profile-actions .candidate-profile-controls {
+  display: flex;
+  width: auto;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  padding: 0;
+  border: 0;
+}
+.candidate-profile-header .candidate-profile-actions .candidate-profile-controls > * { flex: 0 0 auto; white-space: nowrap; }
+@media (max-width: 640px) {
+  .page:has(.candidate-detail-page) { max-width: none; padding-inline: 12px; }
+  .page-header.candidate-profile-header { flex-direction: column; align-items: flex-start; }
+  .candidate-profile-actions { align-items: flex-start; }
+  .candidate-profile-controls { justify-content: flex-start; flex-wrap: wrap; }
+  .candidate-profile-controls > span { flex: 0 0 100%; }
+  .candidate-profile-header .candidate-profile-actions { width: 100%; }
+  .candidate-profile-header .candidate-profile-actions .candidate-profile-controls { justify-content: flex-start; flex-wrap: wrap; }
+}
+
 /* Extension activity reports need a full-width canvas for team totals and the
    paginated audit trail, while the page itself controls a readable max width. */
 .page:has(.extension-reports-page) {

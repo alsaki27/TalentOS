@@ -1,4 +1,7 @@
 import { query, queryOne } from "@/server/db/neon";
+import type { InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { listInterviewPreparationFiles } from "@/server/services/interviewPreparationFiles";
+import { APPLICATION_INTERVIEW_ACCESS_SQL } from "@/lib/applicationInterviewAccess";
 
 export type CandidatePortalStatus = "Applied" | "Screening" | "Interview" | "Offer" | "Rejected";
 export type CandidatePortalDateRange = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
@@ -103,7 +106,26 @@ export interface CandidatePortalApplicationDetail {
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
   timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null; rescheduled: boolean }[];
-  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; rescheduled: boolean; panel: string[] }[];
+  preparation_files?: InterviewPreparationFile[];
+  interviews: {
+    id: string;
+    round_name: string;
+    round_number: number;
+    scheduled_at: string | null;
+    time_zone: string;
+    duration_minutes: number | null;
+    status: string;
+    interview_format: "online" | "onsite" | null;
+    location: string | null;
+    meeting_link: string | null;
+    preparation_notes?: string | null;
+    mock_interview_taken: boolean | null;
+    rescheduled: boolean;
+    rescheduled_at: string | null;
+    previous_scheduled_at: string | null;
+    previous_time_zone: string | null;
+    panel: string[];
+  }[];
 }
 
 export interface CandidatePortalTrendPoint {
@@ -186,6 +208,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
      LEFT JOIN profiles p ON p.user_id::text = pm.interviewer_id::text
      WHERE a.candidate_id = $1
        AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress')
+       AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
        -- Guarded: without "AND a.status IN (...)" this could never be true
        -- once ae_stage='applied' (set once, at AE hand-off), so an
        -- email-detected interview would never appear here even after the
@@ -301,7 +324,8 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
        CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
                   AND rv.application_id = a.id
                   AND rv.candidate_id = a.candidate_id
-                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.updated_at, rv.created_at) ELSE NULL END AS resume_generated_at
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.updated_at, rv.created_at) ELSE NULL END AS resume_generated_at,
+       ${APPLICATION_INTERVIEW_ACCESS_SQL} AS can_access_interview_details
      FROM applications a
      LEFT JOIN jobs j ON j.id = a.job_id
      LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
@@ -313,6 +337,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
   );
 
   if (!application) return null;
+  const canShowInterviewDetails = application.can_access_interview_details === true;
 
   // Destructure in the same order as the queries below: comments, interview
   // schedules, then application status events.
@@ -324,17 +349,21 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
        ORDER BY created_at DESC LIMIT 100`,
       [applicationId],
     ),
-    query<any>(
-      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.time_zone, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link, s.rescheduled_at,
+    canShowInterviewDetails ? query<any>(
+      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.time_zone, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link, s.rescheduled_at, s.created_at,
+              to_jsonb(s)->>'preparation_notes' AS preparation_notes,
+              (to_jsonb(s)->>'mock_interview_taken')::boolean AS mock_interview_taken,
+              to_jsonb(s)->>'previous_scheduled_at' AS previous_scheduled_at,
+              to_jsonb(s)->>'previous_time_zone' AS previous_time_zone,
               COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel
        FROM interview_schedules s
        LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
        LEFT JOIN profiles p ON p.user_id::text = pm.interviewer_id::text
        WHERE s.application_id = $1
        GROUP BY s.id
-       ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC`,
+       ORDER BY COALESCE(s.scheduled_at, s.created_at) DESC NULLS LAST, s.round_number DESC, s.id`,
       [applicationId],
-    ),
+    ) : Promise.resolve([]),
     query<any>(
       `SELECT id, from_status, to_status, created_at
        FROM application_events
@@ -345,6 +374,11 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       [applicationId],
     ),
   ]);
+
+  const preparationFiles = canShowInterviewDetails ? await listInterviewPreparationFiles(applicationId, true).catch((error: { code?: string }) => {
+    if (error.code === "42P01") return [];
+    throw error;
+  }) : [];
 
   const timeline: CandidatePortalApplicationDetail["timeline"] = (events ?? []).map((event) => ({
     id: event.id,
@@ -370,7 +404,8 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
 
   for (const interview of interviews ?? []) {
     const status = String(interview.status || "scheduled").toLowerCase();
-    const label = status === "cancelled" ? "Interview cancelled" : status === "completed" ? "Interview completed" : "Interview scheduled";
+    const label = status === "cancelled" ? "Interview cancelled" : status === "completed" ? "Interview completed"
+      : status === "no_show" ? "Interview marked as no show" : interview.scheduled_at ? "Interview scheduled" : "Interview stage added";
     // round_name is always the literal "Interview", so showing it after
     // "Interview scheduled" just repeated the word - the stage number is
     // what actually distinguishes one entry from another.
@@ -379,7 +414,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       label: `${label} · Stage ${interview.round_number ?? 1}`,
       from_label: null,
       to_label: status,
-      created_at: interview.scheduled_at,
+      created_at: interview.rescheduled_at ?? interview.scheduled_at ?? interview.created_at,
       // Interview entries carry their own zone so the Progress list can show the
       // time the interview was scheduled in, not the viewer's browser zone.
       time_zone: interview.time_zone || "America/New_York",
@@ -410,6 +445,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     follow_up_at: application.follow_up_at,
     updates: (comments ?? []).map((comment) => ({ id: comment.id, body: comment.body, author: comment.commenter_name || "Skarion team", created_at: comment.created_at })),
     timeline,
+    preparation_files: preparationFiles,
     interviews: (interviews ?? []).map((interview) => ({
       id: interview.id,
       round_name: interview.round_name,
@@ -421,7 +457,12 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       interview_format: interview.interview_format === "online" || interview.interview_format === "onsite" ? interview.interview_format : null,
       location: interview.location,
       meeting_link: interview.meeting_link,
+      preparation_notes: interview.preparation_notes,
+      mock_interview_taken: interview.mock_interview_taken ?? null,
+      previous_scheduled_at: interview.previous_scheduled_at,
+      previous_time_zone: interview.previous_time_zone,
       rescheduled: Boolean(interview.rescheduled_at),
+      rescheduled_at: interview.rescheduled_at,
       panel: Array.isArray(interview.panel) ? interview.panel : [],
     })),
   };

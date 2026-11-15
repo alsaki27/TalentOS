@@ -852,10 +852,8 @@ body:has(.portal-root) {
   min-width: 0;
 }
 
-.portal-detail-side {
-  position: sticky;
-  top: 84px;
-}
+.portal-btn.portal-preparation-jump { display: none; }
+#interview-preparation { scroll-margin-top: 96px; }
 
 
 .portal-card {
@@ -943,6 +941,76 @@ body:has(.portal-root) {
 
 .portal-interview-card strong { color: var(--p-ink); font-size: 13px; }
 .portal-interview-card span { margin-top: 4px; color: var(--p-ink-soft); font-size: 11px; }
+.portal-job-preparation, .portal-interview-media {
+  --ink: var(--p-ink);
+  --ink-soft: var(--p-ink-soft);
+  --surface: var(--p-surface);
+  --surface-raised: var(--p-surface);
+  --bg: var(--p-bg);
+  --border: var(--p-border);
+  --accent: var(--p-navy);
+  --accent-soft: var(--p-navy-soft);
+  min-width: 0;
+}
+.portal-job-preparation { display: grid; gap: 10px; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid var(--p-border); }
+.portal-job-preparation h3, .portal-interview-stages > h3, .portal-interview-stage h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 750;
+  margin: 0;
+  color: var(--p-ink);
+}
+.portal-interview-stages { display: grid; gap: 10px; }
+.portal-interview-stage {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--p-border);
+  border-inline-start: 3px solid var(--p-navy);
+  border-radius: var(--p-radius-md);
+  background: var(--p-bg);
+  overflow-wrap: anywhere;
+  scroll-margin-top: 96px;
+}
+.portal-interview-stage-header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 7px; }
+.portal-interview-stage-header h3 { color: var(--p-ink); font-size: 15px; line-height: 1.35; margin: 2px 0 0; }
+.portal-interview-stage-number, .portal-interview-facts dt { color: var(--p-ink-soft); font-size: 11px; font-weight: 650; }
+.portal-interview-statuses { display: flex; flex-wrap: wrap; gap: 5px; }
+.portal-interview-status {
+  border-radius: 999px;
+  background: var(--p-navy-soft);
+  color: var(--p-navy);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 750;
+}
+.portal-interview-stage[data-status="completed"] { border-inline-start-color: #1a9b70; }
+.portal-interview-stage[data-status="cancelled"], .portal-interview-stage[data-status="no_show"] { border-inline-start-color: #da5264; }
+.portal-interview-status[data-status="completed"] { background: #dcfce7; color: #166534; }
+.portal-interview-status[data-status="cancelled"], .portal-interview-status[data-status="no_show"] { background: #ffe4e8; color: #96273b; }
+.portal-interview-status[data-status="rescheduled"] { background: #fff2cf; color: #85500a; }
+.portal-interview-time {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-surface);
+  color: var(--p-ink);
+  padding: 8px 9px;
+  font-size: 12px;
+}
+.portal-interview-time svg { flex: 0 0 auto; color: var(--p-navy); }
+.portal-interview-time small { display: block; color: var(--p-ink-soft); margin-top: 3px; }
+.portal-interview-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 10px; margin: 0; }
+.portal-interview-facts:empty { display: none; }
+.portal-interview-facts dd { color: var(--p-ink); font-size: 12px; font-weight: 650; margin: 1px 0 0; }
+.portal-interview-meeting { justify-self: start; }
+.portal-interview-notes, .portal-interview-media { display: grid; gap: 7px; padding-top: 10px; border-top: 1px solid var(--p-border); }
+.portal-interview-notes p { white-space: pre-wrap; color: var(--p-ink); font-size: 13px; line-height: 1.5; margin: 0; }
 
 .portal-tab-list { display: flex; gap: 6px; margin: 14px 0 12px; border-bottom: 1px solid var(--p-border); }
 .portal-tab { border: 0; border-bottom: 2px solid transparent; color: var(--p-ink-soft); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 10px; }
@@ -2031,8 +2099,8 @@ body:has(.portal-root) {
   }
   .portal-main { padding: 20px 20px 64px; gap: 22px; }
   .portal-topbar { padding: 12px 20px; }
-  .portal-detail-layout { grid-template-columns: 1fr; }
-  .portal-detail-side { position: static; }
+  .portal-detail-layout { grid-template-columns: minmax(0, 1fr); }
+  .portal-btn.portal-preparation-jump { display: inline-flex; }
   .portal-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .portal-search-field { grid-column: 1 / -1; }
   .portal-chart-grid { grid-template-columns: 1fr; }

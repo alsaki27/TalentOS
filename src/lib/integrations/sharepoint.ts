@@ -88,7 +88,7 @@ async function ensureFolderPath(token: string, siteId: string, folderPath: strin
   }
 }
 
-export async function uploadToSharePoint(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string; itemId: string; name: string }> {
+export async function uploadToSharePoint(path: string, content: Uint8Array | Blob, contentType: string): Promise<{ url: string; itemId: string; name: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
@@ -112,7 +112,7 @@ export async function uploadToSharePoint(path: string, buffer: Uint8Array, conte
       // `new Uint8Array(buffer)` copy guarantees a plain ArrayBuffer-backed view
       // (not the generic ArrayBufferLike/SharedArrayBuffer-compatible type some
       // @types/node versions infer), which is what BlobPart actually requires.
-      body: new Blob([new Uint8Array(buffer)]),
+      body: content instanceof Blob ? content : new Blob([new Uint8Array(content)]),
     },
   );
   if (!res.ok) {
@@ -121,6 +121,38 @@ export async function uploadToSharePoint(path: string, buffer: Uint8Array, conte
   }
   const item = await res.json();
   return { url: item.webUrl as string, itemId: item.id as string, name: item.name as string };
+}
+
+function driveItemUrl(itemId: string) {
+  const siteId = requireEnv("SHAREPOINT_SITE_ID");
+  return `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${encodeURIComponent(itemId)}`;
+}
+
+export async function openSharePointItem(itemId: string, options: { range?: string; asPdf?: boolean } = {}) {
+  const token = await getGraphToken();
+  const response = await fetch(`${driveItemUrl(itemId)}/content${options.asPdf ? "?format=pdf" : ""}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    redirect: "manual",
+  });
+  const redirect = response.status === 302 ? response.headers.get("location") : null;
+  // Graph redirects to a short-lived file URL. Fetch separately so the
+  // Graph authorization header is never sent to the storage host.
+  const download = redirect
+    ? await fetch(redirect, options.range ? { headers: { Range: options.range } } : undefined)
+    : response;
+  if (download.status !== 416 && (!download.ok || !download.body)) {
+    throw new Error(`SharePoint file download failed (${download.status})`);
+  }
+  return download;
+}
+
+export async function deleteSharePointItem(itemId: string): Promise<void> {
+  const token = await getGraphToken();
+  const response = await fetch(driveItemUrl(itemId), {
+    headers: { Authorization: `Bearer ${token}` },
+    method: "DELETE",
+  });
+  if (!response.ok && response.status !== 404) throw new Error(`SharePoint file cleanup failed (${response.status})`);
 }
 
 export async function deleteFromSharePoint(webUrl: string): Promise<void> {

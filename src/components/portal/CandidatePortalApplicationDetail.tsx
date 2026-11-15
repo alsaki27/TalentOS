@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
+import { ArrowLeft, CalendarDays, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText, Headphones } from "lucide-react";
 import { formatZonedDateTime } from "@/lib/easternTime";
+import { INTERVIEW_STAGE_STATUS, isInterviewAudio, safeMeetingUrl } from "@/lib/applicationInterviewPreparation";
+import ApplicationPreparationFiles from "@/components/candidates/ApplicationPreparationFiles";
+import type { InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import ApplicationProgress from "@/components/candidates/shared/ApplicationProgress";
+import type { CandidatePortalApplicationDetail as ApplicationDetail } from "@/lib/candidatePortalDashboardService";
 import ResumePdfModal from "./ResumePdfModal";
 
 interface Props {
-  application: any;
+  application: ApplicationDetail;
   resume: any;
   candidateName?: string;
   onBack: () => void;
@@ -25,16 +30,72 @@ function formatTime(value: string | null, timeZone: string | null) {
   return formatZonedDateTime(value, timeZone);
 }
 
-function CollapsibleCard({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+function CollapsibleCard({ title, defaultOpen = true, children, id }: {
+  title: string; defaultOpen?: boolean; children: ReactNode; id?: string;
+}) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="portal-card portal-detail-card">
+    <section className="portal-card portal-detail-card" id={id}>
       <button type="button" className="portal-collapsible-header" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
         <h2>{title}</h2>
         {open ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
       </button>
       {open && children}
     </section>
+  );
+}
+
+function PortalInterviewStage({ interview, audio, endpoint }: {
+  interview: ApplicationDetail["interviews"][number];
+  audio: InterviewPreparationFile[];
+  endpoint: string;
+}) {
+  const meeting = safeMeetingUrl(interview.meeting_link);
+  const canJoin = meeting && ["planned", "scheduled", "in_progress"].includes(interview.status);
+  const needsNewDate = interview.status === "cancelled" && !interview.scheduled_at;
+  return (
+    <article className="portal-interview-stage" id={`interview-${interview.id}`} data-status={interview.status}>
+      <header className="portal-interview-stage-header">
+        <div>
+          <span className="portal-interview-stage-number">Stage {interview.round_number}</span>
+          <h3>{interview.round_name || "Interview"}</h3>
+        </div>
+        <div className="portal-interview-statuses">
+          <span className="portal-interview-status" data-status={interview.status}>
+            {INTERVIEW_STAGE_STATUS[interview.status] ?? interview.status.replace(/_/g, " ")}
+          </span>
+          {interview.rescheduled && <span className="portal-interview-status" data-status="rescheduled">Rescheduled</span>}
+        </div>
+      </header>
+      <div className="portal-interview-time">
+        <CalendarDays size={16} aria-hidden="true" />
+        <div>
+          <strong>{needsNewDate ? "No scheduled date" : formatTime(interview.scheduled_at, interview.time_zone)}</strong>
+          {interview.rescheduled && interview.previous_scheduled_at &&
+            <small>Previously {formatTime(interview.previous_scheduled_at, interview.previous_time_zone || interview.time_zone)}</small>}
+          {interview.rescheduled_at &&
+            <small>Rescheduled on {formatTime(interview.rescheduled_at, interview.time_zone)}</small>}
+        </div>
+      </div>
+      <dl className="portal-interview-facts">
+        {interview.interview_format && <div><dt>Format</dt><dd>{interview.interview_format === "online" ? "Online" : "Onsite"}</dd></div>}
+        {interview.duration_minutes && <div><dt>Duration</dt><dd>{interview.duration_minutes} min</dd></div>}
+        {interview.location && <div><dt>Location</dt><dd>{interview.location}</dd></div>}
+        {interview.panel.length > 0 && <div><dt>Interviewers</dt><dd>{interview.panel.join(", ")}</dd></div>}
+        {typeof interview.mock_interview_taken === "boolean" &&
+          <div><dt>Mock interview</dt><dd>{interview.mock_interview_taken ? "Taken" : "Not taken"}</dd></div>}
+      </dl>
+      {canJoin && <a className="portal-btn portal-btn-secondary portal-btn-small portal-interview-meeting" href={meeting}
+        target="_blank" rel="noreferrer"><Video size={14} /> Open meeting</a>}
+      {interview.preparation_notes && <section className="portal-interview-notes">
+        <h4>Preparation notes</h4>
+        <p>{interview.preparation_notes}</p>
+      </section>}
+      {audio.length > 0 && <section className="portal-interview-media">
+        <h4><Headphones size={15} /> Interview recordings</h4>
+        <ApplicationPreparationFiles files={audio} endpoint={endpoint} audio />
+      </section>}
+    </article>
   );
 }
 
@@ -87,6 +148,9 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
   const [noteError, setNoteError] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const scrolledToHash = useRef(false);
+  const files = application.preparation_files ?? [];
+  const documents = files.filter((file) => !isInterviewAudio(file));
+  const preparationApi = `/api/portal/me/applications/${application.id}`;
 
   // Links from the interview schedule point at #interview-<id>. Scroll once when
   // the page first has interviews, not on every 15-second refresh.
@@ -133,7 +197,18 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
         </div>
         <span className="portal-detail-status">{application.public_status.label}</span>
       </div>
+      <div className="portal-card portal-detail-card">
+        <ApplicationProgress stage={application.status} history={[
+          ...(application.application_date ? ["applied"] : []),
+          ...application.timeline.flatMap((event) => [event.from_label, event.to_label]
+            .filter((label): label is string => Boolean(label)).map((label) => label.toLowerCase())),
+          ...(application.interviews.some((interview) => interview.scheduled_at && interview.status !== "cancelled") ? ["interview"] : []),
+        ]} />
+      </div>
 
+      {(application.interviews.length > 0 || files.length > 0) && <a className="portal-btn portal-btn-secondary portal-preparation-jump" href="#interview-preparation">
+        <FileText size={15} /> Go to interview preparation
+      </a>}
       <div className="portal-detail-layout">
         <div className="portal-detail-main">
           <CollapsibleCard title="Application overview">
@@ -149,7 +224,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
             {!application.job?.source_url && application.missing_info?.includes("Job link") && <p className="portal-greeting-sub">Job posting link: Not provided.</p>}
           </CollapsibleCard>
 
-          <CollapsibleCard title="Progress">
+          <CollapsibleCard title="Activity timeline">
             {application.timeline?.length ? (
               <div className="portal-timeline">
                 {application.timeline.map((event: any) => (
@@ -168,27 +243,6 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                 ))}
               </div>
             ) : <p className="portal-greeting-sub">Your application timeline will appear as the team records updates.</p>}
-          </CollapsibleCard>
-
-          <CollapsibleCard title="Interviews">
-            {application.interviews?.length ? (
-              <div className="portal-interview-list">
-                {application.interviews.map((interview: any) => (
-                  <article className="portal-interview-card" id={`interview-${interview.id}`} key={interview.id}>
-                    <div>
-                      <strong>{interview.round_name} · Stage {interview.round_number}</strong>
-                      {interview.rescheduled && <span style={{ color: "var(--p-coral)", fontWeight: 700 }}>↻ Rescheduled</span>}
-                      <span>{formatTime(interview.scheduled_at, interview.time_zone)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
-                      <span>Status: {interview.status}</span>
-                      {interview.interview_format && <span>Format: {interview.interview_format === "online" ? "Online" : "Onsite"}</span>}
-                      {interview.location && <span>Location: {interview.location}</span>}
-                      {interview.panel?.length > 0 && <span>Interviewers: {interview.panel.join(", ")}</span>}
-                    </div>
-                    {interview.meeting_link && <a className="portal-btn portal-btn-secondary portal-btn-small" href={interview.meeting_link} target="_blank" rel="noreferrer"><Video size={13} style={{ marginRight: 4 }} />Open meeting</a>}
-                  </article>
-                ))}
-              </div>
-            ) : <p className="portal-greeting-sub">No interviews are scheduled for this application yet.</p>}
           </CollapsibleCard>
 
           <CollapsibleCard title="My preparation notes">
@@ -221,6 +275,22 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                 {application.updates.map((update: any) => <article key={update.id}><p>{update.body}</p><span>{update.author} · {formatDate(update.created_at)}</span></article>)}
               </div>
             ) : <p className="portal-greeting-sub">No candidate-visible updates yet.</p>}
+          </CollapsibleCard>
+          <CollapsibleCard title="Interview preparation" id="interview-preparation">
+            <div className="portal-job-preparation">
+              <h3><FileText size={16} /> Preparation documents</h3>
+              <ApplicationPreparationFiles files={documents} endpoint={preparationApi + "/preparation"} />
+            </div>
+            {application.interviews.length ? (
+              <div className="portal-interview-stages">
+                <h3>Interview stages</h3>
+                {application.interviews.map((interview) => (
+                  <PortalInterviewStage key={interview.id} interview={interview}
+                    audio={files.filter((file) => file.schedule_id === interview.id && isInterviewAudio(file))}
+                    endpoint={`${preparationApi}/interviews/${interview.id}/preparation`} />
+                ))}
+              </div>
+            ) : <p className="portal-greeting-sub">No interview stages recorded.</p>}
           </CollapsibleCard>
         </div>
       </div>
