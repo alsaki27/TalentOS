@@ -233,11 +233,10 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                     <div>
                       <strong>{event.label}</strong>
                       <span>{event.time_zone ? formatTime(event.created_at, event.time_zone) : formatDate(event.created_at)}</span>
-                      {event.rescheduled && (
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 5, padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "rgba(255,104,107,0.14)", color: "var(--p-coral)" }}>
-                          ↻ Rescheduled
-                        </span>
-                      )}
+                      {event.rescheduled && event.previous_scheduled_at &&
+                        <span>Previous time · {formatTime(event.previous_scheduled_at, event.previous_time_zone || event.time_zone)}</span>}
+                      {event.rescheduled && event.scheduled_at &&
+                        <span>New time · {formatTime(event.scheduled_at, event.time_zone)}</span>}
                     </div>
                   </div>
                 ))}

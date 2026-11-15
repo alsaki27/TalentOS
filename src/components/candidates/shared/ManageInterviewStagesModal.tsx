@@ -126,7 +126,7 @@ export default function ManageInterviewStagesModal({
   async function handleRemove() {
     if (!existingForSelected) return;
     const confirmed = window.confirm(
-      `Remove Stage ${selected}? This also removes any panel members assigned and any feedback already submitted for this stage. This cannot be undone.`
+      `Remove Stage ${selected}? Its panel assignments and feedback will be deleted. Remaining stages will be renumbered.`
     );
     if (!confirmed) return;
     setError(null);
@@ -140,8 +140,7 @@ export default function ManageInterviewStagesModal({
         setError(data.error || "Failed to remove this interview stage.");
         return;
       }
-      // Refetch so the stage picker's checkmarks and this round's form both
-      // reflect the slot being empty again — ready to schedule from scratch.
+      // Refetch because a later stage may have moved into the selected round.
       const refreshed = await fetch(`/api/applications/${applicationId}/interviews`, { cache: "no-store" });
       const data = refreshed.ok ? await refreshed.json() : { stages: [] };
       const rows: InterviewStage[] = data.stages || [];

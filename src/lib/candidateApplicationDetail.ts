@@ -43,6 +43,8 @@ export interface ApplicationActivity {
   detail: string | null;
   actor: string | null;
   created_at: string | null;
+  previous_time_zone?: string | null;
+  time_zone?: string | null;
 }
 
 export interface ApplicationDetailData {

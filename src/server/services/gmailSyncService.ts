@@ -22,10 +22,12 @@ import {
   saveGmailWatch,
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
-import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, watchGmailMailbox, type GmailMessage } from "@/lib/integrations/gmailApi";
+import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getGmailCalendarParts, getProfile, modifyMessage, ensureUserLabel, watchGmailMailbox, type GmailMessage } from "@/lib/integrations/gmailApi";
 import { matchCandidateForMessage, type CandidateMatchMethod } from "@/server/services/candidateEmailMatcher";
 import { triageEmail, INTERVIEW_EXTRACTION_CONFIDENCE, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
+import { getInterviewBookingIdentity, getSingleInterviewCalendarInvite } from "@/lib/integrations/interviewCalendarInvite";
+import { syncInterviewEmail } from "@/server/services/interviewCalendarSync";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
 import { changeApplicationStatus, emailStageTarget } from "@/server/services/applicationStatusService";
 import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
@@ -464,15 +466,38 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     );
   }
 
-  if (triage.matchedApplicationId && (triage.category === "interview_invite" || triage.category === "scheduling")) {
+  if (row.direction === "inbound" && triage.matchedApplicationId && (triage.category === "interview_invite" || triage.category === "scheduling")) {
     try {
-      const details = await extractInterviewDetails(row.subject, bodyText);
-      await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2", [JSON.stringify(details), id]);
-      const interviewText = `${row.subject || ""}\n${bodyText}`;
-      const cancelled = /\b(cancel(?:led|lation)?|no longer moving forward|position has been filled)\b/i.test(interviewText);
-      const rescheduled = /\b(reschedul|new time|different time|calendar update)\b/i.test(interviewText);
+      const [extracted, parts] = await Promise.all([
+        extractInterviewDetails(row.subject, bodyText).catch(() => null),
+        getGmailCalendarParts(accessToken, row.gmail_message_id).catch(() => null),
+      ]);
+      const calendar = parts ? getSingleInterviewCalendarInvite(parts) : null;
+      const subject = row.subject ?? "";
+      const bookingKey = parts?.length === 0 ? await getInterviewBookingIdentity(bodyText) : null;
+      const bookingCancelled = /\b(?:meeting|interview)\b.{0,120}\b(?:cancelled|canceled)\b/i.test(subject);
+      const invite = calendar ?? (bookingKey ? {
+        key: bookingKey, sequence: 0, versionAt: row.sent_at, cancelled: bookingCancelled,
+        scheduledAt: null, timeZone: null, durationMinutes: null,
+      } : null);
+      const availabilityRequest = !invite && (/\binterview availability\b/i.test(subject)
+        || /\bplease confirm if you are available\b/i.test(bodyText));
+      const scheduledAt = calendar ? calendar.scheduledAt
+        : !availabilityRequest && extracted?.scheduledAt && extracted.confidence >= INTERVIEW_EXTRACTION_CONFIDENCE
+          && /(?:Z|[+-]\d{2}:\d{2})$/i.test(extracted.scheduledAt) && Number.isFinite(Date.parse(extracted.scheduledAt))
+          ? new Date(extracted.scheduledAt).toISOString() : null;
+      const durationMinutes = invite?.durationMinutes ?? extracted?.durationMinutes ?? null;
+      if (extracted || invite) await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2",
+        [JSON.stringify({ ...extracted, scheduledAt, durationMinutes, timezone: invite?.timeZone ?? extracted?.timezone ?? null }), id]);
+      const cancelled = invite?.cancelled ?? /\b(cancel(?:led|ed|lation)?|no longer moving forward|position has been filled)\b/i.test(subject);
+      const rescheduleHint = /\b(reschedul(?:e[ds]?|ing)|new time|different time|calendar update)\b/i.test(subject)
+        || /\b(?:has been|was|is now) rescheduled\b/i.test(bodyText);
+      if (parts && (parts.length === 0 || invite)) await syncInterviewEmail({
+        applicationId: triage.matchedApplicationId, emailId: id, sentAt: row.sent_at,
+        invite, scheduledAt, durationMinutes, timeZone: invite?.timeZone ?? extracted?.timezone ?? null,
+        location: extracted?.location ?? null, meetingLink: extracted?.meetingLink ?? null, cancelled, rescheduleHint,
+      }).catch((error) => console.warn("[Gmail sync] Could not persist interview schedule:", (error as { code?: string }).code ?? "unknown"));
       if (cancelled) {
-        await execute("UPDATE interview_schedules SET status = 'cancelled' WHERE application_id = $1 AND status NOT IN ('completed','cancelled')", [triage.matchedApplicationId]);
         await execute(
           `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
            VALUES ($1, $2, $3, 'interview_followup', 'Interview cancellation requires review', 'An email appears to cancel or withdraw an interview. Confirm the application stage and notify the candidate if needed.', 'high', 'open', 'manual_only', $4)
@@ -480,14 +505,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
           [row.candidate_id, triage.matchedApplicationId, id, `email:${id}:interview-cancelled`]
         );
       }
-      if (details.scheduledAt && details.confidence >= INTERVIEW_EXTRACTION_CONFIDENCE) {
-        const existing = await queryOne<{ id: string }>("SELECT id FROM interview_schedules WHERE application_id = $1 AND scheduled_at = $2 LIMIT 1", [triage.matchedApplicationId, details.scheduledAt]);
-        if (existing) {
-          await execute("UPDATE interview_schedules SET status = 'scheduled', duration_minutes = COALESCE($2, duration_minutes), location = COALESCE($3, location), meeting_link = COALESCE($4, meeting_link) WHERE id = $1", [existing.id, details.durationMinutes || null, details.location, details.meetingLink]);
-        } else await execute(
-            "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
-            [triage.matchedApplicationId, rescheduled ? "Rescheduled interview" : "Email-detected interview", details.scheduledAt, details.durationMinutes || 60, details.location, details.meetingLink]
-          );
+      if (scheduledAt && !cancelled) {
         const conflict = await queryOne<{ id: string }>(
           `SELECT s.id FROM interview_schedules s
            JOIN applications a ON a.id = s.application_id
@@ -496,7 +514,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
              AND s.scheduled_at < ($3::timestamptz + ($4 * interval '1 minute'))
              AND (s.scheduled_at + (COALESCE(s.duration_minutes, 60) * interval '1 minute')) > $3::timestamptz
            LIMIT 1`,
-          [row.candidate_id, triage.matchedApplicationId, details.scheduledAt, details.durationMinutes || 60]
+          [row.candidate_id, triage.matchedApplicationId, scheduledAt, durationMinutes || 60]
         );
         if (conflict) {
           await execute(
@@ -511,7 +529,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
         `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
          VALUES ($1, $2, $3, 'interview_followup', $4, $5, 'urgent', 'open', 'manual_or_thread_reply', $6)
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-        [row.candidate_id, triage.matchedApplicationId, id, details.scheduledAt ? "Interview detected — confirm attendance" : "Interview email detected — review details", details.scheduledAt || "Interview logistics need AE review.", `email:${id}:interview`]
+        [row.candidate_id, triage.matchedApplicationId, id, scheduledAt && !cancelled ? "Interview detected — confirm attendance" : "Interview email detected — review details", scheduledAt && !cancelled ? scheduledAt : "Interview logistics need AE review.", `email:${id}:interview`]
       );
       await execute("UPDATE action_items SET due_at = COALESCE(due_at, $2::timestamptz + interval '24 hours') WHERE email_communication_id = $1 AND status = 'open'", [id, row.sent_at]);
     } catch (interviewError) {

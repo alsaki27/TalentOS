@@ -29,6 +29,7 @@ export function StageEditor({ api, stage, onSaved, onCancel }: {
   const initialStatus = stage?.status || (stage?.scheduled_at ? "scheduled" : "planned");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [mockResult, setMockResult] = useState(stage?.mock_interview_taken ?? null);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,12 +47,14 @@ export function StageEditor({ api, stage, onSaved, onCancel }: {
       ...(form.get("format") ? { format: form.get("format") } : {}), durationMinutes: Number(form.get("duration")),
       location: readText("location"), meetingLink: readText("meetingLink"),
       notes: readText("notes"), preparationNotes: readText("preparationNotes"),
+      ...(stage && mockResult !== null ? { mockInterviewTaken: mockResult } : {}),
     };
     const initialValues: Record<string, unknown> = {
       roundName: stage?.round_name || "Interview", scheduledAt: stage?.scheduled_at ?? null, status: initialStatus,
       timeZone: zone, format: stage?.interview_format, durationMinutes: stage?.duration_minutes ?? 60,
       location: stage?.location?.trim() || "", meetingLink: stage?.meeting_link?.trim() || "",
       notes: stage?.notes?.trim() || "", preparationNotes: stage?.preparation_notes?.trim() || "",
+      mockInterviewTaken: stage?.mock_interview_taken ?? null,
     };
     const updates = stage
       ? Object.fromEntries(Object.entries(values).filter(([key, value]) => value !== initialValues[key]))
@@ -96,6 +99,13 @@ export function StageEditor({ api, stage, onSaved, onCancel }: {
       <label>Meeting link<input name="meetingLink" type="url" maxLength={2000} defaultValue={stage?.meeting_link ?? ""} /></label>
       <label>Candidate preparation notes<textarea name="preparationNotes" maxLength={10000} defaultValue={stage?.preparation_notes ?? ""} placeholder="Instructions the candidate will see in the portal" /></label>
       <label>Staff notes<textarea name="notes" maxLength={10000} defaultValue={stage?.notes ?? ""} /></label>
+      {stage && <fieldset className={styles.mockOptions} disabled={busy}>
+        <legend>Mock interview taken?</legend>
+        <label><input type="radio" name="mockInterviewTaken" checked={mockResult === true} onChange={() => setMockResult(true)} />
+          <span aria-hidden="true">{mockResult === true && <Check size={12} />}</span> Yes</label>
+        <label><input type="radio" name="mockInterviewTaken" checked={mockResult === false} onChange={() => setMockResult(false)} />
+          <span aria-hidden="true">{mockResult === false && <Check size={12} />}</span> No</label>
+      </fieldset>}
       {error && <p role="alert" className={styles.error}>{error}</p>}
       <div className={styles.actions}>
         <button type="submit" disabled={busy}>{busy ? "Saving…" : stage ? "Save stage" : "Add stage"}</button>
@@ -114,6 +124,7 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
 }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
   const fileUrl = api + "/" + stage.id + "/preparation";
   const meetingUrl = safeMeetingUrl(stage.meeting_link);
@@ -133,25 +144,22 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
     };
   }, [busy, editing]);
 
-  const [savingMock, setSavingMock] = useState(false);
-  const [mockResult, setMockResult] = useState(stage.mock_interview_taken);
-
-  async function saveMock(value: boolean) {
-    if (value === mockResult) return;
-    setSavingMock(true);
+  async function removeStage() {
+    if (!window.confirm(
+      `Remove Stage ${stage.round_number}? Its panel assignments and feedback will be deleted, and its audio will no longer be accessible here or in the portal. Remaining stages will be renumbered.`
+    )) return;
+    setRemoving(true);
     setError("");
     try {
       await requestJson(api + "/" + stage.id, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mockInterviewTaken: value }),
+        method: "DELETE",
       });
-      setMockResult(value);
+      setEditing(false);
       onChange();
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
-      setSavingMock(false);
+      setRemoving(false);
     }
   }
 
@@ -165,7 +173,12 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
             <span className={styles.stageBadge} data-status={status}>{INTERVIEW_STAGE_STATUS[status] ?? status.replace(/_/g, " ")}</span>
             {stage.rescheduled_at && <span className={styles.rescheduledBadge}>Rescheduled</span>}
           </div>
-          <button type="button" onClick={() => setEditing(true)}>Edit stage</button>
+          <div className={styles.actions}>
+            <button type="button" disabled={removing} onClick={() => setEditing(true)}>Edit stage</button>
+            <button className={styles.removeStage} type="button" disabled={removing} onClick={() => void removeStage()}>
+              {removing ? "Removing…" : "Remove stage"}
+            </button>
+          </div>
         </div>
         <div className={styles.stageFacts}>
           <div><span>When</span><strong>{stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "Date and time not added"}</strong>
@@ -183,14 +196,10 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
           <div><span>Candidate preparation</span><p>{stage.preparation_notes || "Preparation notes not added."}</p></div>
           <div><span>Staff notes</span><p>{stage.notes || "Staff notes not added."}</p></div>
         </div>
-        <fieldset className={styles.mockOptions} disabled={savingMock}>
-          <legend>Mock interview taken?</legend>
-          <label><input type="radio" name={"mock-" + stage.id} checked={mockResult === true} onChange={() => void saveMock(true)} />
-            <span aria-hidden="true">{mockResult === true && <Check size={12} />}</span> Yes</label>
-          <label><input type="radio" name={"mock-" + stage.id} checked={mockResult === false} onChange={() => void saveMock(false)} />
-            <span aria-hidden="true">{mockResult === false && <Check size={12} />}</span> No</label>
-          {savingMock && <small role="status">Saving…</small>}
-        </fieldset>
+        <dl className={styles.mockSummary}>
+          <dt>Mock interview taken?</dt>
+          <dd>{stage.mock_interview_taken === true ? "Yes" : stage.mock_interview_taken === false ? "No" : "Not recorded"}</dd>
+        </dl>
         <div className={styles.stageFileSummary}>
           <div className={styles.sectionLabel}><h4>Interview audio</h4></div>
           <ApplicationPreparationFiles files={files} endpoint={fileUrl} audio editable showManager={false} />

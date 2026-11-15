@@ -105,7 +105,8 @@ export interface CandidatePortalApplicationDetail {
   next_action: string | null;
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
-  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null; rescheduled: boolean }[];
+  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null; rescheduled: boolean;
+    scheduled_at?: string | null; previous_scheduled_at?: string | null; previous_time_zone?: string | null }[];
   preparation_files?: InterviewPreparationFile[];
   interviews: {
     id: string;
@@ -404,8 +405,10 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
 
   for (const interview of interviews ?? []) {
     const status = String(interview.status || "scheduled").toLowerCase();
+    const rescheduled = Boolean(interview.rescheduled_at) && status !== "cancelled";
     const label = status === "cancelled" ? "Interview cancelled" : status === "completed" ? "Interview completed"
-      : status === "no_show" ? "Interview marked as no show" : interview.scheduled_at ? "Interview scheduled" : "Interview stage added";
+      : status === "no_show" ? "Interview marked as no show" : rescheduled ? "Interview rescheduled"
+      : interview.scheduled_at ? "Interview scheduled" : "Interview stage added";
     // round_name is always the literal "Interview", so showing it after
     // "Interview scheduled" just repeated the word - the stage number is
     // what actually distinguishes one entry from another.
@@ -418,7 +421,10 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       // Interview entries carry their own zone so the Progress list can show the
       // time the interview was scheduled in, not the viewer's browser zone.
       time_zone: interview.time_zone || "America/New_York",
-      rescheduled: Boolean(interview.rescheduled_at),
+      rescheduled,
+      scheduled_at: interview.scheduled_at,
+      previous_scheduled_at: interview.previous_scheduled_at,
+      previous_time_zone: interview.previous_time_zone,
     });
   }
 

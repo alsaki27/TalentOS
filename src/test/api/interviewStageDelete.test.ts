@@ -1,12 +1,10 @@
-// Regression coverage for removing an interview stage (round 1-4) so it can
-// be scheduled again from scratch, instead of being stuck once added — the
-// modal previously only supported add/edit, with no way back out.
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getCurrentUserContext: vi.fn(),
   queryOne: vi.fn(),
+  transaction: vi.fn(),
+  txQuery: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({
@@ -15,6 +13,7 @@ vi.mock("@/lib/auth", () => ({
 
 vi.mock("@/server/db/neon", () => ({
   queryOne: mocks.queryOne,
+  sql: () => ({ transaction: mocks.transaction }),
 }));
 
 import { NextRequest } from "next/server";
@@ -30,7 +29,7 @@ function req() {
 }
 
 describe("DELETE /api/applications/[id]/interviews/[scheduleId]", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
 
   it("requires an authenticated session", async () => {
     mocks.getCurrentUserContext.mockResolvedValue(null);
@@ -41,22 +40,31 @@ describe("DELETE /api/applications/[id]/interviews/[scheduleId]", () => {
     expect(mocks.queryOne).not.toHaveBeenCalled();
   });
 
-  it("deletes the stage scoped to both its id and the application id", async () => {
+  it("locks the application and renumbers its surviving stages in the same transaction", async () => {
     mocks.getCurrentUserContext.mockResolvedValue({ profile: { display_name: "Staff" } });
-    mocks.queryOne.mockResolvedValueOnce({ status: "interview" }).mockResolvedValueOnce({ id: scheduleId });
+    mocks.queryOne.mockResolvedValueOnce({ status: "interview" });
+    mocks.transaction.mockImplementationOnce((run) => {
+      run({ query: mocks.txQuery });
+      return [[{ id: applicationId }], [{ id: scheduleId }]];
+    });
 
     const response = await DELETE(req(), { params: { id: applicationId, scheduleId } });
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body).toEqual({ success: true });
-    expect(mocks.queryOne.mock.calls[1][0]).toContain("DELETE FROM interview_schedules s USING applications a");
-    expect(mocks.queryOne.mock.calls[1][0]).toContain("AND a.id = s.application_id");
+    expect(mocks.txQuery.mock.calls[0][0]).toContain("FOR UPDATE");
+    expect(mocks.txQuery.mock.calls[0][1]).toEqual([applicationId]);
+    expect(mocks.txQuery.mock.calls[1][0]).toContain("DELETE FROM interview_schedules s USING applications a");
+    expect(mocks.txQuery.mock.calls[1][0]).toContain("s.application_id = $2 AND s.id <> $1 AND EXISTS (SELECT 1 FROM deleted)");
+    expect(mocks.txQuery.mock.calls[1][0]).toContain("UPDATE interview_schedules s SET round_number = n.new_round");
+    expect(mocks.txQuery.mock.calls[1][1]).toEqual([scheduleId, applicationId]);
   });
 
   it("404s when the stage does not exist (or belongs to a different application)", async () => {
     mocks.getCurrentUserContext.mockResolvedValue({ profile: { display_name: "Staff" } });
-    mocks.queryOne.mockResolvedValueOnce({ status: "interview" }).mockResolvedValueOnce(null);
+    mocks.queryOne.mockResolvedValueOnce({ status: "interview" });
+    mocks.transaction.mockResolvedValueOnce([[{ id: applicationId }], []]);
 
     const response = await DELETE(req(), { params: { id: applicationId, scheduleId } });
 
@@ -100,12 +108,23 @@ describe("PATCH interview stage", () => {
   it("records the old date and timezone when rescheduling", async () => {
     mocks.queryOne.mockResolvedValueOnce({ status: "interview" });
     mocks.queryOne.mockResolvedValueOnce({ scheduled_at: "2026-11-18T12:00:00Z", status: "scheduled", has_new_fields: true });
-    mocks.queryOne.mockResolvedValueOnce({ id: scheduleId, scheduled_at: "2026-11-19T12:00:00Z" });
+    mocks.queryOne.mockResolvedValueOnce({ id: scheduleId, scheduled_at: "2026-11-19T12:00:00Z", was_rescheduled: true });
     const result = await patch({ scheduledAt: "2026-11-19T12:00:00Z", timeZone: "America/Chicago" });
     expect(result.status).toBe(200);
     expect((await result.json()).rescheduled).toBe(true);
+    expect(mocks.queryOne.mock.calls[2][0]).toContain("THEN 'interview_stage.rescheduled'");
     expect(mocks.queryOne.mock.calls[2][0]).toMatch(/previous_scheduled_at = CASE .* THEN scheduled_at/);
     expect(mocks.queryOne.mock.calls[2][0]).toMatch(/previous_time_zone = CASE .* THEN time_zone/);
+  });
+
+  it("keeps a notes-only edit separate from a reschedule", async () => {
+    mocks.queryOne.mockResolvedValueOnce({ status: "interview" });
+    mocks.queryOne.mockResolvedValueOnce({ scheduled_at: "2026-11-18T12:00:00Z", status: "scheduled", has_new_fields: true });
+    mocks.queryOne.mockResolvedValueOnce({ id: scheduleId });
+    const result = await patch({ notes: "Updated notes" });
+    expect(result.status).toBe(200);
+    expect((await result.json()).rescheduled).toBe(false);
+    expect(mocks.queryOne.mock.calls[2][0]).not.toContain("previous_scheduled_at =");
   });
 
   it("blocks edits until the application reaches Interview", async () => {

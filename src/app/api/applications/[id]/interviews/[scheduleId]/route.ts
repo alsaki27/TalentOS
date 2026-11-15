@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
 import { isInterviewTimeZone } from "@/lib/easternTime";
-import { queryOne } from "@/server/db/neon";
+import { queryOne, sql } from "@/server/db/neon";
 import { INTERVIEW_STAGE_COLUMNS_S, parsePreparationFields } from "@/server/services/interviewStageFields";
 import { getApplicationInterviewAccess } from "@/server/services/applicationInterviewAccess";
 import { APPLICATION_INTERVIEW_ACCESS_SQL } from "@/lib/applicationInterviewAccess";
@@ -97,17 +97,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   values.push(params.scheduleId, params.id, actor.user_id, actor.email, actor.display_name || actor.email,
     JSON.stringify(Object.keys(body)));
   const stage = await queryOne(
-    `WITH changed AS (
+    `WITH previous AS (
+       SELECT s.id, s.scheduled_at AS old_time, s.time_zone AS old_zone
+       FROM interview_schedules s WHERE s.id = $${fieldCount + 1} AND s.application_id = $${fieldCount + 2}
+       FOR UPDATE
+     ), changed AS (
        UPDATE interview_schedules s SET ${sets.join(", ")}
-       FROM applications a
-       WHERE s.id = $${fieldCount + 1} AND s.application_id = $${fieldCount + 2}
+       FROM applications a, previous p
+       WHERE s.id = p.id AND s.application_id = $${fieldCount + 2}
          AND a.id = s.application_id AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
-       RETURNING ${INTERVIEW_STAGE_COLUMNS_S}
+       RETURNING ${INTERVIEW_STAGE_COLUMNS_S}, p.old_time, p.old_zone,
+         (p.old_time IS NOT NULL AND s.scheduled_at IS NOT NULL AND p.old_time <> s.scheduled_at) AS was_rescheduled
      ), audit AS (
        INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata)
-       SELECT $${fieldCount + 3}, $${fieldCount + 4}, 'interview_stage.updated', 'application', $${fieldCount + 2},
+       SELECT $${fieldCount + 3}, $${fieldCount + 4},
+              CASE WHEN was_rescheduled THEN 'interview_stage.rescheduled' ELSE 'interview_stage.updated' END,
+              'application', $${fieldCount + 2},
               jsonb_build_object('stage_id', id, 'round', round_number, 'status', status,
                 'actor', $${fieldCount + 5}::text, 'fields', $${fieldCount + 6}::jsonb,
+                'previous_scheduled_at', old_time, 'previous_time_zone', old_zone,
+                'scheduled_at', scheduled_at, 'time_zone', time_zone,
                 'mock_interview_taken', CASE WHEN $${fieldCount + 6}::jsonb ? 'mockInterviewTaken' THEN mock_interview_taken END)
        FROM changed
      )
@@ -115,17 +124,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     values
   );
   if (!stage) return NextResponse.json({ error: "Interview stage not found." }, { status: 404 });
-  const rescheduled = Boolean(hasDate && existing.scheduled_at && scheduledAt &&
-    new Date(existing.scheduled_at).getTime() !== new Date(scheduledAt).getTime());
-  return NextResponse.json({ stage, rescheduled });
+  const { old_time, old_zone, was_rescheduled, ...updatedStage } = stage;
+  return NextResponse.json({ stage: updatedStage, rescheduled: was_rescheduled === true });
 }
 
-// DELETE -> remove one interview stage entirely, freeing its round number
-// to be scheduled again from scratch. interview_panel_members and
-// interview_scorecards both reference this row with ON DELETE CASCADE
-// (sql/03_analytics_interviews_email.sql), so any panel assignment or
-// submitted feedback for this specific stage is removed with it — the
-// client confirms this explicitly before calling DELETE.
+// Keep the surviving stage IDs so their attachments and feedback stay linked.
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string; scheduleId: string } }) {
   const currentUser = await getCurrentUserContext();
   if (!currentUser) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -133,13 +136,29 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (!access.exists) return NextResponse.json({ error: "Application not found." }, { status: 404 });
   if (!access.allowed) return NextResponse.json({ error: "Interview details unlock when the application reaches Interview." }, { status: 409 });
 
-  const deleted = await queryOne<{ id: string }>(
-    `DELETE FROM interview_schedules s USING applications a
-     WHERE s.id = $1 AND s.application_id = $2 AND a.id = s.application_id
-       AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
-     RETURNING s.id`,
-    [params.scheduleId, params.id]
-  );
-  if (!deleted) return NextResponse.json({ error: "Interview stage not found." }, { status: 404 });
+  const [, deleted] = await sql().transaction((tx) => [
+    // Use the same application lock as stage creation before reading the surviving rounds.
+    tx.query(`SELECT a.id FROM applications a WHERE a.id = $1 AND ${APPLICATION_INTERVIEW_ACCESS_SQL} FOR UPDATE`, [params.id]),
+    tx.query<{ id: string }[]>(
+      `WITH deleted AS (
+         DELETE FROM interview_schedules s USING applications a
+         WHERE s.id = $1 AND s.application_id = $2 AND a.id = s.application_id
+           AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
+         RETURNING s.id
+       ), numbered AS (
+         SELECT s.id, ROW_NUMBER() OVER (
+           ORDER BY s.round_number, s.created_at NULLS LAST, s.id
+         )::integer AS new_round
+         FROM interview_schedules s
+         WHERE s.application_id = $2 AND s.id <> $1 AND EXISTS (SELECT 1 FROM deleted)
+       ), renumbered AS (
+         UPDATE interview_schedules s SET round_number = n.new_round
+         FROM numbered n WHERE s.id = n.id AND s.round_number <> n.new_round
+       )
+       SELECT id FROM deleted`,
+      [params.scheduleId, params.id]
+    ),
+  ]);
+  if (!deleted.length) return NextResponse.json({ error: "Interview stage not found." }, { status: 404 });
   return NextResponse.json({ success: true });
 }

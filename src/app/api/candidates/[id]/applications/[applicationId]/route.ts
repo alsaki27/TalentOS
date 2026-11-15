@@ -53,24 +53,27 @@ export async function GET(_request: Request, { params }: { params: { id: string;
       query<ApplicationActivity>(
         `SELECT * FROM (
            SELECT id::text, 'stage' AS kind, 'Application stage changed' AS action,
-             from_stage AS before_value, to_stage AS after_value, reason AS detail, changed_by_name AS actor, changed_at AS created_at
+             from_stage AS before_value, to_stage AS after_value, reason AS detail, changed_by_name AS actor, changed_at AS created_at,
+             NULL::text AS previous_time_zone, NULL::text AS time_zone
            FROM application_stage_history WHERE application_id = $1
            UNION ALL
-           SELECT id::text, 'status', 'Application status changed', from_status, to_status, note, NULL, created_at
+           SELECT id::text, 'status', 'Application status changed', from_status, to_status, note, NULL, created_at, NULL, NULL
            FROM application_events WHERE application_id = $1
            UNION ALL
-           SELECT id::text, 'update', action, NULL, metadata->>'status',
+           SELECT id::text, 'update', action,
+             CASE WHEN action = 'interview_stage.rescheduled' THEN metadata->>'previous_scheduled_at' END,
+             CASE WHEN action = 'interview_stage.rescheduled' THEN metadata->>'scheduled_at' ELSE metadata->>'status' END,
              COALESCE(metadata->>'filename', metadata->>'round_number', metadata->>'round'),
-             COALESCE(metadata->>'actor', actor_email), created_at
+             COALESCE(metadata->>'actor', actor_email), created_at, metadata->>'previous_time_zone', metadata->>'time_zone'
            FROM audit_logs WHERE entity_type = 'application' AND entity_id = $1
-             AND (action IN ('interview_stage.added', 'interview_stage.updated', 'interview_file.added',
+             AND (action IN ('interview_stage.added', 'interview_stage.updated', 'interview_stage.rescheduled', 'interview_stage.cancelled', 'interview_file.added',
                   'interview_file.shared', 'interview_file.hidden', 'interview_file.removed',
                   'application.interview_scheduled', 'custom_interview.updated', 'custom_interview.created')
                   OR action LIKE 'interview_audio.%'
                   OR (action = 'application.updated' AND (metadata->'fields') ?| ARRAY['next_action','follow_up_at']))
            UNION ALL
            SELECT 'interview:' || s.id, 'interview', 'Interview stage created', NULL, NULL,
-             s.round_number::text, s.created_by, s.created_at
+             s.round_number::text, s.created_by, s.created_at, NULL, NULL
            FROM interview_schedules s WHERE s.application_id = $1
              AND NOT EXISTS (
                SELECT 1 FROM audit_logs l WHERE l.entity_type = 'application' AND l.entity_id = $1

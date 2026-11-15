@@ -22,6 +22,8 @@ const activityLabels: Record<string, string> = {
   "application.interview_scheduled": "Interview scheduled",
   "interview_stage.added": "Interview stage added",
   "interview_stage.updated": "Interview stage edited",
+  "interview_stage.rescheduled": "Interview rescheduled",
+  "interview_stage.cancelled": "Interview cancelled",
   "interview_file.added": "Preparation file uploaded",
   "interview_file.shared": "Preparation file shared",
   "interview_file.hidden": "Preparation file hidden",
@@ -45,12 +47,16 @@ function shortId(value: string | null) {
 
 function ActivityItem({ event }: { event: ApplicationActivity }) {
   const statusEvent = event.kind === "status" || event.kind === "stage";
+  const rescheduled = event.action === "interview_stage.rescheduled";
   const stageDetail = event.detail && /^\d+$/.test(event.detail) &&
     (event.kind === "interview" || event.action.startsWith("interview_stage.") || event.action === "application.interview_scheduled");
   return (
     <li>
       <strong>{activityLabels[event.action] || event.action}{stageDetail ? " · Stage " + event.detail : ""}</strong>
-      {event.after_value && (
+      {rescheduled ? <div>
+        {event.before_value && <div>Previous time · {formatZonedDateTime(event.before_value, event.previous_time_zone)}</div>}
+        {event.after_value && <div>New time · {formatZonedDateTime(event.after_value, event.time_zone)}</div>}
+      </div> : event.after_value && (
         <div>{statusEvent
           ? [event.before_value && applicationStageLabel(event.before_value), applicationStageLabel(event.after_value)].filter(Boolean).join(" → ")
           : INTERVIEW_STAGE_STATUS[event.after_value] || event.after_value}</div>

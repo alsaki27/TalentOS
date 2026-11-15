@@ -249,6 +249,27 @@ export async function getAttachment(accessToken: string, messageId: string, atta
   return { data: data.data, size: data.size };
 }
 
+// Calendar parts can be inline without a filename, or stored by attachment ID.
+export async function getGmailCalendarParts(accessToken: string, messageId: string): Promise<string[]> {
+  const response = await gmailFetch(`/messages/${encodeURIComponent(messageId)}?format=full`, accessToken);
+  const message = await response.json();
+  const calendars: string[] = [];
+  const maxBytes = 256 * 1024;
+  async function visit(part: any) {
+    if (!part || calendars.length >= 4) return;
+    if (/^(?:text\/calendar|application\/(?:ics|icalendar))(?:;|$)/i.test(part.mimeType ?? "") || /\.ics$/i.test(part.filename ?? "")) {
+      if (Number(part.body?.size) > maxBytes) { calendars.push(""); return; }
+      const data = part.body?.data ?? (part.body?.attachmentId
+        ? (await getAttachment(accessToken, messageId, part.body.attachmentId)).data : null);
+      calendars.push(typeof data === "string" && data.length <= Math.ceil(maxBytes * 4 / 3) + 4 ? decodeBase64Url(data) : "");
+      return;
+    }
+    for (const child of part.parts ?? []) await visit(child);
+  }
+  await visit(message.payload);
+  return calendars;
+}
+
 export function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
   if (!payload) return result;
   if (payload.filename && payload.body && (payload.body.attachmentId || payload.body.size)) {
