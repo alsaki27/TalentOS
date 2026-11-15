@@ -1,5 +1,6 @@
 import {
   APPLICATION_FACT_PROFILE_FIELDS,
+  APPLICATION_PROFILE_NOTES_SECTION,
   normalizeApplicationQuestion,
   profileMatchesApplicationFact,
   resolveApplicationFacts,
@@ -205,7 +206,7 @@ export async function reviewApplicationFact(
         [candidateId, factId, expectedRevision],
       ),
     ]);
-    if (!profile || !current || !profileMatchesApplicationFact(current, profile)) return null;
+    if (!profile || !current || current.section === APPLICATION_PROFILE_NOTES_SECTION || !profileMatchesApplicationFact(current, profile)) return null;
   }
   const row = await queryOne<FactRow>(
     `UPDATE candidate_application_facts f SET

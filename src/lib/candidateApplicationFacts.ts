@@ -1,6 +1,7 @@
 export const APPLICATION_FACT_KINDS = ["text", "boolean", "integer", "decimal", "date", "option"] as const;
 export const APPLICATION_FACT_DISPOSITIONS = ["known", "unknown", "declined"] as const;
 export const APPLICATION_FACT_SOURCES = ["profile", "candidate_attested", "document"] as const;
+export const APPLICATION_PROFILE_NOTES_SECTION = "Imported source notes";
 
 export const APPLICATION_FACT_PROFILE_FIELDS = {
   name: "Full name",
@@ -92,6 +93,9 @@ export function parseApplicationFactDraft(input: unknown): ApplicationFactDraft 
     typeof expiry !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(expiry) ||
     !isCalendarDate(expiry.slice(0, 10)) || !Number.isFinite(Date.parse(expiry))
   )) return null;
+  if (section === APPLICATION_PROFILE_NOTES_SECTION && (
+    jobId !== null || expiry !== null || valueKind !== "text" || disposition !== "known" || sourceKind === "profile"
+  )) return null;
 
   let value: ApplicationFactValue | null = null;
   if (disposition === "known") {
@@ -155,6 +159,7 @@ export function resolveApplicationFacts(
 
   const byQuestion = new Map<string, CandidateApplicationFact[]>();
   for (const fact of current.values()) {
+    if (fact.section === APPLICATION_PROFILE_NOTES_SECTION) continue;
     if (fact.jobId !== null && fact.jobId !== jobId) continue;
     const key = normalizeApplicationQuestion(fact.question);
     const matches = byQuestion.get(key) ?? [];

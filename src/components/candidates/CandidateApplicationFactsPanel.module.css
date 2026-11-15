@@ -1,0 +1,475 @@
+.trigger {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+  backdrop-filter: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.trigger:hover:not(:disabled) {
+  background: var(--surface-raised);
+  border-color: var(--accent);
+  box-shadow: none;
+  transform: none;
+}
+
+.triggerIcon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
+.triggerText {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.triggerTitle {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.triggerSummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pendingCount {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(var(--warn-rgb), 0.15);
+}
+
+.triggerArrow {
+  color: var(--ink-soft);
+}
+
+.trigger:hover .triggerArrow {
+  color: var(--ink);
+}
+
+.dialog {
+  position: fixed;
+  inset: 0;
+  box-sizing: border-box;
+  width: min(960px, calc(100% - 32px));
+  max-width: none;
+  height: min(760px, calc(100vh - 32px));
+  height: min(760px, calc(100dvh - 32px));
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 72px rgba(var(--shadow-color), 0.45);
+  overflow: hidden;
+}
+
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(3px);
+}
+
+.dialogHeader {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px 12px;
+  background: var(--surface);
+}
+
+.dialogTitle {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(17px, 2.5vw, 22px);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.candidateName {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.closeButton {
+  display: inline-grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  box-shadow: none;
+}
+
+.closeButton:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: none;
+  transform: none;
+}
+
+.tabList {
+  display: flex;
+  flex: none;
+  gap: 20px;
+  padding: 0 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  margin-bottom: -1px;
+  padding: 7px 3px;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  box-shadow: none;
+}
+
+.tab:hover {
+  color: var(--ink);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.tab[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+
+.tabCount {
+  min-width: 20px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.tab[aria-selected="true"] .tabCount {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.dialogBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 20px 24px 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.feedback {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.feedback[role="alert"] {
+  border-color: rgba(var(--danger-rgb), 0.45);
+  background: var(--danger-soft);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.searchField {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 4px;
+  min-width: 0;
+  max-width: 420px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.searchField input {
+  width: 100%;
+  min-width: 0;
+}
+
+.historyToggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 6px;
+  min-height: 36px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.answerGroup + .answerGroup {
+  margin-top: 22px;
+}
+
+.answerGroup > h3,
+.answerGroup > h4 {
+  margin: 0 0 9px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.answerList,
+.attentionList {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.answerRow {
+  min-width: 0;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.answerHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.answerText {
+  margin: 6px 0;
+  color: var(--ink);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.answerMeta {
+  margin: 5px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.answerMeta > summary {
+  width: fit-content;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.rowActions,
+.editorActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.rowActions button,
+.editorActions button {
+  min-height: 32px;
+}
+
+.emptyState {
+  margin: 0;
+  padding: 22px 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+.editor {
+  margin: 0 0 16px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.editor > h3,
+.editor > h4,
+.editor > h5 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.editorFields,
+.noteFields {
+  display: grid;
+  gap: 12px;
+}
+
+.editorFields {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+}
+
+.editorFields label,
+.noteFields label {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.editorFields input,
+.editorFields select,
+.editorFields textarea,
+.noteFields input,
+.noteFields textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.editorFields textarea,
+.noteFields textarea {
+  resize: vertical;
+}
+
+.attention {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(var(--warn-rgb), 0.32);
+  border-radius: var(--radius);
+  background: rgba(var(--warn-rgb), 0.07);
+}
+
+.attention > h3,
+.attention > h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.attentionRow {
+  overflow-wrap: anywhere;
+}
+
+.attentionRow + .attentionRow {
+  padding-top: 8px;
+  border-top: 1px solid rgba(var(--warn-rgb), 0.22);
+}
+
+.trigger:focus-visible,
+.closeButton:focus-visible,
+.tab:focus-visible,
+.answerMeta > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 560px) {
+  .trigger {
+    gap: 10px;
+    padding: 13px;
+  }
+
+  .triggerIcon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .dialog {
+    width: calc(100% - 16px);
+    height: calc(100vh - 16px);
+    height: calc(100dvh - 16px);
+  }
+
+  .dialogHeader {
+    gap: 10px;
+    padding: 14px 14px 10px;
+  }
+
+  .tabList {
+    gap: 14px;
+    padding: 0 14px;
+  }
+
+  .dialogBody {
+    padding: 15px 14px;
+    scrollbar-gutter: auto;
+  }
+
+  .searchField {
+    max-width: none;
+  }
+
+  .answerRow,
+  .editor {
+    padding: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger {
+    transition: none;
+  }
+}
