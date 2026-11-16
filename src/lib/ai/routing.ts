@@ -283,11 +283,12 @@ async function getPoolKeyMetadata(
   return keys.slice(start).concat(keys.slice(0, start));
 }
 
-type ResumeEvidenceRoute = {
-  provider: string;
-  model: string;
-  allowOpenCodeFallback?: boolean;
-};
+export type ResumeRouteSnapshot = Pick<AutomationRouteRow,
+  "automation_id" | "provider" | "model_override" | "ai_key_id" | "rank" | "reasoning_effort">;
+
+type ResumeEvidenceRoute =
+  | { provider: string; model: string; allowOpenCodeFallback?: boolean }
+  | { routes?: readonly ResumeRouteSnapshot[] };
 
 function evidenceRouteTransport(
   route: ResumeEvidenceRoute | undefined,
@@ -335,8 +336,12 @@ export async function getProviderForAutomation(
 
   const runtime = await getAiRuntimeConfig();
   const selectedRoutingStateId = routingStateId ?? runtime.active_routing_state_id;
-  let usingRoutingStateRoutes = Boolean(selectedRoutingStateId);
-  let routes = selectedRoutingStateId
+  const configured = resumeEvidenceRoute && "routes" in resumeEvidenceRoute ? resumeEvidenceRoute.routes : undefined;
+  const pinned = resumeEvidenceRoute && "provider" in resumeEvidenceRoute ? resumeEvidenceRoute : undefined;
+  let usingRoutingStateRoutes = !configured && Boolean(selectedRoutingStateId);
+  let routes = configured
+    ? configured.map(route => ({ ...route, id: `resume:${automationId}:${route.rank}`, is_enabled: true }))
+    : selectedRoutingStateId
     ? await query<AutomationRouteRow>(
         `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
                 automation_id, ai_key_id, provider, rank, is_enabled, model_override,
@@ -347,7 +352,7 @@ export async function getProviderForAutomation(
         [selectedRoutingStateId, automationId]
       )
     : [];
-  if (routes.length === 0) {
+  if (routes.length === 0 && !configured) {
     usingRoutingStateRoutes = false;
     routes = await query<AutomationRouteRow>(
       `SELECT * FROM ai_automation_routes
@@ -361,19 +366,20 @@ export async function getProviderForAutomation(
   let limitSkipped = false;
   for (const route of routes) {
     if (excludeRouteIds?.has(route.id)) continue;
-    const acceptsProvider = (provider: string) => !resumeEvidenceRoute
-      || provider === resumeEvidenceRoute.provider
-      || (resumeEvidenceRoute.allowOpenCodeFallback && route.rank > 1 && provider === "opencode");
-    const acceptsModel = (provider: string, model: string | null) => !resumeEvidenceRoute
-      || provider !== resumeEvidenceRoute.provider || model === resumeEvidenceRoute.model;
+    const acceptsProvider = (provider: string) => !pinned
+      || provider === pinned.provider
+      || (pinned.allowOpenCodeFallback && route.rank > 1 && provider === "opencode");
+    const acceptsModel = (provider: string, model: string | null) => !pinned
+      || provider !== pinned.provider || model === pinned.model;
     if (route.ai_key_id) {
       // An explicit key is the route's anchor. For pooled providers, sibling
       // keys are alternatives at this same route rank; for every other
       // provider the historical exact-key behavior is preserved.
       const anchorMetadata = (await listEnabledAiKeys()).find((key) => key.id === route.ai_key_id);
       const anchor = await getAiKeyWithDecryptedKey(route.ai_key_id);
-      const anchorProvider = anchor?.provider ?? anchorMetadata?.provider;
+      const anchorProvider = anchor?.provider ?? anchorMetadata?.provider ?? (configured ? route.provider : null);
       if (!anchorProvider) continue;
+      if (configured && route.provider && anchorProvider !== route.provider) continue;
       if (!acceptsProvider(anchorProvider)) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
       const keyScopedRecovery = scheduledKeyRecovery || (Boolean(resumeEvidenceRoute) && anchorProvider === "opencode");
@@ -395,7 +401,8 @@ export async function getProviderForAutomation(
           limitSkipped ||= Boolean(keyRow.cooldown_until || keyRow.status === "rate_limited");
           continue;
         }
-        if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
+        const effectiveModel = route.model_override ?? keyRow.model ?? (resumeEvidenceRoute ? keyRow.default_model : null);
+        if (excludeKeyModels?.has(keyModelId(keyRow.id, effectiveModel))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
@@ -422,7 +429,6 @@ export async function getProviderForAutomation(
           continue;
         }
 
-        const effectiveModel = route.model_override ?? keyRow.model;
         if (!acceptsModel(keyRow.provider, effectiveModel)) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
@@ -481,7 +487,8 @@ export async function getProviderForAutomation(
         }
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
-        if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
+        const effectiveModel = route.model_override ?? keyRow.model ?? (resumeEvidenceRoute ? keyRow.default_model : null);
+        if (excludeKeyModels?.has(keyModelId(keyRow.id, effectiveModel))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
@@ -508,7 +515,6 @@ export async function getProviderForAutomation(
           continue;
         }
 
-        const effectiveModel = route.model_override ?? keyRow.model;
         if (!acceptsModel(keyRow.provider, effectiveModel)) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
@@ -559,8 +565,8 @@ export async function getProviderForAutomation(
   // 3. Optional Neon-managed emergency fallback.
   if (resumeEvidenceRoute) {
     throw new AiRouteCallError(
-      limitSkipped ? "The configured model has no keys available during cooldown" : "No eligible key is configured for the pinned resume model",
-      { aiKeyId: null, provider: resumeEvidenceRoute.provider, model: resumeEvidenceRoute.model, routeRank: null,
+      limitSkipped ? "The configured resume routes have no keys available during cooldown" : "No eligible key is configured for this resume stage",
+      { aiKeyId: null, provider: pinned?.provider ?? "unknown", model: pinned?.model ?? null, routeRank: null,
         errorCode: limitSkipped ? "quota_exhausted" : "configuration_error" },
     );
   }
@@ -624,6 +630,9 @@ export interface CallWithUsageTrackingResult<T> {
   latencyMs: number;
 }
 
+/** The route has an unconfirmed request which must not be repeated automatically. */
+export class AiAttemptCheckpointError extends Error {}
+
 export class AiRouteCallError extends Error {
   aiKeyId: string | null;
   provider: string;
@@ -662,6 +671,10 @@ export interface CallContext {
   deadlineAt?: number;
   signal?: AbortSignal;
   resumeEvidenceRoute?: ResumeEvidenceRoute;
+  checkpointResumeDraft?: <T>(
+    route: Pick<AutomationRouteResult, "name" | "model">,
+    invoke: () => Promise<CallWithUsageTrackingResult<T>>,
+  ) => Promise<{ result: CallWithUsageTrackingResult<T>; reused: boolean }>;
   // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
   // harness). Suppresses every write this call would otherwise make against
   // live routing state - ai_usage_events rows, ai_api_keys health mutations,
@@ -685,7 +698,7 @@ export interface CallContext {
 export async function callWithUsageTracking<T>(
   automationId: string,
   ctx: CallContext | undefined,
-  fn: (provider: AiProvider) => Promise<T>,
+  fn: (provider: AiProvider, route: Pick<AutomationRouteResult, "name" | "model">) => Promise<T>,
   excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
 
@@ -716,6 +729,7 @@ export async function callWithUsageTracking<T>(
   let sameRankRetries = 0;
   let previousRouteRank: number | null = null;
   let iteration = 0;
+  const providerAttemptsByRoute = new Map<string, number>();
 
   while (true) {
     ctx?.signal?.throwIfAborted();
@@ -743,7 +757,7 @@ export async function callWithUsageTracking<T>(
       // Raw SDK errors here made failed workflow stages lose their key, model,
       // route rank, and normalized error code in the Control Center.
       if (lastError) {
-        if (lastError instanceof AiRouteCallError) throw lastError;
+        if (lastError instanceof AiRouteCallError || lastError instanceof AiAttemptCheckpointError) throw lastError;
         throw new AiRouteCallError(
           lastError.message || "No AI provider available",
           {
@@ -760,7 +774,7 @@ export async function callWithUsageTracking<T>(
 
     if (!resolved) {
       if (lastError) {
-        if (lastError instanceof AiRouteCallError) throw lastError;
+        if (lastError instanceof AiRouteCallError || lastError instanceof AiAttemptCheckpointError) throw lastError;
         throw new AiRouteCallError(
           lastError.message || "No AI provider available",
           {
@@ -793,6 +807,9 @@ export async function callWithUsageTracking<T>(
     }
     previousRouteRank = resolved.routeRank;
     iteration += 1;
+    if (ctx?.resumeEvidenceRoute && resolved.routeId) {
+      providerAttemptsByRoute.set(resolved.routeId, (providerAttemptsByRoute.get(resolved.routeId) ?? 0) + 1);
+    }
 
     lastResolved = resolved;
     const start = Date.now();
@@ -891,16 +908,33 @@ export async function callWithUsageTracking<T>(
       },
     };
 
+    let attempted = false;
     try {
-      const result = await fn(wrappedProvider);
-
-      if (capturedUsage) {
-        const u: { input_tokens: number; output_tokens: number } = capturedUsage;
-        inputTokens = u.input_tokens;
-        outputTokens = u.output_tokens;
+      const route = resolved;
+      const attempt = async (): Promise<CallWithUsageTrackingResult<T>> => {
+        attempted = true;
+        const result = await fn(wrappedProvider, route);
+        if (capturedUsage) {
+          const usage: { input_tokens: number; output_tokens: number } = capturedUsage;
+          inputTokens = usage.input_tokens;
+          outputTokens = usage.output_tokens;
+        }
+        return {
+          result, providerName: route.name, aiKeyId: route.aiKeyId,
+          model: route.model ?? null, routeRank: route.routeRank, limitSkipped: route.limitSkipped,
+          inputTokens, outputTokens,
+          estimatedCostUsd: estimateCost(route.name, route.model, inputTokens, outputTokens),
+          latencyMs: Date.now() - start,
+        };
+      };
+      const tracked = ctx?.checkpointResumeDraft
+        ? await ctx.checkpointResumeDraft(route, attempt)
+        : { result: await attempt(), reused: false };
+      if (tracked.reused) {
+        return { ...tracked.result, providerName: "checkpoint", aiKeyId: null,
+          inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, latencyMs: 0 };
       }
-
-      const latencyMs = Date.now() - start;
+      const { latencyMs } = tracked.result;
       outcome = "success";
 
       if (!ctx?.benchmarkMode) {
@@ -925,23 +959,14 @@ export async function callWithUsageTracking<T>(
         if (resolved.aiKeyId) await recordAiKeySuccess(resolved.aiKeyId).catch(() => {});
       }
 
-      return {
-        result,
-        providerName: resolved.name,
-        aiKeyId: resolved.aiKeyId,
-        model: resolved.model ?? null,
-        routeRank: resolved.routeRank,
-        limitSkipped: resolved.limitSkipped,
-        inputTokens,
-        outputTokens,
-        estimatedCostUsd: estimateCost(resolved.name, resolved.model, inputTokens, outputTokens),
-        latencyMs,
-      };
+      return tracked.result;
     } catch (err: any) {
       lastError = err;
+      const checkpointBlocked = err instanceof AiAttemptCheckpointError;
+      const requestError = checkpointBlocked && err.cause instanceof Error ? err.cause : err;
       const latencyMs = Date.now() - start;
-      errorMessage = err.message ?? "Unknown error";
-      errorCode = classifyErrorCode(err);
+      errorMessage = requestError.message ?? "Unknown error";
+      errorCode = classifyErrorCode(requestError);
       // A slow malformed response is still an output failure, not a provider
       // timeout. Keeping this distinction makes the dashboard actionable and
       // lets the fallback policy handle bad model output consistently.
@@ -953,7 +978,7 @@ export async function callWithUsageTracking<T>(
         outputTokens = u.output_tokens;
       }
 
-      if (!ctx?.benchmarkMode) {
+      if (!ctx?.benchmarkMode && (!checkpointBlocked || attempted)) {
         const usageEventId = await recordUsageEvent({
           automationId,
           aiKeyId: resolved.aiKeyId,
@@ -979,6 +1004,13 @@ export async function callWithUsageTracking<T>(
           (!ctx?.resumeEvidenceRoute || errorCode === "billing_error" || errorCode === "auth_error")) {
           await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
         }
+      }
+
+      if (checkpointBlocked) {
+        if (resolved.routeId) excludedRouteIds.add(resolved.routeId);
+        else if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
+        else break;
+        continue;
       }
 
       // Provider transport failures and invalid model output are retryable.
@@ -1011,7 +1043,7 @@ export async function callWithUsageTracking<T>(
             errorCode === "configuration_error" ||
             errorCode === "not_found") &&
           resolved.aiKeyId &&
-          ROUND_ROBIN_POOL_PROVIDERS.has(resolved.name)
+          (ctx?.resumeEvidenceRoute || ROUND_ROBIN_POOL_PROVIDERS.has(resolved.name))
         ) {
           // These failures are specific to the current model/request, not the
           // credential. Keep the exclusion scoped to key+model so a different
@@ -1035,6 +1067,11 @@ export async function callWithUsageTracking<T>(
         } else if (resolved.name) {
           excludedProviders.add(resolved.name);
         }
+        if (resolved.routeId && (providerAttemptsByRoute.get(resolved.routeId) ?? 0) >= 2) {
+          // Leave a bounded opportunity for the next configured route after
+          // trying the primary OpenCode account and one healthy sibling.
+          excludedRouteIds.add(resolved.routeId);
+        }
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
             `failed with ${errorCode}, retrying (route advances ${routeAdvances}/${MAX_RETRIES}` +
@@ -1048,7 +1085,7 @@ export async function callWithUsageTracking<T>(
   }
 
   // Shouldn't get here, but just in case:
-  if (lastError instanceof AiRouteCallError) throw lastError;
+  if (lastError instanceof AiRouteCallError || lastError instanceof AiAttemptCheckpointError) throw lastError;
   throw new AiRouteCallError(lastError?.message || "Provider call failed", {
     aiKeyId: lastResolved?.aiKeyId ?? null,
     provider: lastResolved?.name ?? "unknown",

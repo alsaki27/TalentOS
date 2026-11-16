@@ -44,7 +44,8 @@ const fixture = `
   CREATE TABLE application_ai_workflows (id uuid primary key,application_id uuid,status text,current_stage int,
     created_at timestamptz default now(),updated_at timestamptz default now(),config_snapshot jsonb default '{}',base_resume_id uuid,completed_at timestamptz,
     claim_expires_at timestamptz,heartbeat_at timestamptz,claimed_at timestamptz,claimed_by text,next_retry_at timestamptz,cancelled_at timestamptz,
-    recovery_count int default 0,stage_retry_count int default 0,cooldown_retry_count int default 0,lock_version int default 1,last_error text);
+    recovery_count int default 0,stage_retry_count int default 0,cooldown_retry_count int default 0,lock_version int default 1,last_error text,
+    routing_state_id uuid,route_snapshot jsonb);
   CREATE TABLE application_ai_artifacts (id uuid primary key default gen_random_uuid(),workflow_id uuid,automation_id text,
     sequence_number int,schema_version text,content_hash text,data jsonb,created_at timestamptz default now());
   CREATE TABLE application_ai_stage_runs (id uuid primary key default gen_random_uuid(),workflow_id uuid,automation_id text,sequence_number int,
@@ -93,6 +94,28 @@ describe.skipIf(!process.env.RESUME_PIPELINE_PGLITE_PATH)("resume recovery SQL i
     const migration = readFileSync("sql/neon_fixes/143_resume_pipeline_evidence_and_recovery.sql", "utf8");
     await holder.db!.exec(migration);
     await holder.db!.exec(migration);
+  });
+
+  it("refreshes routing on a guarded retry while retaining the successful Forge artifact", async () => {
+    const db = holder.db!;
+    const app = crypto.randomUUID(), workflow = crypto.randomUUID(), state = crypto.randomUUID();
+    await db.query("INSERT INTO applications (id,ai_workflow_id) VALUES ($1,$2)", [app, workflow]);
+    await db.query(`INSERT INTO application_ai_workflows (id,application_id,status,current_stage,config_snapshot)
+      VALUES ($1,$2,'failed',1,'{"pipelineVariant":"resume_evidence_v2","frozenInputsHash":"original"}')`, [workflow, app]);
+    const artifact = (await db.query(`INSERT INTO application_ai_artifacts (workflow_id,automation_id)
+      VALUES ($1,'application_resume_forge') RETURNING id`, [workflow])).rows[0].id;
+    await db.query(`INSERT INTO application_ai_stage_runs (workflow_id,automation_id,sequence_number,status,output_artifact_id)
+      VALUES ($1,'application_resume_forge',1,'success',$2)`, [workflow, artifact]);
+    const routes = [{ automation_id: "application_hiring_panel_evidence_v2", ai_key_id: null, provider: "opencode",
+      model_override: "qwen3.7-plus", rank: 1 }];
+    const routing = { routingStateId: state, routeSnapshot: routes, evidenceRoutes: null,
+      evidenceRouteChains: { application_hiring_panel_evidence_v2: routes } };
+    expect(await manualResumeTransition({ id: workflow, action: "retry", stage: null, staleHeartbeatSeconds: 300, routing }))
+      .toEqual({ status: "queued", current_stage: 1 });
+    const saved = (await db.query(`SELECT w.routing_state_id,w.route_snapshot,w.config_snapshot,s.output_artifact_id
+        FROM application_ai_workflows w JOIN application_ai_stage_runs s ON s.workflow_id=w.id WHERE w.id=$1`, [workflow])).rows[0];
+    expect(saved).toMatchObject({ routing_state_id: state, route_snapshot: routes, output_artifact_id: artifact,
+      config_snapshot: { frozenInputsHash: "original", evidenceRouteChains: routing.evidenceRouteChains } });
   });
 
   it("repairs a contradictory waiting row once, preserves a healthy claim and fences a stale writer", async () => {

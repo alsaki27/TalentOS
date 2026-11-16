@@ -83,6 +83,27 @@ describe("evidence resume pipeline", () => {
       .rejects.toThrow(/^Invalid model output: expected one JSON object$/);
   });
 
+  it("uses Qwen's OpenCode Messages adapter to produce a structured Forge draft", async () => {
+    const forge = await prepareEvidenceStage("application_resume_forge", context(), 6000);
+    const adapter = buildProviderFromDbKey("opencode", "test-token", "qwen3.7-plus",
+      null, null, null, null, null, "opencode_go")!;
+    const request = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({
+      stop_reason: "tool_use", content: [{ type: "tool_use", name: "emit_result", id: "result",
+        input: { prioritize: [] } }],
+    }));
+    try {
+      const output = await sendEvidenceTask(forge.task!, adapter, { max_output_tokens: 850 });
+      expect(await forge.finish(output)).toMatchObject({ draft: { prioritizedIds: [] } });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0][0]).toMatch(/\/messages$/);
+      expect(JSON.parse(String(request.mock.calls[0][1]?.body))).toMatchObject({
+        model: "qwen3.7-plus", max_tokens: 850, tool_choice: { type: "tool", name: "emit_result" },
+      });
+    } finally {
+      request.mockRestore();
+    }
+  });
+
   it("keeps unverified issue references for human review and excludes them from automated edits", async () => {
     const ctx = context();
     const panel = await prepareEvidenceStage("application_hiring_panel", ctx, 6000);

@@ -66,8 +66,9 @@ const PRIOR_REQUIREMENT_ANALYSIS = [
  * requirementAnalysis is still valid, different content means it is not.
  * `null` simulates an application with no prior run at all.
  */
-function baseDbMock(priorBaseContent: unknown | null) {
+function baseDbMock(priorBaseContent: unknown | null, evidenceRoutes: unknown[] = []) {
   (query as any).mockImplementation(async (sql: string) => {
+    if (sql.includes("FROM ai_routing_state_routes")) return evidenceRoutes;
     if (sql.includes("FROM candidate_evidence")) return [];
     return [];
   });
@@ -102,7 +103,10 @@ function baseDbMock(priorBaseContent: unknown | null) {
       return { verified_skills: [] };
     }
     if (sql.includes("FROM ai_runtime_config")) {
-      return null; // getAiRuntimeConfig() defaults - no active routing state
+      return evidenceRoutes.length ? {
+        active_routing_state_id: "new-state",
+        resume_pipeline_settings: { evidence_enabled: true },
+      } : null;
     }
     return null;
   });
@@ -145,5 +149,19 @@ describe("regenerateAiWorkflowForApplication — requirementAnalysis reuse (Phas
 
     expect(result.started).toBe(true);
     expect(snapshotFromLastCreateWorkflow().cachedRequirementAnalysis).toBeNull();
+  });
+
+  it("snapshots the current Forge primary and fallback on evidence pipeline regeneration", async () => {
+    const forge = "application_resume_forge_evidence_v2";
+    const routes = [
+      { automation_id: forge, ai_key_id: "opencode-key", provider: "opencode", rank: 1, model_override: "qwen3.7-plus" },
+      { automation_id: forge, ai_key_id: "luna-key", provider: "openai", rank: 2, model_override: "gpt-6-luna" },
+    ];
+    baseDbMock(CURRENT_RESUME_CONTENT, routes);
+    expect(await regenerateAiWorkflowForApplication(APPLICATION_ID, "user-1")).toMatchObject({ started: true });
+    expect(snapshotFromLastCreateWorkflow()).toMatchObject({
+      pipelineVariant: "resume_evidence_v2", routingStateId: "new-state",
+      evidenceRouteChains: { [forge]: routes },
+    });
   });
 });

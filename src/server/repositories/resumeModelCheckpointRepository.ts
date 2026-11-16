@@ -1,14 +1,28 @@
-import { AiRouteCallError } from "@/lib/ai/routing";
+import { AiAttemptCheckpointError, AiRouteCallError, classifyAiErrorCode } from "@/lib/ai/routing";
 import { sha256Hex } from "@/lib/sha256";
 import { execute, queryOne } from "@/server/db/neon";
 import type { EvidenceStage } from "@/lib/ai/application-agents/evidencePipeline";
 
-export class ResumeModelCheckpointError extends Error {}
+export class ResumeModelCheckpointError extends AiAttemptCheckpointError {}
 
-export async function withResumeModelCheckpoint<T>(input: {
-  workflowId: string; identity: unknown; task: NonNullable<EvidenceStage["task"]>;
-}, run: () => Promise<T>): Promise<{ result: T; reused: boolean }> {
-  const hash = await sha256Hex(JSON.stringify([input.identity, input.task]));
+type DraftInput = { identity: unknown; task: NonNullable<EvidenceStage["task"]> };
+
+function draftHash(input: DraftInput) {
+  return sha256Hex(JSON.stringify([input.identity, input.task]));
+}
+
+export async function findCompletedResumeModelCheckpoint<T>(input: DraftInput): Promise<T | null> {
+  const row = await queryOne<{ result: T }>(
+    "SELECT result FROM application_resume_model_checkpoints WHERE input_hash = $1 AND status = 'completed'",
+    [await draftHash(input)],
+  );
+  return row?.result ?? null;
+}
+
+export async function withResumeModelCheckpoint<T>(
+  input: DraftInput & { workflowId: string }, run: () => Promise<T>,
+): Promise<{ result: T; reused: boolean }> {
+  const hash = await draftHash(input);
   const reservation = await queryOne<{ input_hash: string }>(
     `INSERT INTO application_resume_model_checkpoints (input_hash, workflow_id, status)
        VALUES ($1, $2, 'reserved') ON CONFLICT (input_hash) DO NOTHING RETURNING input_hash`,
@@ -31,13 +45,14 @@ export async function withResumeModelCheckpoint<T>(input: {
     );
     return { result, reused: false };
   } catch (error) {
-    const rejectedBeforeGeneration = error instanceof AiRouteCallError &&
-      ["rate_limit", "quota_exhausted", "billing_error", "model_unavailable", "auth_error", "configuration_error"].includes(error.errorCode ?? "");
+    const code = error instanceof AiRouteCallError ? error.errorCode : classifyAiErrorCode(error);
+    const rejectedBeforeGeneration =
+      ["rate_limit", "quota_exhausted", "billing_error", "model_unavailable", "auth_error", "configuration_error"].includes(code ?? "");
     await (rejectedBeforeGeneration
       ? execute("DELETE FROM application_resume_model_checkpoints WHERE input_hash = $1 AND status = 'reserved'", [hash])
       : execute("UPDATE application_resume_model_checkpoints SET status = 'uncertain', updated_at = NOW() WHERE input_hash = $1 AND status = 'reserved'", [hash])
     ).catch(() => undefined);
     if (rejectedBeforeGeneration) throw error;
-    throw new ResumeModelCheckpointError("Luna did not return a confirmed draft. Its request was saved for investigation to avoid an automatic repeat.");
+    throw new ResumeModelCheckpointError("Luna did not return a confirmed draft. Its request was saved for investigation to avoid an automatic repeat.", { cause: error });
   }
 }

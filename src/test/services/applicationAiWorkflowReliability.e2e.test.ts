@@ -161,6 +161,7 @@ vi.mock("@/lib/ai/application-agents/finalizationService", () => ({
 }));
 
 vi.mock("@/server/repositories/resumeModelCheckpointRepository", () => ({
+  findCompletedResumeModelCheckpoint: vi.fn().mockResolvedValue(null),
   withResumeModelCheckpoint: vi.fn(async (_input: unknown, run: () => Promise<unknown>) => ({ result: await run(), reused: false })),
   ResumeModelCheckpointError: class extends Error {},
 }));

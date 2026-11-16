@@ -1,6 +1,7 @@
 import { EVIDENCE_RESUME_STAGES, LEGACY_RESUME_STAGES, RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 import { execute, query, queryOne } from "@/server/db/neon";
 import type { resumePipelineSettings } from "./aiRuntimeConfigRepository";
+import type { ResumeRouteSnapshot } from "@/lib/ai/routing";
 
 type Settings = ReturnType<typeof resumePipelineSettings>;
 const stageArrays = [LEGACY_RESUME_STAGES, EVIDENCE_RESUME_STAGES, RESUME_EVIDENCE_VARIANT];
@@ -87,6 +88,12 @@ export async function manualResumeTransition(input: {
   id: string; stage: number | null; staleHeartbeatSeconds: number;
   action: "rerun" | "retry" | "restart" | "cancel" | "approve" | "reject" | "reject_and_restart";
   note?: string | null; reviewerId?: string | null;
+  routing?: {
+    routingStateId: string | null;
+    routeSnapshot: ResumeRouteSnapshot[];
+    evidenceRouteChains: Record<string, ResumeRouteSnapshot[]>;
+    evidenceRoutes: null;
+  };
 }) {
   return queryOne<{ status: string; current_stage: number }>(
     `WITH owned AS MATERIALIZED (
@@ -116,7 +123,7 @@ export async function manualResumeTransition(input: {
          last_error = CASE WHEN $6 = 'reject' THEN COALESCE($8::text, 'Changes requested by reviewer') ELSE NULL END,
          next_retry_at = NULL, recovery_count = 0, stage_retry_count = 0, cooldown_retry_count = 0,
          claimed_at = NULL, claim_expires_at = NULL, heartbeat_at = NULL, claimed_by = NULL,
-         config_snapshot = CASE WHEN $6 IN ('rerun','restart','reject_and_restart') THEN
+         config_snapshot = (CASE WHEN $6 IN ('rerun','restart','reject_and_restart') THEN
            jsonb_set(COALESCE(w.config_snapshot, '{}'::jsonb), '{resumeReplayThrough}',
              COALESCE(w.config_snapshot->'resumeReplayThrough', '{}'::jsonb) || COALESCE((
                SELECT jsonb_object_agg(sequence_number::text, attempt_number) FROM (
@@ -126,7 +133,9 @@ export async function manualResumeTransition(input: {
                  GROUP BY sr.sequence_number
                ) prior_attempts
              ), '{}'::jsonb))
-           ELSE w.config_snapshot END,
+           ELSE w.config_snapshot END) || COALESCE($10::jsonb, '{}'::jsonb),
+         routing_state_id = CASE WHEN $10::jsonb IS NOT NULL THEN ($10::jsonb->>'routingStateId')::uuid ELSE w.routing_state_id END,
+         route_snapshot = COALESCE($10::jsonb->'routeSnapshot', w.route_snapshot),
          lock_version = w.lock_version + 1, updated_at = NOW()
        FROM owned WHERE w.id = owned.id AND owned.chosen_stage BETWEEN 0 AND owned.stage_count
          AND ($6 <> 'rerun' OR (owned.chosen_stage < owned.stage_count AND owned.chosen_stage <= owned.first_missing))
@@ -145,6 +154,7 @@ export async function manualResumeTransition(input: {
        FROM changed WHERE app.id = changed.application_id AND app.ai_workflow_id = changed.id AND app.applied_at IS NULL
      ) SELECT status, current_stage FROM changed`,
     [...stageArrays, input.id, input.stage, input.action, input.staleHeartbeatSeconds, input.note ?? null,
-      JSON.stringify({ action: input.action, note: input.note ?? null, reviewerId: input.reviewerId ?? null })],
+      JSON.stringify({ action: input.action, note: input.note ?? null, reviewerId: input.reviewerId ?? null }),
+      input.routing ? JSON.stringify(input.routing) : null],
   );
 }

@@ -1215,6 +1215,101 @@ describe("OpenCode shared route breaker and model-scoped retries", () => {
   });
 });
 
+describe("configurable evidence pipeline routing", () => {
+  const keys = [
+    { id: "opencode-a", provider: "opencode", model: "glm-5.3-flash", priority: 1 },
+    { id: "opencode-b", provider: "opencode", model: "glm-5.3-flash", priority: 2 },
+    { id: "opencode-c", provider: "opencode", model: "glm-5.3-flash", priority: 3 },
+    { id: "haiku", provider: "anthropic", model: "claude-haiku-5-5", priority: 4, provider_mode: "anthropic_compatible" },
+    { id: "luna", provider: "openai", model: "gpt-6-luna", priority: 5 },
+  ].map(key => ({ ...key, status: "working", is_enabled: true, decrypted_key: key.id }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQuery.mockResolvedValue([]);
+    mockQueryOne.mockImplementation(async sql => sql.includes("ai_key_pool_cursors") ? { start_index: 0 } : null);
+    mockGetAiRuntimeConfig.mockResolvedValue({ active_routing_state_id: "changed-live-state", allow_unrouted_fallback: false });
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async id => keys.find(key => key.id === id) ?? null);
+    mockBuildProviderFromDbKey.mockReturnValue({ send: vi.fn() });
+  });
+
+  it.each([
+    ["application_resume_forge_evidence_v2", "opencode-a", "opencode", "qwen3.7-plus"],
+    ["application_hiring_panel_evidence_v2", "opencode-a", "opencode", "qwen3.7-plus"],
+    ["application_final_polish_evidence_v2", "opencode-a", "opencode", "deepseek-v4-flash"],
+    ["application_opportunity_reviewer", "haiku", "anthropic", "claude-haiku-5-5"],
+    ["application_release_editor", "luna", "openai", "gpt-6-luna"],
+  ])("uses the configured key and model for %s", async (id, key, provider, model) => {
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const routes = [{ automation_id: id, ai_key_id: key, provider, model_override: model, rank: 1 }];
+    const call = await callWithUsageTracking(id, { resumeEvidenceRoute: { routes } }, async () => "valid output");
+    expect(call).toMatchObject({ providerName: provider, aiKeyId: key, model, routeRank: 1 });
+    expect(mockQuery.mock.calls.some(([sql]) => sql.includes("ai_routing_state_routes"))).toBe(false);
+  });
+
+  it("tries a healthy OpenCode sibling and then the configured provider fallback", async () => {
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const id = "application_resume_forge_evidence_v2";
+    const routes = [
+      { automation_id: id, ai_key_id: null, provider: "opencode", model_override: "qwen3.7-plus", rank: 1 },
+      { automation_id: id, ai_key_id: "haiku", provider: "anthropic", model_override: null, rank: 2 },
+    ];
+    const attempts: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider, key, model) => ({
+      send: vi.fn(async () => {
+        attempts.push(`${key}:${model}`);
+        if (key.startsWith("opencode")) throw new Error("OpenCode API error (429): Too many requests");
+        return { content: [], stopReason: "end_turn" };
+      }),
+    }));
+    const call = await callWithUsageTracking(id, { resumeEvidenceRoute: { routes }, maxProviderAttempts: 3 },
+      provider => provider.send({ system: "Return JSON", messages: [], tools: [] }));
+    expect(attempts).toEqual(["opencode-a:qwen3.7-plus", "opencode-b:qwen3.7-plus", "haiku:claude-haiku-5-5"]);
+    expect(call).toMatchObject({ providerName: "anthropic", routeRank: 2 });
+  });
+
+  it("skips an unconfirmed Luna request and uses the alternate route without another Luna call", async () => {
+    const { AiAttemptCheckpointError, callWithUsageTracking } = await import("@/lib/ai/routing");
+    const id = "application_resume_forge_evidence_v2";
+    const routes = [
+      { automation_id: id, ai_key_id: "luna", provider: "openai", model_override: "gpt-6-luna", rank: 1 },
+      { automation_id: id, ai_key_id: "haiku", provider: "anthropic", model_override: "claude-haiku-5-5", rank: 2 },
+    ];
+    const paidAttempt = vi.fn().mockResolvedValue("valid draft");
+    const call = await callWithUsageTracking(id, {
+      resumeEvidenceRoute: { routes },
+      checkpointResumeDraft: async (route, run) => {
+        if (route.name === "openai") throw new AiAttemptCheckpointError("Unconfirmed Luna draft");
+        return { result: await run(), reused: false };
+      },
+    }, paidAttempt);
+    expect(call).toMatchObject({ providerName: "anthropic", model: "claude-haiku-5-5" });
+    expect(paidAttempt).toHaveBeenCalledTimes(1);
+    expect(mockRecordAiKeyFailure).not.toHaveBeenCalled();
+  });
+
+  it("returns a completed Luna checkpoint without another provider request or usage charge", async () => {
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const id = "application_resume_forge_evidence_v2";
+    const paidAttempt = vi.fn().mockResolvedValue("new draft");
+    const call = await callWithUsageTracking(id, {
+      resumeEvidenceRoute: { routes: [{
+        automation_id: id, ai_key_id: "luna", provider: "openai", model_override: "gpt-6-luna", rank: 1,
+      }] },
+      checkpointResumeDraft: async <T>() => ({
+        result: { result: "saved draft" as T, providerName: "openai", aiKeyId: "prior-key", model: "gpt-6-luna",
+          routeRank: 1, inputTokens: 200, outputTokens: 20, estimatedCostUsd: 0.1, latencyMs: 100 },
+        reused: true,
+      }),
+    }, paidAttempt);
+    expect(call).toMatchObject({ result: "saved draft", providerName: "checkpoint", model: "gpt-6-luna",
+      inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, aiKeyId: null });
+    expect(paidAttempt).not.toHaveBeenCalled();
+    expect(mockRecordAiKeySuccess).not.toHaveBeenCalled();
+  });
+});
+
 describe("evidence review OpenCode fallback", () => {
   it.each(["application_hiring_panel_evidence_v2", "application_final_polish_evidence_v2"])(
     "%s uses configured OpenCode rotation after malformed Haiku output",

@@ -3,7 +3,7 @@
 // Neon is the canonical provider-credential store; deployment configuration only
 // supplies the independent encryption bootstrap.
 
-import { AiProvider, requestSignal, textOf } from "@/lib/ai/provider";
+import { AiProvider, requestSignal, textOf, type AiContentBlock } from "@/lib/ai/provider";
 import { callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
 import { createOpenAiResponsesProvider } from "@/lib/ai/openAiResponsesProvider";
@@ -25,8 +25,9 @@ interface ActiveProvider {
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
-const isOpenAiLuna = (model: string | null | undefined): model is string =>
+export const isOpenAiLuna = (model: string | null | undefined): model is string =>
   !!model && /^gpt-(?:6|5\.6)-luna(?:-|$)/.test(model);
+const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
 
 // Single source of truth for the fallback maxTokens ceiling used by every
 // DB-managed-key provider builder below. Matches the native Google env-key
@@ -78,9 +79,11 @@ function createOpenCodeMessagesProvider(
   apiUrl: string,
   customHeaders?: Record<string, string> | null,
   providerConfig?: Record<string, unknown> | null,
+  structuredOutput = false,
 ): AiProvider {
   return {
-    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal }) {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema }) {
+      const schema = structuredOutput ? responseSchema : undefined;
       const controller = new AbortController();
       const timer = timeoutMs && timeoutMs > 0
         ? setTimeout(() => controller.abort(), timeoutMs)
@@ -116,11 +119,16 @@ function createOpenCodeMessagesProvider(
                 };
               }),
             })),
-            tools: tools.map((tool) => ({
+            tools: [...tools.map((tool) => ({
               name: tool.name,
               description: tool.description,
               input_schema: tool.inputSchema,
-            })),
+            })), ...(schema ? [{
+              name: STRUCTURED_OUTPUT_TOOL_NAME,
+              description: "Return the JSON result for this stage.",
+              input_schema: schema,
+            }] : [])],
+            ...(schema ? { tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL_NAME } } : {}),
           }),
         });
 
@@ -130,20 +138,25 @@ function createOpenCodeMessagesProvider(
         }
 
         const data = await response.json();
+        const blocks: Record<string, unknown>[] = Array.isArray(data.content) ? data.content : [];
+        const result = schema && data.stop_reason === "tool_use"
+          ? blocks.find(block => block?.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME
+            && block.input && typeof block.input === "object")
+          : undefined;
         return {
-          content: (Array.isArray(data.content) ? data.content : []).flatMap((block: any) => {
+          content: result ? [{ type: "text", text: JSON.stringify(result.input) }] : blocks.flatMap<AiContentBlock>((block) => {
             if (block?.type === "text") return [{ type: "text" as const, text: String(block.text ?? "") }];
             if (block?.type === "tool_use") {
               return [{
                 type: "tool_use" as const,
                 id: String(block.id ?? ""),
                 name: String(block.name ?? ""),
-                input: block.input && typeof block.input === "object" ? block.input : {},
+                input: block.input && typeof block.input === "object" ? block.input as Record<string, unknown> : {},
               }];
             }
             return [];
           }),
-          stopReason: data.stop_reason ?? "end_turn",
+          stopReason: result ? "end_turn" : data.stop_reason ?? "end_turn",
           usage: data.usage
             ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens }
             : undefined,
@@ -249,7 +262,6 @@ export function buildProviderFromDbKey(
       const nativeStructuredOutput = isHaiku55 && routeTransport !== "anthropic_tool_json";
       // Some Messages-compatible proxies accept native output_config but
       // return prose. A forced tool provides the schema over the tool API.
-      const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
       return {
         async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema }) {
           const controller = new AbortController();
@@ -509,6 +521,7 @@ export function buildProviderFromDbKey(
             : "https://opencode.ai/zen/go/v1/messages",
           customHeaders,
           providerConfig,
+          routeTransport === "opencode_go",
         );
       }
       const isGpt56Luna = /^gpt-5\.6-luna$/i.test(selectedModel);

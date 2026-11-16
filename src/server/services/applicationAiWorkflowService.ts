@@ -4,11 +4,12 @@
 
 import type { AiProvider } from "@/lib/ai/provider";
 import { sha256Hex } from "@/lib/sha256";
-import { callWithUsageTracking, recordUsageEvent, AiRouteCallError, classifyAiErrorCode, type CallContext } from "@/lib/ai/routing";
+import { callWithUsageTracking, recordUsageEvent, AiRouteCallError, classifyAiErrorCode, type CallContext, type CallWithUsageTrackingResult, type ResumeRouteSnapshot } from "@/lib/ai/routing";
 import { type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { EVIDENCE_RESUME_STAGES, LEGACY_RESUME_STAGES, RESUME_EVIDENCE_VARIANT, evidenceRouteId, resumeStages } from "@/lib/ai/application-agents/workflowStages";
 import { prepareEvidenceStage, sendEvidenceTask } from "@/lib/ai/application-agents/evidencePipeline";
-import { ResumeModelCheckpointError, withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
+import { findCompletedResumeModelCheckpoint, ResumeModelCheckpointError, withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
+import { isOpenAiLuna } from "@/server/services/aiProvider";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
@@ -157,20 +158,11 @@ export async function startWorkflow(input: {
 }): Promise<{ workflowId: string }> {
   const runtime = await getAiRuntimeConfig();
   const routingStateId = runtime.active_routing_state_id ?? null;
-  const routeSnapshot = routingStateId
-    ? await query<RouteSnapshot>(
-        `SELECT r.automation_id, r.rank, r.ai_key_id, COALESCE(r.provider,k.provider) AS provider,
-                COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.reasoning_effort
-           FROM ai_routing_state_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
-          WHERE r.state_id = $1 AND r.is_enabled = true
-          ORDER BY r.automation_id, r.rank`,
-        [routingStateId],
-      )
-    : [];
+  const routeSnapshot = await loadRoutingStateRoutes(routingStateId);
   const settings = resumePipelineSettings(runtime);
   const variant = input.pipelineVariant ?? (settings.evidenceEnabled ? RESUME_EVIDENCE_VARIANT : null);
-  const evidenceRoutes = variant === RESUME_EVIDENCE_VARIANT
-    ? await snapshotEvidenceRoutes(routingStateId, routeSnapshot)
+  const evidenceRouteChains = variant === RESUME_EVIDENCE_VARIANT
+    ? await snapshotEvidenceRoutes(routeSnapshot)
     : null;
   const evidenceConfigs = variant === RESUME_EVIDENCE_VARIANT ? Object.fromEntries(
     (await listAgentConfigs()).filter(config => EVIDENCE_RESUME_STAGES.some(stage =>
@@ -188,7 +180,7 @@ export async function startWorkflow(input: {
     routingStateId,
     routeSnapshot,
     pipelineVariant: variant,
-    evidenceRoutes,
+    evidenceRouteChains,
     evidenceConfigs,
     forgeInputChars: settings.forgeInputChars,
     resumeMaxPages: settings.resumeMaxPages,
@@ -218,25 +210,29 @@ export async function startWorkflow(input: {
   return { workflowId: wf.id };
 }
 
-type EvidenceRoute = { provider: "openai" | "anthropic" | "opencode"; model: string };
-type RouteSnapshot = { automation_id: string; provider: string | null; model_override: string | null; rank: number };
+type EvidenceRoute = { provider: string; model: string };
 
-async function snapshotEvidenceRoutes(routingStateId: string | null, active: RouteSnapshot[]) {
-  const ids = EVIDENCE_RESUME_STAGES.map(evidenceRouteId);
-  const seeded = await query<RouteSnapshot>(
-    `SELECT r.automation_id, COALESCE(r.provider,k.provider) AS provider,
-            COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.rank
-      FROM ai_automation_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
-      WHERE r.automation_id = ANY($1::text[]) AND r.is_enabled ORDER BY r.rank`, [ids],
+async function loadRoutingStateRoutes(routingStateId: string | null): Promise<ResumeRouteSnapshot[]> {
+  if (!routingStateId) return [];
+  return query<ResumeRouteSnapshot>(
+    `SELECT r.automation_id, r.rank, r.ai_key_id, COALESCE(k.provider,r.provider) AS provider,
+            COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.reasoning_effort
+       FROM ai_routing_state_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
+      WHERE r.state_id = $1 AND r.is_enabled = true
+      ORDER BY r.automation_id, r.rank`, [routingStateId],
   );
-  return Object.fromEntries(EVIDENCE_RESUME_STAGES.flatMap((stage, index) => {
-    const id = evidenceRouteId(stage);
-    const configured = (routingStateId ? active : []).filter(route => route.automation_id === id);
-    const selected = (configured.length ? configured : seeded.filter(route => route.automation_id === id))[0];
-    const provider = index === 0 ? "openai" : index < 3 ? "anthropic" : "opencode";
-    return selected?.provider === provider && selected.model_override
-      ? [[id, { provider, model: selected.model_override } as EvidenceRoute]] : [];
-  }));
+}
+
+async function snapshotEvidenceRoutes(active: ResumeRouteSnapshot[]) {
+  const ids = EVIDENCE_RESUME_STAGES.map(evidenceRouteId);
+  const missing = ids.filter(id => !active.some(route => route.automation_id === id));
+  const seeded = missing.length ? await query<ResumeRouteSnapshot>(
+    `SELECT r.automation_id, r.rank, r.ai_key_id, COALESCE(k.provider,r.provider) AS provider,
+            COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.reasoning_effort
+      FROM ai_automation_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
+      WHERE r.automation_id = ANY($1::text[]) AND r.is_enabled ORDER BY r.rank`, [missing],
+  ) : [];
+  return Object.fromEntries(ids.map(id => [id, [...active, ...seeded].filter(route => route.automation_id === id)]));
 }
 
 function jobDescriptionForTargetJob(job: any): string {
@@ -1083,7 +1079,12 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     let resolvedCostUsd: number | null = null;
     try {
       const routeId = evidenceVariant ? evidenceRouteId(agentId) : agentId;
-      const route = evidenceVariant ? snapshot.evidenceRoutes?.[routeId] as EvidenceRoute | undefined : undefined;
+      const savedRoutes = snapshot.evidenceRouteChains?.[routeId] as ResumeRouteSnapshot[] | undefined;
+      const previousRoutes = Array.isArray(snapshot.routeSnapshot)
+        ? (snapshot.routeSnapshot as ResumeRouteSnapshot[]).filter(route => route.automation_id === routeId)
+        : [];
+      const frozenRoutes = savedRoutes?.length ? savedRoutes : previousRoutes;
+      const oldPin = !frozenRoutes.length ? snapshot.evidenceRoutes?.[routeId] as EvidenceRoute | undefined : undefined;
       const evidence = evidenceVariant
         ? await prepareEvidenceStage(agentId, ctx,
           snapshot.forgeInputChars ?? stageSettings.forgeInputChars, snapshot.resumeMaxPages ?? stageSettings.resumeMaxPages)
@@ -1097,7 +1098,6 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         resolvedInputTokens = 0;
         resolvedOutputTokens = 0;
       } else {
-        if (evidence && !route) throw new Error(`Configure a model route for ${routeId} before running this workflow`);
         const deadline = new AbortController();
         const timeoutMs = agentOptions.timeout_ms ?? 300_000;
         const stageBudgetMs = stageTimeBudgetMs(agentId, timeoutMs);
@@ -1111,18 +1111,46 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
           }).catch(error => console.warn("Workflow heartbeat failed", { workflowId, code: error?.code }));
         }, 20_000);
         try {
-          const allowOpenCodeFallback = route?.provider === "anthropic" &&
+          const allowOpenCodeFallback = oldPin?.provider === "anthropic" &&
             (agentId === "application_hiring_panel" || agentId === "application_final_polish");
+          const forgeTask = agentId === "application_resume_forge" ? evidence?.task : null;
+          const draftIdentity = (model: string) => ({
+            candidateId: ctx.candidateId, jobId: ctx.job.id, model,
+            base: ctx.baseResume.content, job: resolveJobDescription(ctx.job), verifiedSkills: ctx.verifiedSkills,
+            promptVersion: agentConfig?.prompt_version ?? null,
+          });
           const callCtx: CallContext = {
             userId: wf.started_by ?? undefined, workflowId, applicationId: wf.application_id,
             stageRunId: stageRun.id, promptVersion: agentConfig?.prompt_version ?? null,
             attemptNumber: stageAttemptNumber, routingStateId: snapshot.routingStateId ?? undefined,
-            maxProviderAttempts: evidence ? (allowOpenCodeFallback ? 3 : route?.provider === "opencode" ? 2 : 1) : 4,
-            resumeEvidenceRoute: route && { ...route, allowOpenCodeFallback }, signal: deadline.signal,
+            maxProviderAttempts: evidence ? (frozenRoutes.length === 1 && frozenRoutes[0].provider !== "opencode" ? 1 : 3) : 4,
+            resumeEvidenceRoute: evidence
+              ? oldPin ? { ...oldPin, allowOpenCodeFallback } : { routes: frozenRoutes.length ? frozenRoutes : undefined }
+              : undefined,
+            checkpointResumeDraft: forgeTask ? async (route, invoke) => {
+              if (route.name !== "openai" || !isOpenAiLuna(route.model)) {
+                return { result: await invoke(), reused: false };
+              }
+              return withResumeModelCheckpoint({
+                workflowId, task: forgeTask, identity: draftIdentity(route.model),
+              }, invoke);
+            } : undefined,
+            signal: deadline.signal,
           };
-          const invoke = () => callWithUsageTracking(routeId, callCtx, async provider => {
+          const primary = frozenRoutes.at(0);
+          const primaryProvider = primary?.provider ?? oldPin?.provider;
+          const primaryModel = primary?.model_override ?? oldPin?.model;
+          const cached = forgeTask && primaryProvider === "openai" && isOpenAiLuna(primaryModel)
+            ? await findCompletedResumeModelCheckpoint<CallWithUsageTrackingResult<unknown>>({
+                task: forgeTask, identity: draftIdentity(primaryModel),
+              })
+            : null;
+          const runStage = () => callWithUsageTracking(routeId, callCtx, async (provider, route) => {
             if (evidence?.task) {
-              const output = await sendEvidenceTask(evidence.task, provider, agentOptions);
+              const task = forgeTask && route && (route.name !== "openai" || !isOpenAiLuna(route.model))
+                ? { ...evidence.task, system: evidence.task.system + ' Return JSON only with a "prioritize" array of evidence IDs.' }
+                : evidence.task;
+              const output = await sendEvidenceTask(task, provider, agentOptions);
               if (agentId === "application_resume_forge") {
                 await evidence.finish(output);
                 return output;
@@ -1131,21 +1159,16 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
             }
             return getAgentFn(agentId)(agentOptions, provider, ctx);
           });
-          const forgeTask = agentId === "application_resume_forge" ? evidence?.task : null;
-          const cached = forgeTask ? await withResumeModelCheckpoint({
-            workflowId, task: forgeTask,
-            identity: { candidateId: ctx.candidateId, jobId: ctx.job.id, model: route?.model,
-              base: ctx.baseResume.content, job: resolveJobDescription(ctx.job), verifiedSkills: ctx.verifiedSkills,
-              promptVersion: agentConfig?.prompt_version ?? null },
-          }, invoke) : { result: await invoke(), reused: false };
-          const call = cached.result;
+          const call = cached
+            ? { ...cached, providerName: "checkpoint", aiKeyId: null, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+            : await runStage();
           agentOutput = forgeTask ? await evidence!.finish(call.result) : call.result;
-          resolvedProviderName = cached.reused ? "checkpoint" : call.providerName;
+          resolvedProviderName = call.providerName;
           resolvedKeyId = call.aiKeyId;
           resolvedModel = call.model;
-          resolvedInputTokens = cached.reused ? 0 : call.inputTokens;
-          resolvedOutputTokens = cached.reused ? 0 : call.outputTokens;
-          resolvedCostUsd = cached.reused ? 0 : call.estimatedCostUsd;
+          resolvedInputTokens = call.inputTokens;
+          resolvedOutputTokens = call.outputTokens;
+          resolvedCostUsd = call.estimatedCostUsd;
         } finally {
           clearTimeout(budgetTimer);
           clearInterval(heartbeatTimer);
@@ -1586,15 +1609,13 @@ export async function refreshWorkflowRoutingSnapshot(workflowId: string): Promis
   const runtime = await getAiRuntimeConfig();
   if (!runtime.active_routing_state_id) return false;
 
-  const routeSnapshot = await query(
-    `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
-       FROM ai_routing_state_routes
-      WHERE state_id = $1 AND is_enabled = true
-      ORDER BY automation_id, rank`,
-    [runtime.active_routing_state_id],
-  );
+  const routeSnapshot = await loadRoutingStateRoutes(runtime.active_routing_state_id);
+  const previous = (wf.config_snapshot ?? {}) as Record<string, unknown>;
   const configSnapshot = {
-    ...((wf.config_snapshot ?? {}) as Record<string, unknown>),
+    ...previous,
+    ...(previous.pipelineVariant === RESUME_EVIDENCE_VARIANT
+      ? { evidenceRouteChains: await snapshotEvidenceRoutes(routeSnapshot), evidenceRoutes: null }
+      : {}),
     routingStateId: runtime.active_routing_state_id,
     routeSnapshot,
   };
@@ -1631,6 +1652,17 @@ export async function rerunFromStage(workflowId: string, stage: number): Promise
 }
 
 async function transitionForRetry(id: string, action: "retry" | "restart" | "rerun" | "cancel", stage: number | null) {
-  const settings = resumePipelineSettings(await getAiRuntimeConfig());
-  return Boolean(await manualResumeTransition({ id, action, stage, staleHeartbeatSeconds: settings.staleHeartbeatSeconds }));
+  const [runtime, workflow] = await Promise.all([
+    getAiRuntimeConfig(),
+    action === "cancel" ? null : findWorkflowById(id),
+  ]);
+  const settings = resumePipelineSettings(runtime);
+  const previous = workflow?.config_snapshot as { pipelineVariant?: string } | null;
+  let routing;
+  if (previous?.pipelineVariant === RESUME_EVIDENCE_VARIANT) {
+    const routingStateId = runtime.active_routing_state_id;
+    const routeSnapshot = await loadRoutingStateRoutes(routingStateId);
+    routing = { routingStateId, routeSnapshot, evidenceRouteChains: await snapshotEvidenceRoutes(routeSnapshot), evidenceRoutes: null };
+  }
+  return Boolean(await manualResumeTransition({ id, action, stage, staleHeartbeatSeconds: settings.staleHeartbeatSeconds, routing }));
 }
