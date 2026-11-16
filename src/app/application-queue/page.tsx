@@ -8,7 +8,7 @@ import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
-import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
+import { hiringPanelScoreText, missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
 import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { ResumeQcDialog } from "./components/ResumeQcDialog";
 import { LegacyPageFitBatch, type LegacyPageFitResult } from "./components/LegacyPageFitBatch";
@@ -1829,27 +1829,28 @@ function scoreLabel(value: number | null | undefined): string {
 function QueueScoreCell({ item }: { item: QueueItem }) {
   const average = item.average_score == null ? null : Number(item.average_score);
   const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
-  const atsScore = item.hiring_panel_ats_score == null ? null : Number(item.hiring_panel_ats_score);
+  const atsScore = hiringPanelScoreText(item.hiring_panel_ats_score);
+  const panelFit = hiringPanelScoreText(item.hiring_panel_role_fit_score);
   const qualificationFit = item.qualification_fit_score == null ? null : Number(item.qualification_fit_score);
   const qualificationFitRange = item.qualification_fit_score_min == null || item.qualification_fit_score_max == null
     ? null
     : { min: Number(item.qualification_fit_score_min), max: Number(item.qualification_fit_score_max) };
   const hasQualificationStatus = Boolean(item.qualification_fit_status);
   const missingFit = missingQualificationFitDisplay(item.workflow_status);
-  if (average == null && finalScore == null && atsScore == null && !hasQualificationStatus && !item.workflow_id) {
+  if (average == null && finalScore == null && atsScore == null && panelFit == null && !hasQualificationStatus && !item.workflow_id) {
     return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
   }
   const fitLabel = qualificationFit !== null
-    ? `Fit ${scoreLabel(qualificationFit)}${item.qualification_fit_status === "needs_review" ? " · needs review" : ""}`
+    ? `Qualification ${scoreLabel(qualificationFit)}${item.qualification_fit_status === "needs_review" ? " · needs review" : ""}`
     : qualificationFitRange
-      ? `Fit ${qualificationFitScoreText(null, qualificationFitRange)} · ${item.qualification_fit_status === "needs_review" ? "needs review" : "provisional"}${item.qualification_fit_evidence_coverage == null ? "" : ` · ${item.qualification_fit_evidence_coverage}% evidence`}`
+      ? `Qualification ${qualificationFitScoreText(null, qualificationFitRange)} · ${item.qualification_fit_status === "needs_review" ? "needs review" : "provisional"}${item.qualification_fit_evidence_coverage == null ? "" : ` · ${item.qualification_fit_evidence_coverage}% evidence`}`
     : item.qualification_fit_status === "needs_review"
-      ? "Fit: review"
+      ? "Qualification: needs review"
       : item.qualification_fit_status === "insufficient_evidence"
-        ? "Fit: insufficient evidence"
+        ? "Qualification: insufficient evidence"
         : item.qualification_fit_status === "scored"
-          ? "Fit: score missing"
-          : missingFit.label;
+          ? "Qualification: score missing"
+          : missingFit.label.replace(/^Fit:/, "Qualification:");
   const fitTone = item.qualification_fit_status === "scored"
     ? qualificationFit === null ? "badge-warning" : "badge-success"
     : hasQualificationStatus
@@ -1871,7 +1872,8 @@ function QueueScoreCell({ item }: { item: QueueItem }) {
   return (
     <div className="queue-score-cell">
       {average !== null && <span className="badge badge-info queue-score-badge" title="Average of available ATS, recruiter, role fit, truth, and Final QA scores. Qualification fit is excluded.">Avg {scoreLabel(average)}</span>}
-      {atsScore !== null && <span className="text-muted queue-score-detail" title="Hiring Panel ATS score">ATS {scoreLabel(atsScore)}</span>}
+      {atsScore !== null && <span className="text-muted queue-score-detail" title="Hiring Panel ATS score">ATS {atsScore}</span>}
+      {panelFit !== null && <span className="text-muted queue-score-detail" title="Hiring Panel role-fit assessment">Panel Fit {panelFit}</span>}
       <span className={`badge ${fitTone} queue-score-badge`} title={fitTitle}>{fitLabel}</span>
       {finalScore !== null && <span className="text-muted queue-score-detail" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>}
     </div>

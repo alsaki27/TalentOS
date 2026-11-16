@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
+import { hiringPanelScoreText, missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
+
+describe("hiringPanelScoreText", () => {
+  it("displays persisted score values independently of the qualification result", () => {
+    expect(hiringPanelScoreText(7)).toBe("7.0/10");
+    expect(hiringPanelScoreText("5")).toBe("5.0/10");
+    expect(hiringPanelScoreText(0)).toBe("0.0/10");
+  });
+
+  it("withholds missing or malformed Panel scores", () => {
+    for (const value of [undefined, null, "", "missing", -1, 11, NaN]) {
+      expect(hiringPanelScoreText(value)).toBeNull();
+    }
+  });
+});
 
 describe("missingQualificationFitDisplay", () => {
   it("labels a completed workflow with no stored scorecard clearly", () => {

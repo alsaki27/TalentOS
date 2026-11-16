@@ -9,6 +9,12 @@ export interface QualificationFitRangeDisplay {
   max: number;
 }
 
+export function hiringPanelScoreText(score: number | string | null | undefined): string | null {
+  if (score == null || (typeof score === "string" && !score.trim())) return null;
+  const value = Number(score);
+  return Number.isFinite(value) && value >= 0 && value <= 10 ? `${value.toFixed(1)}/10` : null;
+}
+
 export function qualificationFitScoreText(
   score: number | null | undefined,
   range: QualificationFitRangeDisplay | null | undefined,

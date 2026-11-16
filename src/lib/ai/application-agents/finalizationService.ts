@@ -25,6 +25,7 @@ import { computeFinalScores, resumeDocumentText } from "./finalResumeScoring";
 import type { JobAnalysisV1 } from "./schemas";
 import {
   computeQualificationFit,
+  evidenceQualificationRequirements,
   QUALIFICATION_FIT_RUBRIC_VERSION,
   resolveQualificationJobDescription,
   type QualificationFitResult,
@@ -208,7 +209,7 @@ export async function finalizeWorkflow(
   const resumeForgeContext = evidenceVersion ? wf.config_snapshot : (resumeForgeInputArtifact?.data as any)?.context ?? {};
   const jobSnapshot = resumeForgeContext.job ?? {};
   const sourceOfTruthSnapshot = resumeForgeContext.sourceOfTruth ?? {};
-  const qualificationJobDescription = resolveQualificationJobDescription(jobSnapshot);
+  const qualificationJobDescription = resolveQualificationJobDescription(jobSnapshot, evidenceVersion);
   const qualificationCandidateSnapshot = {
     // Use the exact candidate snapshot Resume Forge analyzed. Falling back to
     // a current base-resume row could make citations resolve against content
@@ -222,20 +223,23 @@ export async function finalizeWorkflow(
   let qualificationFitJson: string | null = null;
   let qualificationFitHash: string | null = null;
   try {
+    const sourceRequirements = evidenceVersion ? evidenceQualificationRequirements(qualificationJobDescription) : undefined;
     qualificationFit = computeQualificationFit({
       jobDescription: qualificationJobDescription,
       jobTitle: jobSnapshot.title ?? qualificationJobAnalysis?.title ?? null,
       jobAnalysis: qualificationJobAnalysis,
+      sourceRequirements,
       ...qualificationCandidateSnapshot,
       evaluatedAt: wf.created_at,
     });
     const qualificationFitArtifactData = {
       ...qualificationFit,
       evaluatedAt: wf.created_at,
+      ...(evidenceVersion ? { requirementSource: "frozen_job_description" } : {}),
       sourceHashes: {
         jobDescription: await sha256Hex(qualificationJobDescription ?? ""),
         candidateEvidence: await sha256Hex(JSON.stringify(qualificationCandidateSnapshot)),
-        requirementAnalysis: await sha256Hex(JSON.stringify(qualificationJobAnalysis?.requirementAnalysis ?? [])),
+        requirementAnalysis: await sha256Hex(JSON.stringify(sourceRequirements ?? qualificationJobAnalysis?.requirementAnalysis ?? [])),
       },
     };
     qualificationFitJson = JSON.stringify(qualificationFitArtifactData);

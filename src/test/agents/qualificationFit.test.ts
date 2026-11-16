@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeQualificationFit,
+  evidenceQualificationRequirements,
   resolveQualificationJobDescription,
 } from "@/lib/ai/application-agents/qualificationFit";
 import type { JobAnalysisV1, RequirementAnalysisEntry } from "@/lib/ai/application-agents/schemas";
@@ -65,6 +66,50 @@ function input(requirementAnalysis: RequirementAnalysisEntry[]) {
 }
 
 describe("computeQualificationFit", () => {
+  it("scores grounded qualifications for an evidence run with empty legacy Job Lens arrays", () => {
+    const description = resolveQualificationJobDescription({ description_html: [
+      "<p>Join our design team to prepare technical drawings and support detailed design work.</p>",
+      "<h3>REQUIRED SKILLS</h3><ul><li>AutoCAD</li><li>Active security clearance and experience with utility projects.</li></ul>",
+      "<h3>Qualifications:</h3><ul><li>High school diploma required. Transcript required prior to interview.</li></ul>",
+      "<p>Hourly Pay: Grade Step 4</p><p>Full medical and retirement benefits.</p>",
+    ].join("") }, true)!;
+    const sourceRequirements = evidenceQualificationRequirements(description);
+    const result = computeQualificationFit({
+      ...input([]),
+      jobDescription: description,
+      jobAnalysis: { requiredSkills: [], responsibilities: [], requirementAnalysis: [] },
+      sourceRequirements,
+      baseResume: { content: { skills: [{ title: "Drafting", skills: ["AutoCAD"] }] } },
+    });
+
+    expect(result.criteria.map(({ requirement }) => requirement)).toEqual([
+      "AutoCAD", "Active security clearance and experience with utility projects.", "High school diploma required.",
+    ]);
+    expect(result.criteria[0]).toMatchObject({
+      status: "meets", evidence: ["base.skills[0].skills[0]"], evidenceExcerpts: ["AutoCAD"],
+    });
+    expect(result.criteria.slice(1).every(row => !row.resolved)).toBe(true);
+    expect(result.jobGroundingCoverage).toBe(100);
+    expect(result.status).toBe("needs_review");
+    expect(result.score).toBeNull();
+    expect(result.scoreRange?.min).toBeGreaterThan(0);
+  });
+
+  it("keeps unsupported source criteria unresolved rather than using placeholder Job Lens matches", () => {
+    const description = "The CAD department creates and maintains plant designs.\n" +
+      "Qualifications:\nMust have two years of CAD education or equivalent experience.\n" +
+      "What we offer:\nCompetitive pay and professional development opportunities.";
+    const result = computeQualificationFit({
+      ...input([requirement("CAD", "supported_by_resume", ["base.skills[0]"])]),
+      jobDescription: description,
+      sourceRequirements: evidenceQualificationRequirements(description),
+      baseResume: { content: { skills: ["CAD"] } },
+    });
+    expect(result.criteria).toHaveLength(1);
+    expect(result.criteria[0]).toMatchObject({ status: "not_evidenced", resolved: false });
+    expect(result.score).toBeNull();
+  });
+
   it("scores only source-cited qualifications and produces a reproducible result", () => {
     const result = computeQualificationFit(input([
       requirement("Python", "supported_by_resume", ["base.skills[0]"]),

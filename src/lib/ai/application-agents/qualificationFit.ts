@@ -60,6 +60,7 @@ interface QualificationFitInput {
   jobDescription: string | null | undefined;
   jobTitle?: string | null;
   jobAnalysis: Partial<JobAnalysisV1> | null | undefined;
+  sourceRequirements?: RequirementAnalysisEntry[];
   baseResume: unknown;
   verifiedSkills?: string[];
   sourceOfTruthSkills?: string[];
@@ -82,7 +83,7 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function resolveQualificationJobDescription(value: unknown): string | null {
+export function resolveQualificationJobDescription(value: unknown, preserveSections = false): string | null {
   const job = asRecord(value);
   const candidates = [
     job.description_text,
@@ -94,14 +95,58 @@ export function resolveQualificationJobDescription(value: unknown): string | nul
   ];
   const raw = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
   if (typeof raw !== "string") return null;
-  return raw
+  const text = (preserveSections
+    ? raw.replace(/<\/?(?:h[1-6]|p|li|div|section|br)\b[^>]*>/gi, "\n")
+    : raw)
     .replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/&gt;/gi, ">");
+  return (preserveSections ? text.replace(/[^\S\r\n]+/g, " ") : text.replace(/\s+/g, " ")).trim();
+}
+
+/** Read explicit qualification sections of the frozen job posting for evidence runs. */
+export function evidenceQualificationRequirements(description: string | null): RequirementAnalysisEntry[] {
+  const requirements: RequirementAnalysisEntry[] = [];
+  const seen = new Set<string>();
+  let section: "required" | "preferred" | "skills" | null = null;
+  for (const line of (description ?? "").split(/\r?\n/)) {
+    let text = line.trim().replace(/^(?:[-*•–]\s*|\d+[.)]\s+)/, "");
+    if (!text) continue;
+    const colon = text.indexOf(":");
+    const heading = (colon < 0 ? text : text.slice(0, colon)).trim();
+    const nextSection = /^(?:preferred (?:qualifications|education|experience|skills|requirements)|nice to have)$/i.test(heading)
+      ? "preferred" : /^(?:(?:required|technical|minimum) )?skills$/i.test(heading)
+        ? "skills" : /^(?:(?:minimum|basic|required) )?(?:qualifications|requirements|education(?:\s*[/&]\s*experience)?|experience)$/i.test(heading)
+          ? "required" : null;
+    if (nextSection) {
+      section = nextSection;
+      text = colon < 0 ? "" : text.slice(colon + 1).trim();
+      if (!text) continue;
+    } else if (text.endsWith(":") ||
+        /^(?:hourly pay|salary|compensation|benefits|what we offer|equal opportunity|about us|about the company|responsibilities)\b/i.test(heading)) {
+      section = null;
+      continue;
+    }
+    for (const item of text.split(/(?<=[.!?])\s+(?=[A-Z])/)) {
+      if (!section && !/^(?:(?:you|candidates|applicants)\s+)?(?:must (?:have|hold|possess)|minimum of)\b/i.test(item)) continue;
+      if (/^(?:transcripts? required|please |other duties|all qualified applicants|we (?:are|offer|provide))\b/i.test(item)) continue;
+      const key = normalizeJobTerms(item);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const simpleSkill = section === "skills" && /^[\w.+#-]+(?: [\w.+#-]+){0,3}$/.test(item) &&
+        !/\b(?:and|or|experience|ability|degree|diploma|education|clearance|licen[cs]e|certification|authorization|years?)\b/i.test(item);
+      requirements.push({
+        requirement: item,
+        category: simpleSkill ? "skill" : "other",
+        status: section === "preferred" || /\b(?:preferred|nice to have)\b/i.test(item) ? "nice_to_have" : "unsupported",
+        sourceEvidence: [],
+        safeToAdd: false,
+      });
+    }
+  }
+  return requirements;
 }
 
 function normalize(value: string): string {
@@ -235,6 +280,7 @@ function directRequirementEvidence(
   material: Record<string, any>,
   verifiedSkills: string[],
   sourceOfTruthSkills: string[],
+  sourceRequirements: boolean,
 ): Array<{ citation: string; excerpt: string }> {
   const sections = entry.category === "skill" || entry.category === "tool"
     ? ["skills"]
@@ -254,15 +300,24 @@ function directRequirementEvidence(
     // This path is intentionally stricter than a semantic similarity check:
     // a confirmed skill/credential must appear as a complete phrase in the
     // requirement or vice versa before it can resolve a criterion by itself.
-    if (
-      ` ${normalizedRequirement} `.includes(` ${normalizedEvidence} `) ||
-      ` ${normalizedEvidence} `.includes(` ${normalizedRequirement} `)
-    ) matches.push({ citation, excerpt });
+    const matchesRequirement = sourceRequirements
+      ? normalizedRequirement === normalizedEvidence
+      : ` ${normalizedRequirement} `.includes(` ${normalizedEvidence} `) ||
+        ` ${normalizedEvidence} `.includes(` ${normalizedRequirement} `);
+    if (matchesRequirement) matches.push({ citation, excerpt });
   };
 
   for (const section of sections) {
     const values = Array.isArray(material[section]) ? material[section] : [];
-    values.forEach((item: unknown, index: number) => addIfExactPhrase(`base.${section}[${index}]`, item, section));
+    values.forEach((item: unknown, index: number) => {
+      const citation = `base.${section}[${index}]`;
+      const nestedSkills = sourceRequirements && section === "skills" ? asRecord(item).skills : null;
+      if (Array.isArray(nestedSkills)) {
+        nestedSkills.forEach((skill, skillIndex) => addIfExactPhrase(`${citation}.skills[${skillIndex}]`, skill, section));
+      } else {
+        addIfExactPhrase(citation, item, section);
+      }
+    });
   }
   if (entry.category === "skill" || entry.category === "tool") {
     verifiedSkills.forEach((skill, index) => addIfExactPhrase(`verified:${skill}`, skill, "skills"));
@@ -536,9 +591,9 @@ function experienceCriterion(
 export function computeQualificationFit(input: QualificationFitInput): QualificationFitResult {
   const jobDescription = asText(input.jobDescription);
   const analysis = asRecord(input.jobAnalysis);
-  const requirementAnalysis = Array.isArray(analysis.requirementAnalysis)
+  const requirementAnalysis = input.sourceRequirements ?? (Array.isArray(analysis.requirementAnalysis)
     ? analysis.requirementAnalysis as RequirementAnalysisEntry[]
-    : [];
+    : []);
   const material = candidateMaterial(input);
   const noScore = (summary: string, jobGroundingCoverage: number | null = null, evidenceCoverage: number | null = null): QualificationFitResult => ({
     rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
@@ -554,11 +609,15 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
   });
 
   if (jobDescription.length < 80) return noScore("The source job description is missing or too short to score reliably.");
-  if (requirementAnalysis.length === 0) return noScore("Resume Forge did not produce structured candidate-to-job requirements for this run.");
-  const experienceRequirements = extractMinimumExperienceRequirements(jobDescription);
+  if (requirementAnalysis.length === 0) return noScore(input.sourceRequirements
+    ? "No explicit qualification criteria could be extracted from the saved job description."
+    : "Resume Forge did not produce structured candidate-to-job requirements for this run.");
+  const experienceRequirements = extractMinimumExperienceRequirements(
+    input.sourceRequirements ? input.sourceRequirements.map(entry => entry.requirement).join("\n") : jobDescription,
+  );
   const coreJobFields = [analysis.requiredSkills, analysis.responsibilities, analysis.tools, analysis.certifications]
     .filter((value) => Array.isArray(value) && value.length > 0).length;
-  if (coreJobFields === 0 && experienceRequirements.length === 0) {
+  if (!input.sourceRequirements && coreJobFields === 0 && experienceRequirements.length === 0) {
     return noScore("The structured job analysis has no usable requirements; review the job analysis before scoring.");
   }
 
@@ -606,7 +665,7 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
       );
     const validCitations = validatedCitations.map((item) => item.citation);
     const evidenceExcerpts = validatedCitations.map((item) => item.excerpt);
-    const directEvidence = directRequirementEvidence(entry, material, verifiedSkills, sourceOfTruthSkills);
+    const directEvidence = directRequirementEvidence(entry, material, verifiedSkills, sourceOfTruthSkills, Boolean(input.sourceRequirements));
     const hasDirectSourceEvidence = directEvidence.length > 0;
     if (
       hasDirectSourceEvidence ||
