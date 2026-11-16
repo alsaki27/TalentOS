@@ -209,9 +209,39 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
         finish: async answer => ({ jobAnalysis: jobAnalysis(ctx, source.requirements), draft: applySelection(source, readSelection(answer, allowed)) }),
       };
     case "application_hiring_panel": {
+      const selected = new Set(prior?.prioritizedIds ?? []);
+      const keywords = new Set(significantTokens([ctx.job.title, ...requirements.map(item => item.text)].join(" ")));
+      const draftEvidence = source.proof.filter(item => !item.additional || selected.has(item.id));
+      const ranked = draftEvidence.map(item => ({
+        item,
+        matched: Number(evidenceIds.has(item.id)),
+        overlap: significantTokens(item.text).filter(token => keywords.has(token)).length,
+      })).sort((a, b) => b.matched - a.matched || b.overlap - a.overlap).map(entry => entry.item);
+
+      // Direct matches are a shortlist for tailoring. Review also needs a
+      // sample of what the draft contains when that shortlist is sparse.
+      const groups = new Set<string>();
+      const representative = ranked.filter(item => {
+        const group = item.scope === "bullet" ? `role:${item.role}` : "skills";
+        if (groups.has(group)) return false;
+        groups.add(group);
+        return true;
+      });
+      const reviewProof = completeWithin([...new Set([
+        ...ranked.filter(item => selected.has(item.id)),
+        ...representative,
+        ...ranked,
+      ])], Math.floor(inputChars * 0.48));
+      const reviewIds = new Set(reviewProof.map(item => item.id));
       const task = {
-        system: instructions + ' Assess the cited draft selections. Return JSON only: numeric atsScore, recruiterScore, and roleFitScore (0–10), risk ("clear", "unknown" or "conflict"), and issues (objects with evidenceId, detail and boolean material). For evidenceId, copy an exact id from proof or use "" for a gap with no proof. A preferred requirement cannot be a blocker.',
-        schema: reviewSchema, body: JSON.stringify({ ...evidencePayload, selected: prior?.prioritizedIds ?? [] }),
+        system: instructions + ' Score the draft using all entries in proof. The selected and match arrays indicate prioritization and exact matches. Assess transferable evidence from proof even when those arrays are empty. Keep any unmet required qualifications visible. Return one JSON object with numeric atsScore, recruiterScore, and roleFitScore (0–10), risk ("clear", "unknown" or "conflict"), and issues (objects with evidenceId, detail and boolean material). For evidenceId, copy an exact id from proof or use "" for a gap with no proof. A preferred requirement cannot be a blocker.',
+        schema: reviewSchema,
+        body: JSON.stringify({
+          ...evidencePayload,
+          requirements: requirements.map(item => ({ ...item, match: item.match.filter(id => reviewIds.has(id)) })),
+          proof: reviewProof,
+          selected: [...selected].filter(id => reviewIds.has(id)),
+        }),
       };
       return { task, finish: async answer => {
         const value = record(answer);
@@ -227,7 +257,7 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
         const evidenceIssues = value.issues.map(record).map(issue => {
           const evidenceId = typeof issue.evidenceId === "string" ? issue.evidenceId.trim() : null;
           const detail = readResumeText(issue.detail);
-          const verifiedReference = evidenceId !== null && (!evidenceId || allowed.has(evidenceId));
+          const verifiedReference = evidenceId !== null && (!evidenceId || reviewIds.has(evidenceId));
           if (!verifiedReference || !detail || typeof issue.material !== "boolean") {
             // An uncertain review finding must remain visible to the reviewer.
             // Only a verified source ID can flow into a downstream edit.

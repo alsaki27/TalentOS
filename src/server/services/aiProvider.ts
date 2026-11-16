@@ -29,6 +29,15 @@ export const isOpenAiLuna = (model: string | null | undefined): model is string 
   !!model && /^gpt-(?:6|5\.6)-luna(?:-|$)/.test(model);
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
 
+function unwrapProxyReviewText(text: string): string {
+  // A compatible proxy can return the result as text with a heading or fence.
+  // Preserve arrays and ambiguous responses for the stage validator to reject.
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first < 0 || last < first || /[{}\[\]]/.test(text.slice(0, first) + text.slice(last + 1))) return text;
+  return text.slice(first, last + 1);
+}
+
 // Single source of truth for the fallback maxTokens ceiling used by every
 // DB-managed-key provider builder below. Matches the native Google env-key
 // path (googleProvider.ts) and the Vertex Proxy (googleVertexProxyProvider.ts),
@@ -211,7 +220,7 @@ export function buildProviderFromDbKey(
   customHeaders?: Record<string, string> | null,
   providerConfig?: Record<string, unknown> | null,
   reasoningEffort?: string | null,
-  routeTransport?: "opencode_go" | "anthropic_tool_json",
+  routeTransport?: "opencode_go" | "anthropic_tool_json" | "anthropic_hiring_panel_json",
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -259,11 +268,14 @@ export function buildProviderFromDbKey(
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
       const isHaiku55 = /^claude-haiku-5-5(?:-|$)/.test(model ?? "");
-      const nativeStructuredOutput = isHaiku55 && routeTransport !== "anthropic_tool_json";
+      const hiringPanelProxy = routeTransport === "anthropic_hiring_panel_json";
+      const toolJsonTransport = hiringPanelProxy || routeTransport === "anthropic_tool_json";
+      const nativeStructuredOutput = isHaiku55 && !toolJsonTransport;
       // Some Messages-compatible proxies accept native output_config but
       // return prose. A forced tool provides the schema over the tool API.
       return {
         async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema }) {
+          const strictReview = hiringPanelProxy && Boolean(responseSchema);
           const controller = new AbortController();
           let timer: ReturnType<typeof setTimeout> | undefined;
           if (timeoutMs && timeoutMs > 0) {
@@ -281,6 +293,7 @@ export function buildProviderFromDbKey(
                   name: STRUCTURED_OUTPUT_TOOL_NAME,
                   description: "Return the result. Always call this tool with the complete result - never respond with plain text.",
                   input_schema: responseSchema,
+                  ...(strictReview ? { strict: true } : {}),
                 }]
               : []),
           ];
@@ -298,7 +311,9 @@ export function buildProviderFromDbKey(
                 model: model || DEFAULT_MODEL,
                 max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
                 ...(!isHaiku55 ? { temperature } : {}),
-                system,
+                system: strictReview
+                  ? system + "\nCall emit_result exactly once with all five fields as tool arguments. Send scores as numbers and include issues as an array, even when empty."
+                  : system,
                 messages: messages.map((m) => ({
                   role: m.role,
                   content: m.content.map((block) => {
@@ -334,14 +349,21 @@ export function buildProviderFromDbKey(
                 ? { id: block.id, name: block.name, input: block.input }
                 : { text: block.text ?? "" }),
             }));
-            const forcedResult = responseSchema
-              ? rawContent.find((block: any) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME)
-              : undefined;
+            const results = responseSchema
+              ? rawContent.filter((block: any) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME)
+              : [];
+            if (strictReview && results.length > 1) {
+              throw new Error("Invalid model output: duplicate Hiring Panel tool results");
+            }
+            const forcedResult = results[0];
+            const input = forcedResult?.input;
             return {
               content: forcedResult
-                ? [{ type: "text" as const, text: JSON.stringify((forcedResult as any).input) }]
-                : rawContent,
-              stopReason: forcedResult && routeTransport === "anthropic_tool_json" && data.stop_reason === "tool_use"
+                ? [{ type: "text" as const, text: strictReview && typeof input === "string" ? input : JSON.stringify(input) }]
+                : strictReview && data.stop_reason === "end_turn"
+                  ? [{ type: "text" as const, text: unwrapProxyReviewText(textOf(rawContent)) }]
+                  : rawContent,
+              stopReason: forcedResult && toolJsonTransport && data.stop_reason === "tool_use"
                 ? "end_turn"
                 : data.stop_reason ?? "end_turn",
               usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,

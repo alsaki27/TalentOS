@@ -1311,9 +1311,13 @@ describe("configurable evidence pipeline routing", () => {
 });
 
 describe("evidence review OpenCode fallback", () => {
-  it.each(["application_hiring_panel_evidence_v2", "application_final_polish_evidence_v2"])(
-    "%s uses configured OpenCode rotation after malformed Haiku output",
-    async automationId => {
+  it.each([
+    ["application_hiring_panel_evidence_v2", "anthropic_hiring_panel_json", "Invalid model output: expected one JSON object"],
+    ["application_hiring_panel_evidence_v2", "anthropic_hiring_panel_json", "Anthropic API error (400): strict tool options unsupported"],
+    ["application_final_polish_evidence_v2", "anthropic_tool_json", "Invalid model output: expected one JSON object"],
+  ])(
+    "%s uses configured OpenCode rotation when %s fails with %s",
+    async (automationId, primaryTransport, primaryError) => {
       const keys = [
         { id: "proxy", provider: "anthropic", provider_mode: "anthropic_compatible", priority: 1 },
         { id: "opencode-a", provider: "opencode", priority: 2 },
@@ -1334,8 +1338,8 @@ describe("evidence review OpenCode fallback", () => {
         send: vi.fn(async () => {
           attempted.push(`${key}:${model}`);
           if (key === "proxy") {
-            expect(transport).toBe("anthropic_tool_json");
-            throw new SyntaxError("Invalid model output: expected one JSON object");
+            expect(transport).toBe(primaryTransport);
+            throw new Error(primaryError);
           }
           expect(transport).toBe("opencode_go");
           if (key === "opencode-a") throw new Error("OpenCode API error (429): Too many requests");

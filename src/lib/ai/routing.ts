@@ -291,13 +291,16 @@ type ResumeEvidenceRoute =
   | { routes?: readonly ResumeRouteSnapshot[] };
 
 function evidenceRouteTransport(
+  automationId: string,
   route: ResumeEvidenceRoute | undefined,
   key: { provider: string; provider_mode?: string },
 ) {
   if (!route) return undefined;
   if (key.provider === "opencode") return "opencode_go";
   if (key.provider === "anthropic" && key.provider_mode === "anthropic_compatible") {
-    return "anthropic_tool_json";
+    return automationId === "application_hiring_panel_evidence_v2"
+      ? "anthropic_hiring_panel_json"
+      : "anthropic_tool_json";
   }
 }
 
@@ -458,7 +461,7 @@ export async function getProviderForAutomation(
         }
         const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
           keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
-          evidenceRouteTransport(resumeEvidenceRoute, keyRow));
+          evidenceRouteTransport(automationId, resumeEvidenceRoute, keyRow));
         if (provider) {
           return {
             provider,
@@ -544,7 +547,7 @@ export async function getProviderForAutomation(
         }
         const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
           keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
-          evidenceRouteTransport(resumeEvidenceRoute, keyRow));
+          evidenceRouteTransport(automationId, resumeEvidenceRoute, keyRow));
         if (dbProvider) {
           return {
             provider: dbProvider,
