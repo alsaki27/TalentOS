@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { prepareEvidenceStage, sendEvidenceTask } from "@/lib/ai/application-agents/evidencePipeline";
 import { renderEvidenceReleasePdf } from "@/lib/ai/application-agents/resumeReleasePdf";
 import type { AgentContext } from "@/lib/ai/application-agents/types";
+import { buildProviderFromDbKey } from "@/server/services/aiProvider";
 
 function context(): AgentContext {
   return {
@@ -45,6 +46,41 @@ describe("evidence resume pipeline", () => {
     const ctx = context();
     expect((await prepareEvidenceStage("application_final_polish", ctx, 6000)).task).toBeNull();
     expect((await prepareEvidenceStage("application_release_editor", ctx, 6000)).task).toBeNull();
+  });
+
+  it("accepts structured Haiku tool output from a Messages-compatible proxy", async () => {
+    const stage = await prepareEvidenceStage("application_hiring_panel", context(), 6000);
+    const review = { atsScore: 8, recruiterScore: 8, roleFitScore: 7, risk: "clear", issues: [] };
+    const proxy = buildProviderFromDbKey("anthropic", "test-token", "claude-haiku-5-5",
+      "https://proxy.example.test/v1", "/messages", null, null, null, "anthropic_tool_json")!;
+    const fetchProxy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({
+      stop_reason: "tool_use", content: [
+        { type: "text", text: "# Assessment" },
+        { type: "tool_use", name: "emit_result", id: "tool-1", input: review },
+      ],
+    }));
+    try {
+      const answer = await sendEvidenceTask(stage.task!, proxy, { max_output_tokens: 1000 });
+      expect(await stage.finish(answer)).toMatchObject({ atsScore: 8, recruiterScore: 8, roleFitScore: 7 });
+      expect(fetchProxy).toHaveBeenCalledTimes(1);
+      const request = JSON.parse(String(fetchProxy.mock.calls[0][1]?.body));
+      expect(request).toMatchObject({
+        tool_choice: { type: "tool", name: "emit_result" },
+        tools: [{ name: "emit_result", input_schema: stage.task!.schema }],
+      });
+      expect(request).not.toHaveProperty("output_config");
+    } finally {
+      fetchProxy.mockRestore();
+    }
+  });
+
+  it("rejects a Markdown assessment as invalid output without including provider text in the error", async () => {
+    const stage = await prepareEvidenceStage("application_hiring_panel", context(), 6000);
+    const send = vi.fn(async () => ({
+      stopReason: "end_turn", content: [{ type: "text" as const, text: "# Assessment\nResume review prose" }],
+    }));
+    await expect(sendEvidenceTask(stage.task!, { send }, {}))
+      .rejects.toThrow(/^Invalid model output: expected one JSON object$/);
   });
 
   it("produces identical PDF bytes and digest for the same saved content", async () => {

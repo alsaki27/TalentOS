@@ -198,7 +198,7 @@ export function buildProviderFromDbKey(
   customHeaders?: Record<string, string> | null,
   providerConfig?: Record<string, unknown> | null,
   reasoningEffort?: string | null,
-  routeTransport?: "opencode_go",
+  routeTransport?: "opencode_go" | "anthropic_tool_json",
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -245,17 +245,10 @@ export function buildProviderFromDbKey(
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
-      const nativeStructuredOutput = /^claude-haiku-5-5(?:-|$)/.test(model ?? "");
-      // Claude has no "return only JSON" text mode the way OpenAI-compatible
-      // APIs do. Forcing a single synthetic tool call is Anthropic's own
-      // documented pattern for guaranteed-schema-valid structured output -
-      // the response parsing below unwraps the forced tool's `input` back
-      // into a plain text block, so every existing caller's
-      // textOf(response.content) keeps working completely unchanged; the
-      // forced-tool mechanism is invisible outside this one case. No
-      // anthropic-provider key exists in production today, so this has zero
-      // effect on any current live call - it only activates the first time
-      // one is added.
+      const isHaiku55 = /^claude-haiku-5-5(?:-|$)/.test(model ?? "");
+      const nativeStructuredOutput = isHaiku55 && routeTransport !== "anthropic_tool_json";
+      // Some Messages-compatible proxies accept native output_config but
+      // return prose. A forced tool provides the schema over the tool API.
       const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
       return {
         async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema }) {
@@ -292,7 +285,7 @@ export function buildProviderFromDbKey(
               body: JSON.stringify({
                 model: model || DEFAULT_MODEL,
                 max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-                ...(!nativeStructuredOutput ? { temperature } : {}),
+                ...(!isHaiku55 ? { temperature } : {}),
                 system,
                 messages: messages.map((m) => ({
                   role: m.role,
@@ -336,7 +329,9 @@ export function buildProviderFromDbKey(
               content: forcedResult
                 ? [{ type: "text" as const, text: JSON.stringify((forcedResult as any).input) }]
                 : rawContent,
-              stopReason: data.stop_reason ?? "end_turn",
+              stopReason: forcedResult && routeTransport === "anthropic_tool_json" && data.stop_reason === "tool_use"
+                ? "end_turn"
+                : data.stop_reason ?? "end_turn",
               usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
             };
           } catch (error: any) {

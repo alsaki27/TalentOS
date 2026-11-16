@@ -1215,6 +1215,49 @@ describe("OpenCode shared route breaker and model-scoped retries", () => {
   });
 });
 
+describe("evidence review OpenCode fallback", () => {
+  it.each(["application_hiring_panel_evidence_v2", "application_final_polish_evidence_v2"])(
+    "%s uses configured OpenCode rotation after malformed Haiku output",
+    async automationId => {
+      const keys = [
+        { id: "proxy", provider: "anthropic", provider_mode: "anthropic_compatible", priority: 1 },
+        { id: "opencode-a", provider: "opencode", priority: 2 },
+        { id: "opencode-b", provider: "opencode", priority: 3 },
+      ].map(key => ({ ...key, status: "working", is_enabled: true, decrypted_key: key.id }));
+      const routes = [
+        { id: "primary", ai_key_id: "proxy", provider: null, rank: 1, model_override: "claude-haiku-5-5" },
+        { id: "fallback", ai_key_id: "opencode-b", provider: null, rank: 2, model_override: "glm-5.3-flash" },
+      ].map(route => ({ ...route, automation_id: automationId, is_enabled: true }));
+      mockGetAiRuntimeConfig.mockResolvedValue({ active_routing_state_id: "state", allow_unrouted_fallback: false });
+      mockQuery.mockImplementation(async (sql, args) =>
+        sql.includes("ai_routing_state_routes") && args?.[1] === automationId ? routes : []);
+      mockQueryOne.mockImplementation(async sql => sql.includes("ai_key_pool_cursors") ? { start_index: 0 } : null);
+      mockListEnabledAiKeys.mockResolvedValue(keys);
+      mockGetAiKeyWithDecryptedKey.mockImplementation(async id => keys.find(key => key.id === id) ?? null);
+      const attempted: string[] = [];
+      mockBuildProviderFromDbKey.mockImplementation((_provider, key, model, _base, _path, _headers, _config, _effort, transport) => ({
+        send: vi.fn(async () => {
+          attempted.push(`${key}:${model}`);
+          if (key === "proxy") {
+            expect(transport).toBe("anthropic_tool_json");
+            throw new SyntaxError("Invalid model output: expected one JSON object");
+          }
+          expect(transport).toBe("opencode_go");
+          if (key === "opencode-a") throw new Error("OpenCode API error (429): Too many requests");
+          return { content: [{ type: "text", text: "{}" }], stopReason: "end_turn" };
+        }),
+      }));
+      const { callWithUsageTracking } = await import("@/lib/ai/routing");
+      const result = await callWithUsageTracking(automationId, {
+        maxProviderAttempts: 3,
+        resumeEvidenceRoute: { provider: "anthropic", model: "claude-haiku-5-5", allowOpenCodeFallback: true },
+      }, provider => provider.send({ system: "Return JSON", messages: [], tools: [] }));
+      expect(attempted).toEqual(["proxy:claude-haiku-5-5", "opencode-a:glm-5.3-flash", "opencode-b:glm-5.3-flash"]);
+      expect(result).toMatchObject({ aiKeyId: "opencode-b", model: "glm-5.3-flash", routeRank: 2 });
+    },
+  );
+});
+
 describe("scheduled logging scoped OpenCode recovery",()=>{
   const automation="scheduled_candidate_logging_eligibility_check";
   beforeEach(()=>{

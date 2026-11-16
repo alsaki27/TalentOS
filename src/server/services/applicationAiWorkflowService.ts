@@ -1111,12 +1111,14 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
           }).catch(error => console.warn("Workflow heartbeat failed", { workflowId, code: error?.code }));
         }, 20_000);
         try {
+          const allowOpenCodeFallback = route?.provider === "anthropic" &&
+            (agentId === "application_hiring_panel" || agentId === "application_final_polish");
           const callCtx: CallContext = {
             userId: wf.started_by ?? undefined, workflowId, applicationId: wf.application_id,
             stageRunId: stageRun.id, promptVersion: agentConfig?.prompt_version ?? null,
             attemptNumber: stageAttemptNumber, routingStateId: snapshot.routingStateId ?? undefined,
-            maxProviderAttempts: evidence ? (route?.provider === "opencode" ? 2 : 1) : 4,
-            resumeEvidenceRoute: route, signal: deadline.signal,
+            maxProviderAttempts: evidence ? (allowOpenCodeFallback ? 3 : route?.provider === "opencode" ? 2 : 1) : 4,
+            resumeEvidenceRoute: route && { ...route, allowOpenCodeFallback }, signal: deadline.signal,
           };
           const invoke = () => callWithUsageTracking(routeId, callCtx, async provider => {
             if (evidence?.task) {

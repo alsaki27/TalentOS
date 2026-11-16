@@ -283,6 +283,23 @@ async function getPoolKeyMetadata(
   return keys.slice(start).concat(keys.slice(0, start));
 }
 
+type ResumeEvidenceRoute = {
+  provider: string;
+  model: string;
+  allowOpenCodeFallback?: boolean;
+};
+
+function evidenceRouteTransport(
+  route: ResumeEvidenceRoute | undefined,
+  key: { provider: string; provider_mode?: string },
+) {
+  if (!route) return undefined;
+  if (key.provider === "opencode") return "opencode_go";
+  if (key.provider === "anthropic" && key.provider_mode === "anthropic_compatible") {
+    return "anthropic_tool_json";
+  }
+}
+
 /**
  * Resolve a provider for the given automation by walking its ordered fallback chain.
  * Optionally falls back to the Neon global key pool if runtime policy allows it.
@@ -301,10 +318,9 @@ export async function getProviderForAutomation(
   // would otherwise make (skipped/fallback usage events, pool cursor advance).
   benchmarkMode?: boolean,
   scheduledPoolRecovery?: boolean,
-  resumeEvidenceRoute?: { provider: string; model: string },
+  resumeEvidenceRoute?: ResumeEvidenceRoute,
 ): Promise<AutomationRouteResult | null> {
-  const keyScopedRecovery = (scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check")
-    || resumeEvidenceRoute?.provider === "opencode";
+  const scheduledKeyRecovery = scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check";
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
     return {
@@ -345,6 +361,11 @@ export async function getProviderForAutomation(
   let limitSkipped = false;
   for (const route of routes) {
     if (excludeRouteIds?.has(route.id)) continue;
+    const acceptsProvider = (provider: string) => !resumeEvidenceRoute
+      || provider === resumeEvidenceRoute.provider
+      || (resumeEvidenceRoute.allowOpenCodeFallback && route.rank > 1 && provider === "opencode");
+    const acceptsModel = (provider: string, model: string | null) => !resumeEvidenceRoute
+      || provider !== resumeEvidenceRoute.provider || model === resumeEvidenceRoute.model;
     if (route.ai_key_id) {
       // An explicit key is the route's anchor. For pooled providers, sibling
       // keys are alternatives at this same route rank; for every other
@@ -353,8 +374,9 @@ export async function getProviderForAutomation(
       const anchor = await getAiKeyWithDecryptedKey(route.ai_key_id);
       const anchorProvider = anchor?.provider ?? anchorMetadata?.provider;
       if (!anchorProvider) continue;
-      if (resumeEvidenceRoute && anchorProvider !== resumeEvidenceRoute.provider) continue;
+      if (!acceptsProvider(anchorProvider)) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
+      const keyScopedRecovery = scheduledKeyRecovery || (Boolean(resumeEvidenceRoute) && anchorProvider === "opencode");
       const pinConfiguredOpenCodePrimary =
         usingRoutingStateRoutes &&
         anchorProvider === "opencode" &&
@@ -401,7 +423,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        if (resumeEvidenceRoute && effectiveModel !== resumeEvidenceRoute.model) continue;
+        if (!acceptsModel(keyRow.provider, effectiveModel)) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
           : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
@@ -430,7 +452,7 @@ export async function getProviderForAutomation(
         }
         const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
           keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
-          resumeEvidenceRoute?.provider === "opencode" ? "opencode_go" : undefined);
+          evidenceRouteTransport(resumeEvidenceRoute, keyRow));
         if (provider) {
           return {
             provider,
@@ -446,9 +468,10 @@ export async function getProviderForAutomation(
         }
       }
     } else if (route.provider) {
-      if (resumeEvidenceRoute && route.provider !== resumeEvidenceRoute.provider) continue;
+      if (!acceptsProvider(route.provider)) continue;
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
+      const keyScopedRecovery = scheduledKeyRecovery || (Boolean(resumeEvidenceRoute) && route.provider === "opencode");
       // Provider-only routes resolve from Neon and never from deployment env.
       const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds, benchmarkMode, keyScopedRecovery);
       for (const key of dbKeys) {
@@ -486,7 +509,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        if (resumeEvidenceRoute && effectiveModel !== resumeEvidenceRoute.model) continue;
+        if (!acceptsModel(keyRow.provider, effectiveModel)) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
           : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
@@ -515,7 +538,7 @@ export async function getProviderForAutomation(
         }
         const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
           keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
-          resumeEvidenceRoute?.provider === "opencode" ? "opencode_go" : undefined);
+          evidenceRouteTransport(resumeEvidenceRoute, keyRow));
         if (dbProvider) {
           return {
             provider: dbProvider,
@@ -638,7 +661,7 @@ export interface CallContext {
   scheduledPoolRecovery?: boolean;
   deadlineAt?: number;
   signal?: AbortSignal;
-  resumeEvidenceRoute?: { provider: string; model: string };
+  resumeEvidenceRoute?: ResumeEvidenceRoute;
   // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
   // harness). Suppresses every write this call would otherwise make against
   // live routing state - ai_usage_events rows, ai_api_keys health mutations,
