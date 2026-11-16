@@ -43,6 +43,7 @@ export interface ResumePageMetrics {
   bottomWhitespaceInches: number;
   overflow: boolean;
   readable: boolean;
+  horizontalOverflow?: boolean;
 }
 
 function contactLine(content: ResumeDocument): string {
@@ -63,6 +64,7 @@ interface RenderResult {
   pageHeight: number;
   marginTop: number;
   marginBottom: number;
+  horizontalOverflow: boolean;
 }
 
 function renderInternal(content: ResumeDocument): RenderResult {
@@ -90,6 +92,7 @@ function renderInternal(content: ResumeDocument): RenderResult {
   // real, measured "how full is this page" signal renderResumePdfWithMetrics
   // reports, as opposed to guessing from character/word counts.
   const maxYPerPage: number[] = [marginTop];
+  let horizontalOverflow = false;
 
   function bumpY(delta: number) {
     y += delta;
@@ -110,6 +113,7 @@ function renderInternal(content: ResumeDocument): RenderResult {
     const lines = doc.splitTextToSize(text, maxWidth) as string[];
     for (const line of lines) {
       ensureSpace(lineHeight);
+      horizontalOverflow ||= doc.getTextWidth(line) > maxWidth + 0.01;
       doc.text(line, x, y, { align: opts.align });
       bumpY(lineHeight);
     }
@@ -143,6 +147,7 @@ function renderInternal(content: ResumeDocument): RenderResult {
   // Header
   doc.setFont("helvetica", "bold");
   doc.setFontSize(baseFontSize + 4);
+  horizontalOverflow ||= doc.getTextWidth(content.header.fullName) > contentWidth;
   doc.text(content.header.fullName, pageWidth / 2, y, { align: "center" });
   bumpY(lineHeight + 0.01);
 
@@ -168,6 +173,7 @@ function renderInternal(content: ResumeDocument): RenderResult {
       const label = `${s.title}: `;
       doc.text(label, marginLeft, y);
       const labelWidth = doc.getTextWidth(label);
+      horizontalOverflow ||= labelWidth >= contentWidth;
       doc.setFont("helvetica", "normal");
       writeWrapped(s.skills.join(", "), marginLeft + labelWidth, contentWidth - labelWidth, baseFontSize - 0.5);
     }
@@ -180,9 +186,12 @@ function renderInternal(content: ResumeDocument): RenderResult {
       ensureSpace(lineHeight * 2);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(baseFontSize - 0.5);
-      doc.text(`${exp.title} — ${exp.company}${exp.location ? `, ${exp.location}` : ""}`, marginLeft, y);
+      const heading = `${exp.title} — ${exp.company}${exp.location ? `, ${exp.location}` : ""}`;
+      const headingWidth = doc.getTextWidth(heading);
+      doc.text(heading, marginLeft, y);
       doc.setFont("helvetica", "italic");
       const dates = `${exp.startDate} – ${exp.isCurrent ? "Present" : exp.endDate ?? ""}`;
+      horizontalOverflow ||= headingWidth + doc.getTextWidth(dates) > contentWidth;
       doc.text(dates, marginLeft + contentWidth, y, { align: "right" });
       bumpY(lineHeight);
       for (const b of exp.bullets) bullet(b.text);
@@ -196,7 +205,9 @@ function renderInternal(content: ResumeDocument): RenderResult {
       ensureSpace(lineHeight);
       doc.setFont("helvetica", "bold");
       doc.setFontSize(baseFontSize - 0.5);
-      doc.text(p.name + (p.technologies?.length ? ` (${p.technologies.join(", ")})` : ""), marginLeft, y);
+      const title = p.name + (p.technologies?.length ? ` (${p.technologies.join(", ")})` : "");
+      horizontalOverflow ||= doc.getTextWidth(title) > contentWidth;
+      doc.text(title, marginLeft, y);
       bumpY(lineHeight);
       if (p.description) writeWrapped(p.description, marginLeft, contentWidth, baseFontSize - 0.5);
       for (const b of p.bullets) bullet(b.text);
@@ -235,11 +246,11 @@ function renderInternal(content: ResumeDocument): RenderResult {
     for (const b of section.bullets) bullet(b.text);
   }
 
-  return { doc, maxYPerPage, baseFontSize, pageHeight, marginTop, marginBottom };
+  return { doc, maxYPerPage, baseFontSize, pageHeight, marginTop, marginBottom, horizontalOverflow };
 }
 
 function computeMetrics(result: RenderResult): ResumePageMetrics {
-  const { doc, maxYPerPage, baseFontSize, pageHeight, marginTop, marginBottom } = result;
+  const { doc, maxYPerPage, baseFontSize, pageHeight, marginTop, marginBottom, horizontalOverflow } = result;
   const usableHeight = Math.max(0.01, pageHeight - marginTop - marginBottom);
   const pageCount = doc.getNumberOfPages();
   const lastPageMaxY = maxYPerPage[maxYPerPage.length - 1] ?? marginTop;
@@ -269,6 +280,7 @@ function computeMetrics(result: RenderResult): ResumePageMetrics {
     bottomWhitespaceInches,
     overflow: pageCount > 1,
     readable: baseFontSize >= READABILITY_FLOOR_FONT_SIZE,
+    ...(horizontalOverflow ? { horizontalOverflow: true } : {}),
   };
 }
 

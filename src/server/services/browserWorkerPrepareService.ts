@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { query, queryOne } from "@/server/db/neon";
 import { downloadResumeFile } from "@/lib/resumeStorage";
+import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -106,6 +107,14 @@ const READY = `COALESCE(a.application_stage, a.ae_stage) = 'ready_for_applicatio
   AND j.is_active = true AND v.status = 'approved'
   AND x.status = 'created' AND x.export_type = 'pdf'
   AND x.content_sha256 ~ '^[a-f0-9]{64}$'
+  AND (NOT EXISTS (
+    SELECT 1 FROM application_ai_workflows w WHERE w.id = a.ai_workflow_id
+      AND w.config_snapshot->>'pipelineVariant' = '${RESUME_EVIDENCE_VARIANT}'
+  ) OR (
+    v.workflow_id = a.ai_workflow_id AND a.tailored_resume_version_id = v.id
+    AND x.id::text = to_jsonb(v)->'release_receipt'->>'exportId'
+    AND x.content_sha256 = to_jsonb(v)->'release_receipt'->>'pdfHash'
+  ))
   AND x.file_size_bytes BETWEEN 5 AND ${MAX_PDF_BYTES}`;
 const LINKEDIN_ARCHIVE = `((x.storage_provider = 'sharepoint' AND NULLIF(x.storage_url, '') IS NOT NULL)
     OR (x.storage_provider = 'r2' AND NULLIF(x.file_path, '') IS NOT NULL))

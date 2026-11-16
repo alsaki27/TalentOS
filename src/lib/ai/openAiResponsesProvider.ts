@@ -11,6 +11,7 @@ import {
   AiTool,
   textOf,
   toolUsesOf,
+  requestSignal,
 } from "@/lib/ai/provider";
 
 type ResponsesInputItem = Record<string, unknown>;
@@ -93,10 +94,12 @@ function parseFunctionArguments(value: unknown): Record<string, unknown> {
 
 export function fromResponsesOutput(data: any): AiResponse {
   const content: AiContentBlock[] = [];
+  let refused = false;
 
   for (const item of data.output ?? []) {
     if (item.type === "message") {
       for (const block of item.content ?? []) {
+        if (block.type === "refusal") refused = true;
         if (block.type === "output_text" && block.text) {
           content.push({ type: "text", text: block.text });
         }
@@ -112,7 +115,7 @@ export function fromResponsesOutput(data: any): AiResponse {
   }
 
   const incompleteReason = data.incomplete_details?.reason;
-  const stopReason = incompleteReason === "max_output_tokens"
+  const stopReason = refused ? "refusal" : incompleteReason === "max_output_tokens"
     ? "max_tokens"
     : content.some((block) => block.type === "tool_use")
       ? "tool_use"
@@ -127,6 +130,12 @@ export function fromResponsesOutput(data: any): AiResponse {
       ? {
           input_tokens: data.usage.input_tokens ?? 0,
           output_tokens: data.usage.output_tokens ?? 0,
+          ...(data.usage.input_tokens_details?.cached_tokens === undefined ? {} : {
+            cached_input_tokens: data.usage.input_tokens_details.cached_tokens,
+          }),
+          ...(data.usage.output_tokens_details?.reasoning_tokens === undefined ? {} : {
+            reasoning_tokens: data.usage.output_tokens_details.reasoning_tokens,
+          }),
         }
       : undefined,
   };
@@ -139,11 +148,13 @@ export interface OpenAiResponsesConfig {
   maxOutputTokens?: number;
   extraHeaders?: Record<string, string>;
   errorLabel: string;
+  native?: boolean;
+  reasoningEffort?: string;
 }
 
 export function createOpenAiResponsesProvider(config: OpenAiResponsesConfig): AiProvider {
   return {
-    async send({ system, messages, tools, maxTokens, timeoutMs }) {
+    async send({ system, messages, tools, maxTokens, timeoutMs, signal, responseSchema }) {
       const controller = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
       if (timeoutMs && timeoutMs > 0) {
@@ -160,10 +171,17 @@ export function createOpenAiResponsesProvider(config: OpenAiResponsesConfig): Ai
           // produces a provider-side 400.
           stream: false,
         };
+        if (config.native) {
+          body.store = false;
+          if (config.reasoningEffort) body.reasoning = { effort: config.reasoningEffort };
+          if (responseSchema) {
+            body.text = { format: { type: "json_schema", name: "resume_stage_output", strict: true, schema: responseSchema } };
+          }
+        }
         if (tools.length > 0) body.tools = toResponsesTools(tools);
 
         const response = await fetch(config.apiUrl, {
-          signal: controller.signal,
+          signal: requestSignal(controller, signal),
           method: "POST",
           headers: {
             Authorization: `Bearer ${config.apiKey}`,
@@ -175,7 +193,7 @@ export function createOpenAiResponsesProvider(config: OpenAiResponsesConfig): Ai
         });
 
         if (!response.ok) {
-          const responseBody = await response.text();
+          const responseBody = config.native ? response.statusText : await response.text();
           throw new Error(`${config.errorLabel} error (${response.status}): ${responseBody}`);
         }
 

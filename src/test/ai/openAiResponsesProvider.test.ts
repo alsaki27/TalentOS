@@ -58,4 +58,24 @@ describe("OpenAI Responses provider", () => {
       { type: "tool_use", id: "call_1", name: "lookup", input: { id: "123" } },
     ]);
   });
+
+  it("uses a strict schema and the outer stage abort signal on native Luna", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      controller.abort(new Error("stage deadline"));
+      expect(init?.signal?.aborted).toBe(true);
+      throw init?.signal?.reason;
+    });
+    const provider = createOpenAiResponsesProvider({
+      apiUrl: "https://api.openai.com/v1/responses", apiKey: "test", model: "gpt-6-luna",
+      native: true, reasoningEffort: "none", errorLabel: "OpenAI",
+    });
+    const responseSchema = { type: "object", properties: {}, additionalProperties: false, required: [] };
+    await expect(provider.send({ system: "Test", messages: [], tools: [], maxTokens: 200, signal: controller.signal, responseSchema }))
+      .rejects.toThrow("stage deadline");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      store: false, reasoning: { effort: "none" }, max_output_tokens: 200,
+      text: { format: { type: "json_schema", strict: true, schema: responseSchema } },
+    });
+  });
 });

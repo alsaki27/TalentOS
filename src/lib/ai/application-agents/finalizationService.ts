@@ -29,6 +29,7 @@ import {
   resolveQualificationJobDescription,
   type QualificationFitResult,
 } from "./qualificationFit";
+import { RESUME_EVIDENCE_VARIANT } from "./workflowStages";
 import { sha256Hex } from "@/lib/sha256";
 
 export async function finalizeWorkflow(
@@ -75,7 +76,8 @@ export async function finalizeWorkflow(
   // application_resume_versions using a base_resumes id, finding nothing.
   const realBaseResumeId = wf.base_resume_id ?? null;
 
-  const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
+  const evidenceVersion = wf.config_snapshot?.pipelineVariant === RESUME_EVIDENCE_VARIANT;
+  const finalArtifact = artifacts.find(a => a.automation_id === (evidenceVersion ? "application_release_editor" : "application_final_polish"));
   const finalData = finalArtifact?.data;
 
   if (!finalData) {
@@ -136,7 +138,7 @@ export async function finalizeWorkflow(
   // the base resume content. Prefer the freshest base_resumes.content via
   // base_resume_id, falling back to the immutable workflow snapshot.
   let baseContent: any = null;
-  if (realBaseResumeId) {
+  if (realBaseResumeId && !evidenceVersion) {
     const baseRow = await queryOne<{ content: any }>(
       "SELECT content FROM base_resumes WHERE id = $1",
       [realBaseResumeId]
@@ -154,7 +156,7 @@ export async function finalizeWorkflow(
   const safeFinalData = { ...(finalData as FinalResumeV1) };
   const baseExperience = Array.isArray(baseContent?.experience) ? baseContent.experience : [];
   const baseEducation = Array.isArray(baseContent?.education) ? baseContent.education : [];
-  if (baseExperience.length > 0) {
+  if (!evidenceVersion && baseExperience.length > 0) {
     safeFinalData.experience = enforceExperienceIntegrity(
       Array.isArray(safeFinalData.experience) ? safeFinalData.experience : [],
       baseExperience,
@@ -184,7 +186,9 @@ export async function finalizeWorkflow(
   if (baseEducation.length > 0 && safeFinalData.education.length === 0) {
     throw new Error("Final resume safety check failed: education section is empty");
   }
-  const studioDocument = finalResumeToStudioDocument(safeFinalData, baseContent);
+  const studioDocument = evidenceVersion ? (finalData as { studioDocument: ReturnType<typeof finalResumeToStudioDocument> }).studioDocument
+    : finalResumeToStudioDocument(safeFinalData, baseContent);
+  if (!studioDocument) throw new Error("Verified release-stage document is missing");
 
   // ── FINAL SCORE PASS (after ALL agents + integrity guards) ───────────────
   // Scores persisted here describe the SHIPPED resume, not the mid-pipeline
@@ -193,16 +197,15 @@ export async function finalizeWorkflow(
   // them (see finalResumeScoring.ts). Falls back to the previous
   // reviewer-based ATS logic only when Job Lens produced no classified
   // requirements (older artifacts).
-  const jobLensArtifact = artifacts.find((a) => a.automation_id === "application_job_lens");
-  const jobLensData = jobLensArtifact?.data as JobAnalysisV1 | undefined;
   const qualificationJobAnalysisArtifact = artifacts
     .filter((a) => a.automation_id === "application_job_lens")
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
   const qualificationJobAnalysis = qualificationJobAnalysisArtifact?.data as JobAnalysisV1 | undefined;
+  const jobLensData = qualificationJobAnalysis;
   const resumeForgeInputArtifact = artifacts
     .filter((a) => a.automation_id === "application_resume_forge:input")
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-  const resumeForgeContext = (resumeForgeInputArtifact?.data as any)?.context ?? {};
+  const resumeForgeContext = evidenceVersion ? wf.config_snapshot : (resumeForgeInputArtifact?.data as any)?.context ?? {};
   const jobSnapshot = resumeForgeContext.job ?? {};
   const sourceOfTruthSnapshot = resumeForgeContext.sourceOfTruth ?? {};
   const qualificationJobDescription = resolveQualificationJobDescription(jobSnapshot);
@@ -282,81 +285,69 @@ export async function finalizeWorkflow(
     "SELECT title AS job_title FROM jobs WHERE id = $1",
     [wf.job_id]
   );
-  const jobTitle = jobInfo?.job_title?.trim();
+  const jobTitle = evidenceVersion ? wf.config_snapshot?.job?.title?.trim() : jobInfo?.job_title?.trim();
   const title = jobTitle ? `${jobTitle} — Tailored Resume` : "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(studioDocument);
   const dbSql = getSql();
   let versionId: string | null = null;
-  const workflowUpdate = expectedLockVersion === undefined
-    ? dbSql`UPDATE application_ai_workflows
-        SET status = 'completed', completed_at = NOW(), last_error = NULL
-        WHERE id = ${workflowId}`
-    : dbSql`UPDATE application_ai_workflows
-        SET status = 'completed', completed_at = NOW(), last_error = NULL
-        WHERE id = ${workflowId}
-          AND status = 'running'
-          AND lock_version = ${expectedLockVersion}
-          AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
-        RETURNING id`;
   try {
-    const [, versionRows, workflowRows] = await dbSql.transaction([
-      dbSql`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
-        SELECT id, ae_stage, 'ready_for_review', 'AI Pipeline (auto)', 'AI resume finalization completed', 'ai_pipeline'
-        FROM applications
-        WHERE id = ${wf.application_id} AND ae_stage = 'in_ai_pipeline'`,
-      dbSql`WITH inserted AS (
-         INSERT INTO application_resume_versions
+    const rows = await dbSql<{ id: string }[]>`
+      WITH claim AS MATERIALIZED (
+        SELECT w.id, w.application_id, a.ae_stage FROM application_ai_workflows w
+        JOIN applications a ON a.id = w.application_id
+        WHERE w.id = ${workflowId}::uuid AND w.status = 'running'
+          AND (${expectedLockVersion ?? null}::integer IS NULL OR w.lock_version = ${expectedLockVersion ?? null}::integer)
+          AND w.claim_expires_at >= NOW()
+          AND a.applied_at IS NULL
+          AND (a.ai_workflow_id IS NULL OR a.ai_workflow_id = w.id)
+        FOR UPDATE OF w, a
+      ), inserted AS (
+        INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
             title, content, source_type, status, ats_score, truth_score, recruiter_score, role_fit_score,
             one_page_fit_score, page_fit_metrics, updated_by_user_id, updated_source, created_at)
-         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}::uuid, ${realBaseResumeId},
-                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${finalAtsScore}, ${finalTruthScore},
-                 ${finalScores.recruiterScore}, ${finalScores.roleFitScore}, ${onePageFitScore}, ${pageFitMetricsJson},
-                 NULL, 'ai_pipeline_finalization', NOW())
-         ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
-         DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score,
-                       truth_score = EXCLUDED.truth_score, recruiter_score = EXCLUDED.recruiter_score,
-                       role_fit_score = EXCLUDED.role_fit_score, one_page_fit_score = EXCLUDED.one_page_fit_score,
-                       page_fit_metrics = EXCLUDED.page_fit_metrics,
-                       updated_by_user_id = NULL, updated_source = 'ai_pipeline_finalization', updated_at = NOW()
-         RETURNING id
-       )
-       UPDATE applications SET
-         tailored_resume_version_id = inserted.id,
-         ai_workflow_id = ${workflowId}::uuid,
-         resume_generation_status = 'ready',
-         resume_generation_completed_at = NOW(),
-         ae_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE applications.ae_stage END,
-         application_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE COALESCE(applications.application_stage, applications.ae_stage) END,
-         ae_stage_updated_at = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE applications.ae_stage_updated_at END,
-         ae_stage_updated_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.ae_stage_updated_by_name END,
-         application_stage_changed_at = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE applications.application_stage_changed_at END,
-         application_stage_changed_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.application_stage_changed_by_name END
-       FROM inserted
-       WHERE applications.id = ${wf.application_id}
-       RETURNING inserted.id`,
-
-      workflowUpdate,
-
-      dbSql`INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
-        VALUES (
-          ${wf.application_id},
-          ${realBaseResumeId},
-          ${tj.id},
-          (SELECT id FROM application_resume_versions WHERE workflow_id = ${workflowId}::uuid ORDER BY created_at DESC LIMIT 1),
-          NULL
-        )
-        ON CONFLICT (application_id) DO UPDATE SET
-          final_resume_version_id = EXCLUDED.final_resume_version_id,
+        SELECT ${wf.candidate_id}::uuid, ${tj.id}::uuid, claim.application_id, ${wf.job_id ?? null}::uuid, claim.id, ${realBaseResumeId}::uuid,
+               ${title}::text, ${contentJson}::jsonb, 'ai_agent', 'draft', ${finalAtsScore}::double precision, ${finalTruthScore}::double precision,
+               ${finalScores.recruiterScore}::double precision, ${finalScores.roleFitScore}::double precision, ${onePageFitScore}::numeric, ${pageFitMetricsJson}::jsonb,
+               NULL, 'ai_pipeline_finalization', NOW()
+        FROM claim
+        ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
+        DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score, truth_score = EXCLUDED.truth_score,
+          recruiter_score = EXCLUDED.recruiter_score, role_fit_score = EXCLUDED.role_fit_score,
+          one_page_fit_score = EXCLUDED.one_page_fit_score, page_fit_metrics = EXCLUDED.page_fit_metrics, updated_at = NOW()
+        WHERE application_resume_versions.status = 'draft'
+          AND application_resume_versions.updated_by_user_id IS NULL
+        RETURNING id, application_id, workflow_id
+      ), version_attached AS (
+        UPDATE applications a SET tailored_resume_version_id = inserted.id,
+          ai_workflow_id = inserted.workflow_id,
+          resume_generation_status = 'ready', resume_generation_completed_at = NOW(), resume_generation_error = NULL,
+          ae_stage = CASE WHEN a.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE a.ae_stage END,
+          application_stage = CASE WHEN COALESCE(a.application_stage,a.ae_stage) = 'in_ai_pipeline' THEN 'ready_for_review' ELSE a.application_stage END,
+          ae_stage_updated_at = CASE WHEN a.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE a.ae_stage_updated_at END,
+          ae_stage_updated_by_name = CASE WHEN a.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE a.ae_stage_updated_by_name END,
+          application_stage_changed_at = CASE WHEN COALESCE(a.application_stage,a.ae_stage) = 'in_ai_pipeline' THEN NOW() ELSE a.application_stage_changed_at END,
+          application_stage_changed_by_name = CASE WHEN COALESCE(a.application_stage,a.ae_stage) = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE a.application_stage_changed_by_name END
+        FROM inserted WHERE a.id = inserted.application_id
+        RETURNING a.id AS application_id, inserted.id, inserted.workflow_id
+      ), completed AS (
+        UPDATE application_ai_workflows w SET status = 'completed', completed_at = NOW(), last_error = NULL,
+          claim_expires_at = NULL, claimed_at = NULL, claimed_by = NULL, heartbeat_at = NULL
+        FROM version_attached WHERE w.id = version_attached.workflow_id
+        RETURNING version_attached.id
+      ), history AS (
+        INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
+        SELECT claim.application_id, claim.ae_stage, 'ready_for_review', 'AI Pipeline (auto)', 'AI resume finalization completed', 'ai_pipeline'
+        FROM claim JOIN version_attached v ON v.workflow_id = claim.id WHERE claim.ae_stage = 'in_ai_pipeline'
+      ), packet AS (
+        INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
+        SELECT v.application_id, ${realBaseResumeId}::uuid, ${tj.id}::uuid, v.id, NULL FROM version_attached v
+        ON CONFLICT (application_id) DO UPDATE SET final_resume_version_id = EXCLUDED.final_resume_version_id,
           base_resume_id = COALESCE(application_packets.base_resume_id, EXCLUDED.base_resume_id),
-          target_job_id = COALESCE(application_packets.target_job_id, EXCLUDED.target_job_id)`,
-    ]);
-    if (expectedLockVersion !== undefined && !workflowRows?.[0]?.id) {
-      throw new Error("Workflow claim was superseded before finalization");
-    }
-    const versionRow = versionRows[0];
-    if (!versionRow?.id) throw new Error("Failed to insert resume version — no ID returned");
-    versionId = versionRow.id;
+          target_job_id = COALESCE(application_packets.target_job_id, EXCLUDED.target_job_id)
+      ) SELECT id FROM completed`;
+    versionId = rows[0]?.id ?? null;
+    if (!versionId) throw new Error("Workflow claim or selected application changed before finalization");
   } catch (err: any) {
     throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);
   }
@@ -392,7 +383,7 @@ export async function finalizeWorkflow(
   // which also records the failure on application_resume_exports so the
   // candidate profile's "Sharepoint" button can report "not archived" instead
   // of silently claiming success.
-  try {
+  if (!evidenceVersion) try {
     const info = await queryOne<{ candidate_name: string; company_name: string | null; job_title: string | null }>(
       `SELECT c.name AS candidate_name, j.company AS company_name, j.title AS job_title
        FROM candidates c
@@ -464,13 +455,13 @@ export async function finalizeWorkflow(
   // postFinalizeIdentityAudit.ts. Must never block/fail finalization: the
   // version row above is already committed regardless of what happens here.
   try {
-    const auditResult = await auditAndRepairResumeVersionIdentity(versionId!);
-    if (auditResult.changed) {
+    const auditResult = evidenceVersion ? null : await auditAndRepairResumeVersionIdentity(versionId!);
+    if (auditResult?.changed) {
       console.warn(
         `[finalizeWorkflow] POST-FINALIZE IDENTITY AUDIT repaired ${auditResult.mismatches.length} mismatch(es) on resume version ${versionId}:`,
         auditResult.mismatches
       );
-    } else if (auditResult.mismatches.length > 0) {
+    } else if (auditResult && auditResult.mismatches.length > 0) {
       console.warn(
         `[finalizeWorkflow] POST-FINALIZE IDENTITY AUDIT found unrepairable issue(s) on resume version ${versionId} (needs human review):`,
         auditResult.mismatches

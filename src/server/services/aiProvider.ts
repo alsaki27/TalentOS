@@ -3,7 +3,7 @@
 // Neon is the canonical provider-credential store; deployment configuration only
 // supplies the independent encryption bootstrap.
 
-import { AiProvider } from "@/lib/ai/provider";
+import { AiProvider, requestSignal, textOf } from "@/lib/ai/provider";
 import { callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
 import { createOpenAiResponsesProvider } from "@/lib/ai/openAiResponsesProvider";
@@ -25,6 +25,8 @@ interface ActiveProvider {
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
+const isOpenAiLuna = (model: string | null | undefined): model is string =>
+  !!model && /^gpt-(?:6|5\.6)-luna(?:-|$)/.test(model);
 
 // Single source of truth for the fallback maxTokens ceiling used by every
 // DB-managed-key provider builder below. Matches the native Google env-key
@@ -78,7 +80,7 @@ function createOpenCodeMessagesProvider(
   providerConfig?: Record<string, unknown> | null,
 ): AiProvider {
   return {
-    async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal }) {
       const controller = new AbortController();
       const timer = timeoutMs && timeoutMs > 0
         ? setTimeout(() => controller.abort(), timeoutMs)
@@ -87,7 +89,7 @@ function createOpenCodeMessagesProvider(
       try {
         const response = await fetch(apiUrl, {
           method: "POST",
-          signal: controller.signal,
+          signal: requestSignal(controller, signal),
           headers: {
             ...buildOpenCodeHeaders(customHeaders, providerConfig),
             "x-api-key": apiKey,
@@ -196,6 +198,7 @@ export function buildProviderFromDbKey(
   customHeaders?: Record<string, string> | null,
   providerConfig?: Record<string, unknown> | null,
   reasoningEffort?: string | null,
+  routeTransport?: "opencode_go",
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -215,7 +218,7 @@ export function buildProviderFromDbKey(
         return null;
       }
       return {
-        send({ system, messages, tools, temperature, maxTokens, responseSchema, responseMimeType }) {
+        send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema, responseMimeType }) {
           return callVertexProxy({
             proxyUrl,
             proxySecret,
@@ -227,6 +230,8 @@ export function buildProviderFromDbKey(
             tools,
             temperature,
             maxTokens,
+            timeoutMs,
+            signal,
             responseSchema,
             responseMimeType,
           });
@@ -240,6 +245,7 @@ export function buildProviderFromDbKey(
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
+      const nativeStructuredOutput = /^claude-haiku-5-5(?:-|$)/.test(model ?? "");
       // Claude has no "return only JSON" text mode the way OpenAI-compatible
       // APIs do. Forcing a single synthetic tool call is Anthropic's own
       // documented pattern for guaranteed-schema-valid structured output -
@@ -252,7 +258,7 @@ export function buildProviderFromDbKey(
       // one is added.
       const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
       return {
-        async send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
+        async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema }) {
           const controller = new AbortController();
           let timer: ReturnType<typeof setTimeout> | undefined;
           if (timeoutMs && timeoutMs > 0) {
@@ -265,7 +271,7 @@ export function buildProviderFromDbKey(
               description: tool.description,
               input_schema: tool.inputSchema,
             })),
-            ...(responseSchema
+            ...(responseSchema && !nativeStructuredOutput
               ? [{
                   name: STRUCTURED_OUTPUT_TOOL_NAME,
                   description: "Return the result. Always call this tool with the complete result - never respond with plain text.",
@@ -276,7 +282,7 @@ export function buildProviderFromDbKey(
 
           try {
             const res = await fetch(apiUrl, {
-              signal: controller.signal,
+              signal: requestSignal(controller, signal),
               method: "POST",
               headers: {
                 "x-api-key": apiKey,
@@ -286,7 +292,7 @@ export function buildProviderFromDbKey(
               body: JSON.stringify({
                 model: model || DEFAULT_MODEL,
                 max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-                temperature,
+                ...(!nativeStructuredOutput ? { temperature } : {}),
                 system,
                 messages: messages.map((m) => ({
                   role: m.role,
@@ -304,11 +310,16 @@ export function buildProviderFromDbKey(
                   }),
                 })),
                 tools: requestTools,
-                ...(responseSchema ? { tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL_NAME } } : {}),
+                ...(nativeStructuredOutput ? {
+                  output_config: {
+                    effort: reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : "low",
+                    ...(responseSchema ? { format: { type: "json_schema", schema: responseSchema } } : {}),
+                  },
+                } : responseSchema ? { tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL_NAME } } : {}),
               }),
             });
             if (!res.ok) {
-              const body = await res.text();
+              const body = nativeStructuredOutput ? res.statusText : await res.text();
               throw new Error(`Anthropic API error (${res.status}): ${body}`);
             }
             const data = await res.json();
@@ -348,9 +359,10 @@ export function buildProviderFromDbKey(
       const apiUrl = baseUrl || (preset ? preset.baseUrl + preset.chatEndpoint : "https://integrate.api.nvidia.com/v1/chat/completions");
       const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
       return {
-        async send({ system, messages, temperature, maxTokens }) {
+        async send({ system, messages, temperature, maxTokens, signal }) {
           const res = await fetch(apiUrl, {
             method: "POST",
+            signal,
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
@@ -382,7 +394,7 @@ export function buildProviderFromDbKey(
       const apiBase = baseUrl || (preset ? `${preset.baseUrl}/v1beta/models` : "https://generativelanguage.googleapis.com/v1beta/models");
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
-        async send({ system, messages, temperature, maxTokens }) {
+        async send({ system, messages, temperature, maxTokens, signal }) {
           const resolvedModel = model || DEFAULT_MODEL;
           const url = `${apiBase}/${resolvedModel}:generateContent`;
 
@@ -411,6 +423,7 @@ export function buildProviderFromDbKey(
 
           const res = await fetch(url, {
             method: "POST",
+            signal,
             headers: {
               "Content-Type": "application/json",
               "x-goog-api-key": apiKey,
@@ -433,6 +446,13 @@ export function buildProviderFromDbKey(
     }
     case "openai": {
       const preset = PROVIDER_NATIVE_DEFAULTS["openai"];
+      if (isOpenAiLuna(model)) {
+        return createOpenAiResponsesProvider({
+          apiUrl: resolveApiUrl(baseUrl, "/responses", "https://api.openai.com/v1/responses"),
+          apiKey, model, native: true, errorLabel: "OpenAI API",
+          reasoningEffort: !reasoningEffort || reasoningEffort === "off" ? "none" : reasoningEffort,
+        });
+      }
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.openai.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
         apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
@@ -539,7 +559,9 @@ export function buildProviderFromDbKey(
         ? { temperature: 1 }
         : undefined;
       return createOpenAiCompatibleProvider({
-        apiUrl: configuredApiUrl
+        apiUrl: routeTransport === "opencode_go" && (!configuredHost || configuredHost === "api.opencode.ai")
+          ? "https://opencode.ai/inference/go/openai/v1/chat/completions"
+          : configuredApiUrl
           ? useOpenCodeGoEndpoint
             ? OPENCODE_GO_CHAT_COMPLETIONS_URL
             : configuredApiUrl
@@ -609,11 +631,16 @@ export async function testAiKey(id: string): Promise<{
   }
 
   try {
-    await provider.send({
-      system: "You are a test assistant.",
-      messages: [{ role: "user", content: [{ type: "text", text: TEST_PROMPT }] }],
+    const luna = keyRow.provider === "openai" && isOpenAiLuna(keyRow.model);
+    const response = await provider.send({
+      system: luna ? "" : "You are a test assistant.",
+      messages: [{ role: "user", content: [{ type: "text", text: luna ? "Reply OK" : TEST_PROMPT }] }],
       tools: [],
+      ...(luna ? { maxTokens: 16, timeoutMs: 20_000 } : {}),
     });
+    if (luna && (response.stopReason !== "end_turn" || textOf(response.content).trim() !== "OK")) {
+      throw new Error("OpenAI Luna test did not return the expected response");
+    }
     await recordAiKeySuccess(id);
     return { success: true, latencyMs: Date.now() - start };
   } catch (err: any) {

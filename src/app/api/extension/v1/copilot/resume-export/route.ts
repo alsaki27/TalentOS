@@ -13,6 +13,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
+import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
+import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 
 const EXPORT_TYPES = new Set(["pdf", "docx"]);
 
@@ -38,19 +40,30 @@ export async function GET(request: NextRequest) {
       // getPublicUrl() previously produced a URL pointing at a bucket that
       // never had the file - a broken link the extension had no way to detect.
       const row = await queryOne<{ file_name: string; storage_url: string | null; export_type: string; created_at: string }>(
-        `SELECT file_name, storage_url, export_type, created_at
-         FROM application_resume_exports
-         WHERE application_id = $1 AND status = 'created' AND export_type = 'pdf' AND storage_url IS NOT NULL
-         ORDER BY created_at DESC
+        `SELECT x.file_name, x.storage_url, x.export_type, x.created_at
+         FROM application_resume_exports x
+         JOIN applications a ON a.id = x.application_id
+         LEFT JOIN application_ai_workflows w ON w.id = a.ai_workflow_id
+         LEFT JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
+         WHERE x.application_id = $1 AND x.status = 'created' AND x.export_type = 'pdf' AND x.storage_url IS NOT NULL
+           AND (w.config_snapshot->>'pipelineVariant' IS DISTINCT FROM $2 OR (
+             v.id = x.resume_version_id AND v.workflow_id = w.id AND v.status = 'approved'
+             AND x.id::text = to_jsonb(v)->'release_receipt'->>'exportId'
+             AND x.content_sha256 = to_jsonb(v)->'release_receipt'->>'pdfHash'
+           ))
+         ORDER BY x.created_at DESC
          LIMIT 1`,
-        [applicationId]
+        [applicationId, RESUME_EVIDENCE_VARIANT]
       );
 
       if (!row) {
         const version = await queryOne<{ generated_text: string | null; content: unknown }>(
-          `SELECT generated_text, content FROM application_resume_versions
-           WHERE application_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
-          [applicationId]
+          `SELECT v.generated_text, v.content FROM application_resume_versions v
+           JOIN applications a ON a.id = v.application_id
+           LEFT JOIN application_ai_workflows w ON w.id = a.ai_workflow_id
+           WHERE v.application_id = $1 AND w.config_snapshot->>'pipelineVariant' IS DISTINCT FROM $2
+           ORDER BY v.updated_at DESC, v.created_at DESC LIMIT 1`,
+          [applicationId, RESUME_EVIDENCE_VARIANT]
         );
         const resumeText = version?.generated_text || (version?.content
           ? typeof version.content === "string" ? version.content : JSON.stringify(version.content)
@@ -114,6 +127,9 @@ export async function POST(request: NextRequest) {
         [applicationId, resumeVersionId]
       );
       if (!linked) return extensionError("not_found", "Application and resume version do not match.", 404);
+      if (!await evidenceResumeExportIsAllowed(applicationId, resumeVersionId)) {
+        return extensionError("validation_error", "Use the PDF saved when the reviewer approves this resume.", 409);
+      }
 
       const buffer = new Uint8Array(await file.arrayBuffer());
       const result = await archiveResumeToSharePoint({

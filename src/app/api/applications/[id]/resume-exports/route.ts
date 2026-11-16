@@ -7,6 +7,7 @@ import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import { listExportsByApplication } from "@/server/repositories/applicationResumeExportsRepository";
+import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
 import {
   exportResumeAsDocx,
   exportResumeAsPdf,
@@ -47,6 +48,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (!resumeVersionId || !exportType) {
     return NextResponse.json({ error: "resume_version_id and export_type are required" }, { status: 400 });
+  }
+  if (!await evidenceResumeExportIsAllowed(applicationId, resumeVersionId)) {
+    return NextResponse.json({ error: "Use the PDF saved when the reviewer approves this resume" }, { status: 409 });
   }
 
   const safety = await runExportSafetyChecks(resumeVersionId, applicationId);

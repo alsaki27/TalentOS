@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { query, queryOne } from "@/server/db/neon";
+import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 
 export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -20,11 +21,22 @@ export async function GET(req: NextRequest) {
   const rows = await query(
     `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.application_stage, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at,
             e.storage_url as pdf_storage_url, e.storage_item_id as pdf_storage_item_id,
-            EXISTS(SELECT 1 FROM application_resume_exports e2 WHERE e2.application_id = arv.application_id AND e2.resume_version_id = arv.id AND e2.export_type = 'pdf' AND e2.status = 'created') AS pdf_available
+            e.id IS NOT NULL AS pdf_available
      FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id
-     LEFT JOIN LATERAL (SELECT storage_url, storage_item_id FROM application_resume_exports WHERE application_id = arv.application_id AND resume_version_id = arv.id AND export_type = 'pdf' AND status = 'created' ORDER BY created_at DESC LIMIT 1) e ON true
+     LEFT JOIN application_ai_workflows w ON w.id = arv.workflow_id
+     LEFT JOIN LATERAL (
+       SELECT x.id, x.storage_url, x.storage_item_id FROM application_resume_exports x
+       WHERE x.application_id = arv.application_id AND x.resume_version_id = arv.id
+         AND x.export_type = 'pdf' AND x.status = 'created'
+         AND (w.config_snapshot->>'pipelineVariant' IS DISTINCT FROM $2 OR (
+           arv.id = a.tailored_resume_version_id AND arv.status = 'approved'
+           AND x.id::text = to_jsonb(arv)->'release_receipt'->>'exportId'
+           AND x.content_sha256 = to_jsonb(arv)->'release_receipt'->>'pdfHash'
+         ))
+       ORDER BY x.created_at DESC LIMIT 1
+     ) e ON true
      WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
-    [candidateId]
+    [candidateId, RESUME_EVIDENCE_VARIANT]
   );
   data = (rows ?? []).map((row: any) => {
     const { target_job_job_id, job_title, job_company, application_status, application_stage, application_proof_url, application_proof_filename, application_applied_at, pdf_storage_url, pdf_storage_item_id, pdf_available, ...rest } = row;

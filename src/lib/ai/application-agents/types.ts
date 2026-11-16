@@ -10,6 +10,8 @@ export type ApplicationAgentId =
   | "application_resume_forge"
   | "application_hiring_panel"
   | "application_final_polish"
+  | "application_opportunity_reviewer"
+  | "application_release_editor"
   | "copilot_fill_planner"
   | "copilot_question_answerer"
   | "copilot_ceo"
@@ -67,6 +69,14 @@ export const APPLICATION_AGENT_METAS: Record<ApplicationAgentId, ApplicationAgen
     displayName: "Final Polish",
     sequenceNumber: 3,
     description: "Apply approved feedback and run final QA",
+  },
+  application_opportunity_reviewer: {
+    id: "application_opportunity_reviewer", displayName: "Opportunity Reviewer",
+    sequenceNumber: 4, description: "Identify material gaps with supporting evidence",
+  },
+  application_release_editor: {
+    id: "application_release_editor", displayName: "Release Editor",
+    sequenceNumber: 5, description: "Resolve remaining evidence placement and validate the document",
   },
   copilot_fill_planner: {
     id: "copilot_fill_planner",

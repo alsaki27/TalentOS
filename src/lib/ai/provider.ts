@@ -24,11 +24,15 @@ export interface AiMessage {
 export interface AiResponse {
   content: AiContentBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | string;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; cached_input_tokens?: number; reasoning_tokens?: number };
 }
 
 export interface AiProvider {
-  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[]; temperature?: number; maxTokens?: number; timeoutMs?: number; responseSchema?: Record<string, unknown>; responseMimeType?: string | null }): Promise<AiResponse>;
+  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[]; temperature?: number; maxTokens?: number; timeoutMs?: number; signal?: AbortSignal; responseSchema?: Record<string, unknown>; responseMimeType?: string | null }): Promise<AiResponse>;
+}
+
+export function requestSignal(controller: AbortController, external?: AbortSignal): AbortSignal {
+  return external ? AbortSignal.any([controller.signal, external]) : controller.signal;
 }
 
 export function textOf(content: AiContentBlock[]): string {

@@ -19,19 +19,20 @@ vi.mock("@/server/db/neon", () => ({
 
 vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   findWorkflowById: vi.fn(),
-  updateWorkflowStatus: vi.fn().mockResolvedValue(undefined),
+  updateWorkflowStatus: vi.fn().mockResolvedValue(true),
   createStageRun: vi.fn().mockResolvedValue({ id: "stage-run-1" }),
   updateStageRun: vi.fn().mockResolvedValue(true),
-  createArtifact: vi.fn().mockImplementation(async (input: any) => ({
+  createArtifact: vi.fn().mockResolvedValue({ id: "stage-input-1" }),
+  commitStageResult: vi.fn().mockImplementation(async (input: any) => [{
     id: "artifact-1",
     workflow_id: input.workflowId,
-    automation_id: input.automationId,
-    sequence_number: input.sequenceNumber,
-    schema_version: input.schemaVersion,
-    content_hash: input.contentHash,
-    data: input.data,
+    automation_id: input.output.automationId,
+    sequence_number: input.sequence,
+    schema_version: input.output.schemaVersion,
+    content_hash: input.output.digest,
+    data: input.output.data,
     created_at: new Date().toISOString(),
-  })),
+  }]),
   listStageRuns: vi.fn().mockResolvedValue([]),
   listArtifacts: vi.fn().mockResolvedValue([]),
   claimWorkflowById: vi.fn().mockResolvedValue({
@@ -78,6 +79,7 @@ vi.mock("@/lib/ai/routing", async () => {
 import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
 import {
   findWorkflowById,
+  commitStageResult,
   createStageRun,
   listStageRuns,
   listArtifacts,
@@ -107,11 +109,26 @@ function mockCallResult(reviewOutput: Record<string, unknown>) {
   };
 }
 
+const forgeArtifact = { id: "forge-draft", automation_id: "application_resume_forge" };
+const forgeRun = {
+  automation_id: "application_resume_forge",
+  sequence_number: 1,
+  attempt_number: 1,
+  status: "success",
+  output_artifact_id: forgeArtifact.id,
+};
+
+function mockCompletedForge() {
+  vi.mocked(listStageRuns).mockResolvedValue([forgeRun] as any);
+  vi.mocked(listArtifacts).mockResolvedValue([forgeArtifact] as any);
+}
+
 describe("processWorkflowStage — Hiring Panel gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (findWorkflowById as any).mockResolvedValue(hiringPanelWorkflow());
-    (listStageRuns as any).mockResolvedValue([]);
+    mockCompletedForge();
+    vi.mocked(updateStageRun).mockResolvedValue(true);
     (callWithUsageTracking as any).mockResolvedValue(mockCallResult({
       atsScore: 9,
       recruiterScore: 9,
@@ -143,9 +160,9 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     );
     expect(failedCall).toBeFalsy();
 
-    // Must have advanced past Hiring Panel (queued for next stage).
+    // Must have advanced past Hiring Panel (queued for Final Polish).
     const queuedCall = (updateWorkflowStatus as any).mock.calls.find(
-      (c: any[]) => c[1] === "queued"
+      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2
     );
     expect(queuedCall).toBeTruthy();
   });
@@ -172,7 +189,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 
     // Must have advanced past Hiring Panel (queued for next stage).
     const queuedCall = (updateWorkflowStatus as any).mock.calls.find(
-      (c: any[]) => c[1] === "queued"
+      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2
     );
     expect(queuedCall).toBeTruthy();
   });
@@ -195,6 +212,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       (c: any[]) => c[1] === "failed"
     );
     expect(failedCall).toBeFalsy();
+    expect(updateWorkflowStatus).toHaveBeenCalledWith("wf-1", "queued", expect.objectContaining({ current_stage: 2 }), 1);
   });
 
   it("persists Hiring Panel's attached .qa onto the stage run as qa_facts, in a SEPARATE update from the success write (Phase 2 consumption point c)", async () => {
@@ -209,9 +227,10 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 
     await processWorkflowStage("wf-1");
 
-    const successCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.status === "success");
-    expect(successCall).toBeTruthy();
-    expect(successCall[1].qa_facts).toBeUndefined();
+    expect(commitStageResult).toHaveBeenCalledWith(expect.objectContaining({
+      sequence: 2,
+      output: expect.objectContaining({ automationId: "application_hiring_panel" }),
+    }));
 
     const qaFactsCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.qa_facts !== undefined);
     expect(qaFactsCall).toBeTruthy();
@@ -243,18 +262,15 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 
     await processWorkflowStage("wf-1");
 
-    // The stage must still be marked failed here (updateStageRun's mock
-    // always resolves true for the success write in this test), and the
-    // workflow must still advance - the missing column must not surface as a
-    // stage failure at all.
+    // The workflow still advances when the optional QA write fails.
     const failedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "failed");
     expect(failedCall).toBeFalsy();
-    const queuedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "queued");
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2);
     expect(queuedCall).toBeTruthy();
   });
 
   it("allocates a new stage-run identity after a stale attempt already exists", async () => {
-    (listStageRuns as any).mockResolvedValue([{
+    (listStageRuns as any).mockResolvedValue([forgeRun, {
       automation_id: "application_hiring_panel",
       sequence_number: 2,
       attempt_number: 1,
@@ -309,7 +325,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     const completedStageWorkflow = {
       ...hiringPanelWorkflow(),
       status: "running",
-      current_stage: 11,
+      current_stage: 3,
       lock_version: 7,
     };
     (findWorkflowById as any).mockResolvedValue(completedStageWorkflow);
@@ -322,13 +338,19 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       id: `artifact-${index + 1}`,
       workflow_id: "wf-1",
       automation_id,
-      sequence_number: index + 1,
+      sequence_number: Math.max(1, index),
       schema_version: "v1",
       content_hash: `hash-${index + 1}`,
       data: { exportReady: true },
       created_at: new Date().toISOString(),
     }));
     (listArtifacts as any).mockResolvedValue(artifacts);
+    (listStageRuns as any).mockResolvedValue(artifacts.slice(1).map(artifact => ({
+      sequence_number: artifact.sequence_number,
+      attempt_number: 1,
+      status: "success",
+      output_artifact_id: artifact.id,
+    })));
 
     await processWorkflowStage("wf-1", 7);
 
@@ -353,7 +375,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     (findWorkflowById as any).mockResolvedValue(finalPolishWorkflow);
     (listArtifacts as any).mockResolvedValue([
       { automation_id: "application_job_lens" },
-      { automation_id: "application_resume_forge" },
+      forgeArtifact,
     ]);
 
     await processWorkflowStage("wf-1", 9);
@@ -375,14 +397,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 describe("processWorkflowStage — provider-capacity cooldown bound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (listStageRuns as any).mockResolvedValue([]);
-    // These tests pass an explicit expectedLockVersion (to bypass the
-    // claimWorkflowById re-fetch that would overwrite the cooldown_retry_count
-    // set on findWorkflowById's mock below), which makes processWorkflowStage
-    // check `if (expectedLockVersion !== undefined && !updated) return;` after
-    // its own "running" transition - the default mock resolves to undefined
-    // (falsy), which would return before ever reaching the agent call.
-    (updateWorkflowStatus as any).mockResolvedValue(true);
+    mockCompletedForge();
   });
 
   function rateLimitError() {
@@ -401,7 +416,7 @@ describe("processWorkflowStage — provider-capacity cooldown bound", () => {
     // pass one here so findWorkflowById's mock shape (with cooldown_retry_count
     // set) is what the function actually uses, matching the pattern the other
     // stage-boundary tests in this file already use (processWorkflowStage("wf-1", 7)).
-    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 3 });
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), status: "running", lock_version: 1, cooldown_retry_count: 3 });
     (callWithUsageTracking as any).mockRejectedValue(rateLimitError());
 
     await processWorkflowStage("wf-1", 1);
@@ -415,7 +430,7 @@ describe("processWorkflowStage — provider-capacity cooldown bound", () => {
   });
 
   it("converts to a real failure once the cooldown budget (8 cycles) is exhausted", async () => {
-    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 8 });
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), status: "running", lock_version: 1, cooldown_retry_count: 8 });
     (callWithUsageTracking as any).mockRejectedValue(rateLimitError());
 
     await processWorkflowStage("wf-1", 1);
@@ -428,7 +443,7 @@ describe("processWorkflowStage — provider-capacity cooldown bound", () => {
   });
 
   it("resets cooldown_retry_count to 0 once a stage succeeds", async () => {
-    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 5 });
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), status: "running", lock_version: 1, cooldown_retry_count: 5 });
     (callWithUsageTracking as any).mockResolvedValue(
       mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass" }),
     );

@@ -36,7 +36,7 @@ describe("application AI workflow stale-claim recovery", () => {
 
     const [lockQuery, claimQuery] = transactionMock.mock.calls[0]?.[0]({ query: (text: string, params: unknown[]) => ({ text, params }) });
     expect(claimQuery.text).toMatch(
-      /WHERE \(status = 'running'\s+AND \(claim_expires_at IS NULL OR claim_expires_at < NOW\(\)\)\s+AND \(heartbeat_at IS NULL OR heartbeat_at < NOW\(\)/,
+      /WHERE \(NOT \$1::boolean AND status = 'running'\s+AND \(claim_expires_at IS NULL OR claim_expires_at < NOW\(\)\)\s+AND \(heartbeat_at IS NULL OR heartbeat_at < NOW\(\)/,
     );
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(lockQuery.text).toContain("pg_advisory_xact_lock");

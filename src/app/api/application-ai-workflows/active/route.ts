@@ -8,6 +8,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query as neonQuery } from "@/server/db/neon";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { APPLICATION_AGENT_METAS } from "@/lib/ai/application-agents/types";
+import { resumeStages } from "@/lib/ai/application-agents/workflowStages";
+import { getAiRuntimeConfig, resumePipelineSettings } from "@/server/repositories/aiRuntimeConfigRepository";
 
 // Every other route in this family (dispatch, [id], overview, review) sets
 // this explicitly - this was the one exception. Without it, Next.js/OpenNext
@@ -27,18 +30,44 @@ export async function GET(request: NextRequest) {
     const requestedDays = Number.parseInt(params.get("days") ?? "3", 10);
     const days = Number.isFinite(requestedDays) ? Math.min(7, Math.max(1, requestedDays)) : 3;
     const queueView = params.get("view") === "application-queue";
+    const settings = resumePipelineSettings(await getAiRuntimeConfig());
 
     const rows = await neonQuery<any>(
       `SELECT w.id, w.status, w.current_stage, w.last_error, w.updated_at, w.match_score, w.match_reason,
-              w.application_id, w.base_resume_id, w.claim_expires_at,
+              w.application_id, w.base_resume_id, w.claim_expires_at, w.heartbeat_at, w.next_retry_at,
+              w.config_snapshot->>'pipelineVariant' AS pipeline_variant,
+              to_jsonb(w)->>'recovery_reason' AS recovery_reason,
+              w.cooldown_retry_count, COALESCE(history.attempt_count,0) AS attempt_count,
+              (w.status = 'running' AND (
+                 (w.claim_expires_at < NOW() AND COALESCE(w.heartbeat_at,w.claimed_at,w.created_at)
+                   < NOW() - make_interval(secs => $2))
+                 OR (NULLIF(to_jsonb(w)->>'stage_deadline_at','')::timestamptz >= w.claimed_at
+                   AND NULLIF(to_jsonb(w)->>'stage_deadline_at','')::timestamptz < NOW())
+              )) AS recovery_needed,
+              (w.status = 'waiting' AND w.current_stage = 1
+                AND w.config_snapshot->>'waitForHiringPanelApproval' = 'true'
+                AND EXISTS (
+                  SELECT 1 FROM application_ai_stage_runs sr
+                  JOIN application_ai_artifacts artifact ON artifact.id = sr.output_artifact_id
+                  WHERE sr.workflow_id = w.id AND sr.automation_id = 'application_hiring_panel'
+                    AND sr.status = 'success' AND artifact.workflow_id = w.id
+                    AND artifact.automation_id = sr.automation_id
+                    AND sr.attempt_number > COALESCE((w.config_snapshot->'resumeReplayThrough'->>sr.sequence_number::text)::integer, 0)
+                )) AS review_pending,
               c.name AS candidate_name,
               w.config_snapshot -> 'job' ->> 'title' AS job_title,
               w.config_snapshot -> 'job' ->> 'company' AS job_company,
-              a.tailored_resume_version_id,
+              a.tailored_resume_version_id, a.review_status,
+              (rv.status = 'approved' AND to_jsonb(rv)->'release_receipt' IS NOT NULL) AS resume_released,
               hp.ats_score, hp.role_fit_score
        FROM application_ai_workflows w
        JOIN applications a ON a.id = w.application_id
        JOIN candidates c ON c.id = a.candidate_id
+       LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id AND rv.workflow_id = w.id
+       LEFT JOIN LATERAL (
+         SELECT count(*)::integer AS attempt_count FROM application_ai_stage_runs sr
+         WHERE sr.workflow_id = w.id AND sr.sequence_number = w.current_stage + 1
+       ) history ON true
        LEFT JOIN LATERAL (
          SELECT (data ->> 'atsScore')::numeric AS ats_score,
                 (data ->> 'roleFitScore')::numeric AS role_fit_score
@@ -56,7 +85,7 @@ export async function GET(request: NextRequest) {
              AND (newer.created_at, newer.id) > (w.created_at, w.id)
          )` : ""}
        ORDER BY w.updated_at DESC`,
-      [days]
+      [days, settings.staleHeartbeatSeconds]
     );
 
     // Keep opportunistic dispatch independent from the board's selected
@@ -80,7 +109,19 @@ export async function GET(request: NextRequest) {
 
     // Surface this signal so the application-queue and resume-parsing-status
     // pollers can issue a separate client->server POST when work is waiting.
-    return NextResponse.json({ workflows: rows, needsDispatch: hasQueuedOrStalledWork });
+    const workflows = rows.map(row => {
+      const id = resumeStages({ pipelineVariant: row.pipeline_variant })[row.current_stage];
+      const health = row.status === "completed" && row.pipeline_variant === "resume_evidence_v2"
+        ? (row.resume_released ? "Approved" : row.review_status === "changes_requested" ? "Changes requested" : "Pending approval")
+        : row.recovery_needed ? "Recovering"
+        : row.status === "waiting" ? (row.review_pending ? "Pending approval" : "Needs integrity repair")
+          : row.status === "queued" ? (row.cooldown_retry_count > 0 ? "Provider cooldown"
+            : row.recovery_reason && row.next_retry_at ? "Recovering"
+              : row.next_retry_at ? "Retry scheduled" : "Queued for capacity")
+            : row.status.charAt(0).toUpperCase() + row.status.slice(1);
+      return { ...row, stage_name: id ? APPLICATION_AGENT_METAS[id].displayName : null, health };
+    });
+    return NextResponse.json({ workflows, needsDispatch: hasQueuedOrStalledWork });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

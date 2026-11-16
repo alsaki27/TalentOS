@@ -1,111 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query } from "@/server/db/neon";
+import { getAiRuntimeConfig, resumePipelineSettings } from "@/server/repositories/aiRuntimeConfigRepository";
+import { manualResumeTransition } from "@/server/repositories/resumeWorkflowRecoveryRepository";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
-  const workflowId = params.id;
-  const wf = await findWorkflowById(workflowId);
-  if (!wf) {
-    return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
+  const body = await req.json().catch(() => null);
+  const { action, note } = body ?? {};
+  if (action !== "approve" && action !== "reject" && action !== "reject_and_restart") {
+    return NextResponse.json({ error: "Invalid review action" }, { status: 400 });
   }
-
-  if (wf.status !== "waiting") {
-    return NextResponse.json({
-      error: `Workflow is not waiting for review (current status: ${wf.status})`,
-    }, { status: 400 });
-  }
-
-  let body: any;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 }); }
-
-  const action: "approve" | "reject" | "reject_and_restart" = body.action;
-  if (!["approve", "reject", "reject_and_restart"].includes(action)) {
-    return NextResponse.json({
-      error: "action must be 'approve', 'reject', or 'reject_and_restart'",
-    }, { status: 400 });
-  }
-
-  const reviewerNote = body.note || null;
-  const reviewerId = context?.profile.user_id;
-
-  const artifactData = JSON.stringify({
-    action,
-    note: reviewerNote,
-    reviewerId,
-    timestamp: new Date().toISOString(),
+  const settings = resumePipelineSettings(await getAiRuntimeConfig());
+  const changed = await manualResumeTransition({
+    id: params.id, stage: null, action,
+    note: typeof note === "string" ? note.trim().slice(0, 2000) : null,
+    reviewerId: context?.profile.user_id,
+    staleHeartbeatSeconds: settings.staleHeartbeatSeconds,
   });
-
-  switch (action) {
-    case "approve": {
-      // Advance to Final Polish. current_stage is 0-indexed into
-      // APPLICATION_AGENT_IDS (0=resume_forge, 1=hiring_panel, 2=final_polish)
-      // - a workflow reaches "waiting" (human review) only after Hiring
-      // Panel has already run, so approving it means Final Polish is next.
-      await query(
-        "UPDATE application_ai_workflows SET status = 'queued', current_stage = $1, last_error = NULL WHERE id = $2",
-        [2, workflowId]
-      );
-      await query(
-        "UPDATE applications SET resume_generation_status = 'resume_review', resume_generation_error = NULL WHERE id = $1",
-        [wf.application_id]
-      );
-      await query(
-        `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, artifactData]
-      );
-
-      return NextResponse.json({
-        workflowId,
-        status: "approved",
-        message: "Review approved. Final Polish is queued for the next dispatcher tick.",
-      });
-    }
-
-    case "reject": {
-      await query(
-        "UPDATE application_ai_workflows SET status = 'failed', last_error = $1 WHERE id = $2",
-        [`Rejected by reviewer: ${reviewerNote || "No reason provided"}`, workflowId]
-      );
-      await query(
-        "UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
-        [`Rejected: ${reviewerNote || "No reason"}`, wf.application_id]
-      );
-      await query(
-        `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, artifactData]
-      );
-
-      return NextResponse.json({ workflowId, status: "failed", message: "Workflow rejected." });
-    }
-
-    case "reject_and_restart": {
-      await query(
-        "UPDATE application_ai_workflows SET status = 'queued', current_stage = 0, last_error = $1 WHERE id = $2",
-        [`Rejected, restarting from stage 1: ${reviewerNote || ""}`, workflowId]
-      );
-      await query(
-        "UPDATE applications SET resume_generation_status = 'queued', resume_generation_error = NULL WHERE id = $1",
-        [wf.application_id]
-      );
-      await query(
-        `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, artifactData]
-      );
-
-      return NextResponse.json({ workflowId, status: "restarting", message: "Restart queued for the next dispatcher tick." });
-    }
+  if (!changed) {
+    return NextResponse.json({ error: "A recorded review gate and successful Hiring Panel output are required" }, { status: 409 });
   }
+  return NextResponse.json({
+    workflowId: params.id,
+    status: action === "approve" ? "approved" : action === "reject_and_restart" ? "restarting" : changed.status,
+  });
 }

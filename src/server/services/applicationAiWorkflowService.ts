@@ -3,8 +3,12 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
+import { sha256Hex } from "@/lib/sha256";
 import { callWithUsageTracking, recordUsageEvent, AiRouteCallError, classifyAiErrorCode, type CallContext } from "@/lib/ai/routing";
-import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
+import { type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
+import { EVIDENCE_RESUME_STAGES, LEGACY_RESUME_STAGES, RESUME_EVIDENCE_VARIANT, evidenceRouteId, resumeStages } from "@/lib/ai/application-agents/workflowStages";
+import { prepareEvidenceStage, sendEvidenceTask } from "@/lib/ai/application-agents/evidencePipeline";
+import { ResumeModelCheckpointError, withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
@@ -15,7 +19,7 @@ import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
-import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
+import { findAgentConfigByAutomationId, listAgentConfigs, type AgentConfigRow } from "@/server/repositories/aiAgentConfigRepository";
 import {
   createWorkflow,
   findWorkflowById,
@@ -24,6 +28,7 @@ import {
   createStageRun,
   updateStageRun,
   createArtifact,
+  commitStageResult,
   listStageRuns,
   listArtifacts,
   claimWorkflowById,
@@ -35,7 +40,8 @@ import {
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
 import { revertAeStageForPipelineRestart } from "@/server/repositories/applicationsRepository";
-import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
+import { getAiRuntimeConfig, resumePipelineSettings } from "@/server/repositories/aiRuntimeConfigRepository";
+import { manualResumeTransition, setStageDeadline } from "@/server/repositories/resumeWorkflowRecoveryRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { selectBestBaseResume } from "@/lib/ai/selectBestBaseResume";
 import { query, queryOne, execute } from "@/server/db/neon";
@@ -48,16 +54,6 @@ function sha256(input: string): string {
     hash |= 0;
   }
   return Math.abs(hash).toString(16).padStart(8, "0");
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); },
-    );
-  });
 }
 
 function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
@@ -77,7 +73,7 @@ function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
 // same call (see processWorkflowStage's split-artifact write for
 // application_resume_forge), so its presence is already implied by
 // application_resume_forge's.
-const REQUIRED_APPLICATION_AGENT_IDS = APPLICATION_AGENT_IDS.slice(0, 3);
+const REQUIRED_APPLICATION_AGENT_IDS = LEGACY_RESUME_STAGES;
 
 // Hard ceiling for one stage attempt. A stage runs inside a single dispatch
 // request that scheduled-jobs.yml calls with `curl --max-time 660`, under a
@@ -102,19 +98,14 @@ function stageTimeBudgetMs(agentId: ApplicationAgentId, timeoutMs: number): numb
   return Math.max(base, Math.min(timeoutMs * 4 + 5_000, STAGE_BUDGET_CEILING_MS));
 }
 
-function firstMissingApplicationStage(artifacts: ArtifactRow[]): number {
-  return REQUIRED_APPLICATION_AGENT_IDS.findIndex((automationId) =>
-    !artifacts.some((artifact) => artifact.automation_id === automationId)
-  );
-}
-
 async function requeueFromMissingApplicationStage(
   workflowId: string,
   missingStage: number,
   lockVersion: number,
   artifacts: ArtifactRow[],
+  agentOrder: readonly ApplicationAgentId[] = REQUIRED_APPLICATION_AGENT_IDS,
 ): Promise<void> {
-  const missingAgent = REQUIRED_APPLICATION_AGENT_IDS[missingStage];
+  const missingAgent = agentOrder[missingStage];
   const updated = await updateWorkflowStatus(workflowId, "queued", {
     current_stage: missingStage,
     stage_retry_count: 0,
@@ -167,14 +158,25 @@ export async function startWorkflow(input: {
   const runtime = await getAiRuntimeConfig();
   const routingStateId = runtime.active_routing_state_id ?? null;
   const routeSnapshot = routingStateId
-    ? await query(
-        `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
-           FROM ai_routing_state_routes
-          WHERE state_id = $1 AND is_enabled = true
-          ORDER BY automation_id, rank`,
+    ? await query<RouteSnapshot>(
+        `SELECT r.automation_id, r.rank, r.ai_key_id, COALESCE(r.provider,k.provider) AS provider,
+                COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.reasoning_effort
+           FROM ai_routing_state_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
+          WHERE r.state_id = $1 AND r.is_enabled = true
+          ORDER BY r.automation_id, r.rank`,
         [routingStateId],
       )
     : [];
+  const settings = resumePipelineSettings(runtime);
+  const variant = input.pipelineVariant ?? (settings.evidenceEnabled ? RESUME_EVIDENCE_VARIANT : null);
+  const evidenceRoutes = variant === RESUME_EVIDENCE_VARIANT
+    ? await snapshotEvidenceRoutes(routingStateId, routeSnapshot)
+    : null;
+  const evidenceConfigs = variant === RESUME_EVIDENCE_VARIANT ? Object.fromEntries(
+    (await listAgentConfigs()).filter(config => EVIDENCE_RESUME_STAGES.some(stage =>
+      evidenceRouteId(stage) === config.automation_id,
+    )).map(config => [config.automation_id, config]),
+  ) : null;
   // Config snapshot bundles all inputs needed by agents
   const configSnapshot = {
     candidateId: input.candidateId,
@@ -185,7 +187,15 @@ export async function startWorkflow(input: {
     sourceOfTruth: input.sourceOfTruth ?? null,
     routingStateId,
     routeSnapshot,
-    pipelineVariant: input.pipelineVariant ?? null,
+    pipelineVariant: variant,
+    evidenceRoutes,
+    evidenceConfigs,
+    forgeInputChars: settings.forgeInputChars,
+    resumeMaxPages: settings.resumeMaxPages,
+    frozenInputsHash: variant === RESUME_EVIDENCE_VARIANT ? await sha256Hex(JSON.stringify({
+      job: input.job, base: input.baseResume, evidence: input.evidence,
+      verifiedSkills: input.verifiedSkills, sourceOfTruth: input.sourceOfTruth,
+    })) : null,
     cachedRequirementAnalysis: input.cachedRequirementAnalysis ?? null,
   };
 
@@ -206,6 +216,27 @@ export async function startWorkflow(input: {
   // revertAeStageForPipelineRestart's own doc comment for why this matters.
   await revertAeStageForPipelineRestart(input.applicationId);
   return { workflowId: wf.id };
+}
+
+type EvidenceRoute = { provider: "openai" | "anthropic" | "opencode"; model: string };
+type RouteSnapshot = { automation_id: string; provider: string | null; model_override: string | null; rank: number };
+
+async function snapshotEvidenceRoutes(routingStateId: string | null, active: RouteSnapshot[]) {
+  const ids = EVIDENCE_RESUME_STAGES.map(evidenceRouteId);
+  const seeded = await query<RouteSnapshot>(
+    `SELECT r.automation_id, COALESCE(r.provider,k.provider) AS provider,
+            COALESCE(r.model_override,k.model,k.default_model) AS model_override, r.rank
+      FROM ai_automation_routes r LEFT JOIN ai_api_keys k ON k.id = r.ai_key_id
+      WHERE r.automation_id = ANY($1::text[]) AND r.is_enabled ORDER BY r.rank`, [ids],
+  );
+  return Object.fromEntries(EVIDENCE_RESUME_STAGES.flatMap((stage, index) => {
+    const id = evidenceRouteId(stage);
+    const configured = (routingStateId ? active : []).filter(route => route.automation_id === id);
+    const selected = (configured.length ? configured : seeded.filter(route => route.automation_id === id))[0];
+    const provider = index === 0 ? "openai" : index < 3 ? "anthropic" : "opencode";
+    return selected?.provider === provider && selected.model_override
+      ? [[id, { provider, model: selected.model_override } as EvidenceRoute]] : [];
+  }));
 }
 
 function jobDescriptionForTargetJob(job: any): string {
@@ -648,7 +679,8 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
   // fields, so overlay it before any agent sees the context. This prevents
   // Job Lens from rejecting a valid database job because the snapshot omitted
   // its title/company.
-  const canonicalJob = await queryOne<any>(
+  const frozen = snapshot.pipelineVariant === RESUME_EVIDENCE_VARIANT;
+  const canonicalJob = frozen ? null : await queryOne<any>(
     `SELECT j.* FROM applications a JOIN jobs j ON j.id = a.job_id WHERE a.id = $1`,
     [wf.application_id]
   );
@@ -657,7 +689,7 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
     : (snapshot.job ?? {});
 
   let baseResume = snapshot.baseResume ?? {};
-  if (wf.base_resume_id) {
+  if (wf.base_resume_id && !frozen) {
     const freshBase = await queryOne<{ content: unknown }>(
       "SELECT content FROM base_resumes WHERE id = $1",
       [wf.base_resume_id]
@@ -690,6 +722,9 @@ async function continueToNextStage(workflowId: string, nextStage: number, lockVe
   const updated = await updateWorkflowStatus(workflowId, "queued", {
     current_stage: nextStage,
     stage_retry_count: 0,
+    recovery_count: 0,
+    next_retry_at: null,
+    last_error: null,
     // A successful stage means whatever provider-capacity issue the PREVIOUS
     // stage may have been cooling down for has cleared - don't carry a stale
     // cooldown count into the next stage's own budget.
@@ -742,8 +777,10 @@ async function syncWorkflowToApplication(
   if (!wf) return;
 
   await query(
-    `UPDATE applications SET resume_generation_status = $1${error ? ", resume_generation_error = $3" : ""} WHERE id = $2`,
-    error ? [genStatus, wf.application_id, error] : [genStatus, wf.application_id],
+    `UPDATE applications app SET resume_generation_status = $1, resume_generation_error = $3
+      WHERE app.id = $2 AND app.applied_at IS NULL AND app.ai_workflow_id = $4
+        AND EXISTS (SELECT 1 FROM application_ai_workflows w WHERE w.id = $4 AND w.status = $5)`,
+    [genStatus, wf.application_id, error ?? null, workflowId, status],
   );
 }
 
@@ -820,18 +857,25 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     }
   }
 
-  const agentOrder = APPLICATION_AGENT_IDS;
+  const stageRuntime = await getAiRuntimeConfig();
+  const stageSettings = resumePipelineSettings(stageRuntime);
+  await syncWorkflowToApplication(workflowId, "running", wf.current_stage);
+  const evidenceVariant = snapshot.pipelineVariant === RESUME_EVIDENCE_VARIANT;
+  const agentOrder = resumeStages(snapshot);
   const currentIdx = wf.current_stage;
 
-  if (currentIdx >= agentOrder.length) {
+  if (currentIdx === agentOrder.length) {
     // This recovery path can run after a stage-to-stage continuation was
     // interrupted. Do not let finalization repeat a cached artifact read; the
     // repository's fresh option uses a locking read to bypass Hyperdrive's
     // stale SELECT cache.
-    const authoritativeArtifacts = await listArtifacts(workflowId, { fresh: true });
-    const missingStage = firstMissingApplicationStage(authoritativeArtifacts);
-    if (missingStage >= 0) {
-      await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, authoritativeArtifacts);
+    const completedRuns = await listStageRuns(workflowId, true);
+    const ids = completedStageOutputIds(completedRuns, snapshot);
+    const authoritativeArtifacts = (await listArtifacts(workflowId, { fresh: true })).filter(artifact =>
+      !agentOrder.some(agent => agent === artifact.automation_id) || ids.has(artifact.id));
+    const missingStage = agentOrder.findIndex(agent => !authoritativeArtifacts.some(artifact => artifact.automation_id === agent));
+    if (missingStage !== -1) {
+      await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, authoritativeArtifacts, agentOrder);
       return;
     }
     await finalizeWorkflow(workflowId, lockVersion, authoritativeArtifacts);
@@ -839,7 +883,13 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   }
 
   const agentId = agentOrder[currentIdx];
-  const agentConfig = await findAgentConfigByAutomationId(agentId);
+  if (!agentId) {
+    await requeueFromMissingApplicationStage(workflowId, 0, lockVersion, [], agentOrder);
+    return;
+  }
+  const agentConfig = evidenceVariant
+    ? snapshot.evidenceConfigs?.[evidenceRouteId(agentId)] as AgentConfigRow | undefined
+    : await findAgentConfigByAutomationId(agentId);
   const maxAttempts = agentConfig?.max_attempts ?? 2;
 
   if (agentConfig && agentConfig.is_active === false) {
@@ -872,15 +922,34 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   // seed row for Resume Forge/Final Polish (full-resume JSON output) must not
   // silently drop to Job Lens/Hiring Panel's (analysis-only JSON) lower ceiling
   // or vice versa.
+  if (evidenceVariant && !agentConfig)
+    throw new Error(`Missing agent configuration for ${evidenceRouteId(agentId)}`);
+  const legacyDefaults = AGENT_CONFIG_DEFAULTS[agentId as keyof typeof AGENT_CONFIG_DEFAULTS];
   const agentOptions: AgentOptions = {
     system_prompt: agentConfig?.system_prompt ?? undefined,
     temperature: Number.isFinite(parsedTemperature) ? parsedTemperature : undefined,
-    max_output_tokens: agentConfig?.max_output_tokens ?? AGENT_CONFIG_DEFAULTS[agentId]?.maxOutputTokens,
-    timeout_ms: agentConfig?.timeout_ms ?? AGENT_CONFIG_DEFAULTS[agentId]?.timeoutMs,
+    max_output_tokens: agentConfig?.max_output_tokens ?? legacyDefaults?.maxOutputTokens,
+    timeout_ms: agentConfig?.timeout_ms ?? legacyDefaults?.timeoutMs,
   };
 
-  const previousRuns = await listStageRuns(workflowId);
-  const previousArtifacts = await listArtifacts(workflowId);
+  const previousRuns = await listStageRuns(workflowId, true);
+  const priorArtifacts = await listArtifacts(workflowId, { fresh: true });
+  const authoritativeIds = completedStageOutputIds(previousRuns, snapshot);
+  const previousArtifacts = priorArtifacts.filter(artifact => (
+    !agentOrder.some(id => id === artifact.automation_id) || authoritativeIds.has(artifact.id)
+  ));
+  const missingPrerequisite = agentOrder.findIndex((id, index) => index < currentIdx &&
+    !previousArtifacts.some(artifact => artifact.automation_id === id));
+  if (missingPrerequisite !== -1) {
+    await requeueFromMissingApplicationStage(workflowId, missingPrerequisite, lockVersion, previousArtifacts, agentOrder);
+    return;
+  }
+  const saved = previousArtifacts.some(item => item.automation_id === agentId);
+  if (saved) {
+    await continueToNextStage(workflowId, currentIdx + 1, lockVersion);
+    await syncWorkflowToApplication(workflowId, "queued");
+    return;
+  }
   const priorStageAttempts = previousRuns.filter(
     (r) => r.automation_id === agentId && r.sequence_number === currentIdx + 1
   );
@@ -955,7 +1024,12 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       sequenceNumber: currentIdx + 1,
       attemptNumber: stageAttemptNumber,
       agentOptions,
-      context: ctx,
+      ...(evidenceVariant ? {
+        frozenInputsHash: snapshot.frozenInputsHash,
+        precedingArtifactIds: previousArtifacts
+          .filter(artifact => agentOrder.some(agent => agent === artifact.automation_id))
+          .map(artifact => artifact.id),
+      } : { context: ctx }),
     };
     const inputArtifact = await createArtifact({
       workflowId,
@@ -976,7 +1050,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     // with the job + base resume it was computed for: retryWorkflow keeps
     // artifacts but may switch the base resume, and requirement analysis is
     // candidate-specific, so a checkpoint is only reused when both match.
-    if (agentId === "application_resume_forge") {
+    if (!evidenceVariant && agentId === "application_resume_forge") {
       ctx.onJobAnalysis = async (analysis) => {
         const data = { jobId: ctx.job?.id ?? null, baseResumeId: ctx.baseResume?.id ?? null, analysis };
         await createArtifact({
@@ -1008,60 +1082,73 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     let resolvedOutputTokens: number | null = null;
     let resolvedCostUsd: number | null = null;
     try {
-      const callCtx: CallContext = {
-        userId: wf.started_by ?? undefined,
-        workflowId,
-        applicationId: wf.application_id,
-        stageRunId: stageRun.id,
-        promptVersion: agentConfig?.prompt_version ?? null,
-        attemptNumber: stageAttemptNumber,
-        routingStateId: typeof (wf.config_snapshot as any)?.routingStateId === "string"
-          ? (wf.config_snapshot as any).routingStateId
-          : undefined,
-            // The active pipeline state has three provider routes (Vertex B,
-            // Vertex A, then OpenCode). Two attempts stopped after the two
-            // Vertex keys and made the tertiary route unreachable whenever
-            // both Vertex gateways were rate-limited.
-            maxProviderAttempts: 4,
-      };
-      // Each production provider enforces AgentOptions.timeout_ms with its
-      // own AbortController. Let that error reach callWithUsageTracking so it
-      // can classify the abort as a timeout and immediately try the next
-      // configured route. A Promise.race here would reject without route
-      // metadata while leaving the upstream request alive.
-      const heartbeatTimer = setInterval(() => {
-        void updateWorkflowHeartbeat(workflowId, lockVersion).then(alive => {
-          if (!alive) console.warn(`[Workflow ${workflowId}] claim was superseded during provider call.`);
-        }).catch(err =>
-          console.warn(`[Workflow ${workflowId}] heartbeat refresh failed`, err)
-        );
-      }, 20_000);
-       let callResult;
-       try {
+      const routeId = evidenceVariant ? evidenceRouteId(agentId) : agentId;
+      const route = evidenceVariant ? snapshot.evidenceRoutes?.[routeId] as EvidenceRoute | undefined : undefined;
+      const evidence = evidenceVariant
+        ? await prepareEvidenceStage(agentId, ctx,
+          snapshot.forgeInputChars ?? stageSettings.forgeInputChars, snapshot.resumeMaxPages ?? stageSettings.resumeMaxPages)
+        : null;
+      if (evidence?.task && agentOptions.system_prompt) {
+        evidence.task.system += "\nTask guidance: " + agentOptions.system_prompt;
+      }
+      if (evidence && !evidence.task) {
+        agentOutput = await evidence.finish();
+        resolvedProviderName = "deterministic";
+        resolvedInputTokens = 0;
+        resolvedOutputTokens = 0;
+      } else {
+        if (evidence && !route) throw new Error(`Configure a model route for ${routeId} before running this workflow`);
+        const deadline = new AbortController();
         const timeoutMs = agentOptions.timeout_ms ?? 300_000;
         const stageBudgetMs = stageTimeBudgetMs(agentId, timeoutMs);
-        callResult = await withTimeout(
-          callWithUsageTracking(
-            agentId,
-            callCtx,
-            async (provider: AiProvider) => {
-              const agentFn = getAgentFn(agentId);
-              return agentFn(agentOptions, provider, ctx);
-            },
-          ),
-          stageBudgetMs,
-          `Agent stage timed out after ${stageBudgetMs}ms`,
-        );
-      } finally {
-        clearInterval(heartbeatTimer);
+        if (stageRuntime.resume_pipeline_settings != null && !await setStageDeadline(workflowId, lockVersion, stageBudgetMs)) {
+          throw new Error("Workflow claim lost before setting its deadline");
+        }
+        const budgetTimer = setTimeout(() => deadline.abort(new Error("AI stage timed out at its whole-stage deadline")), stageBudgetMs);
+        const heartbeatTimer = setInterval(() => {
+          void updateWorkflowHeartbeat(workflowId, lockVersion).then(alive => {
+            if (!alive) deadline.abort(new Error("Workflow claim was superseded"));
+          }).catch(error => console.warn("Workflow heartbeat failed", { workflowId, code: error?.code }));
+        }, 20_000);
+        try {
+          const callCtx: CallContext = {
+            userId: wf.started_by ?? undefined, workflowId, applicationId: wf.application_id,
+            stageRunId: stageRun.id, promptVersion: agentConfig?.prompt_version ?? null,
+            attemptNumber: stageAttemptNumber, routingStateId: snapshot.routingStateId ?? undefined,
+            maxProviderAttempts: evidence ? (route?.provider === "opencode" ? 2 : 1) : 4,
+            resumeEvidenceRoute: route, signal: deadline.signal,
+          };
+          const invoke = () => callWithUsageTracking(routeId, callCtx, async provider => {
+            if (evidence?.task) {
+              const output = await sendEvidenceTask(evidence.task, provider, agentOptions);
+              if (agentId === "application_resume_forge") {
+                await evidence.finish(output);
+                return output;
+              }
+              return evidence.finish(output);
+            }
+            return getAgentFn(agentId)(agentOptions, provider, ctx);
+          });
+          const forgeTask = agentId === "application_resume_forge" ? evidence?.task : null;
+          const cached = forgeTask ? await withResumeModelCheckpoint({
+            workflowId, task: forgeTask,
+            identity: { candidateId: ctx.candidateId, jobId: ctx.job.id, model: route?.model,
+              base: ctx.baseResume.content, job: resolveJobDescription(ctx.job), verifiedSkills: ctx.verifiedSkills,
+              promptVersion: agentConfig?.prompt_version ?? null },
+          }, invoke) : { result: await invoke(), reused: false };
+          const call = cached.result;
+          agentOutput = forgeTask ? await evidence!.finish(call.result) : call.result;
+          resolvedProviderName = cached.reused ? "checkpoint" : call.providerName;
+          resolvedKeyId = call.aiKeyId;
+          resolvedModel = call.model;
+          resolvedInputTokens = cached.reused ? 0 : call.inputTokens;
+          resolvedOutputTokens = cached.reused ? 0 : call.outputTokens;
+          resolvedCostUsd = cached.reused ? 0 : call.estimatedCostUsd;
+        } finally {
+          clearTimeout(budgetTimer);
+          clearInterval(heartbeatTimer);
+        }
       }
-      agentOutput = callResult.result;
-      resolvedProviderName = callResult.providerName;
-      resolvedKeyId = callResult.aiKeyId;
-      resolvedModel = callResult.model;
-      resolvedInputTokens = callResult.inputTokens;
-      resolvedOutputTokens = callResult.outputTokens;
-      resolvedCostUsd = callResult.estimatedCostUsd;
     } catch (err: any) {
       lastError = err;
       resolvedKeyId = null;
@@ -1117,49 +1204,24 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     // finalizeWorkflow's scoring, requirementCoverage.ts, disposition.ts)
     // keeps finding an 'application_job_lens' artifact exactly where it
     // always has, with zero changes to any of them.
-    let artifact: Awaited<ReturnType<typeof createArtifact>>;
-    if (agentId === "application_resume_forge") {
-      const { jobAnalysis, draft } = agentOutput as { jobAnalysis: unknown; draft: unknown };
-      await createArtifact({
-        workflowId,
-        automationId: "application_job_lens",
-        sequenceNumber: currentIdx + 1,
-        schemaVersion: getSchemaVersion("application_job_lens"),
-        contentHash: sha256(JSON.stringify(jobAnalysis)),
-        data: jobAnalysis,
-      });
-      artifact = await createArtifact({
-        workflowId,
-        automationId: agentId,
-        sequenceNumber: currentIdx + 1,
-        schemaVersion: getSchemaVersion(agentId),
-        contentHash: sha256(JSON.stringify(draft)),
-        data: draft,
-      });
-    } else {
-      artifact = await createArtifact({
-        workflowId,
-        automationId: agentId,
-        sequenceNumber: currentIdx + 1,
-        schemaVersion: getSchemaVersion(agentId),
-        contentHash: sha256(JSON.stringify(agentOutput)),
-        data: agentOutput,
-      });
-    }
-
-    await ownedStageUpdate({
-      status: "success",
-      provider: resolvedProviderName,
-      model: resolvedModel,
-      ai_key_id: resolvedKeyId,
-      output_artifact_id: artifact.id,
-      latency_ms: latencyMs,
-      input_tokens: resolvedInputTokens,
-      output_tokens: resolvedOutputTokens,
-      estimated_cost_usd: resolvedCostUsd,
-      prompt_version: agentConfig?.prompt_version ?? null,
-      completed_at: new Date().toISOString(),
+    const forgeOutput = agentId === "application_resume_forge" ? agentOutput : null;
+    const output = forgeOutput ? forgeOutput.draft : agentOutput;
+    const analysis = forgeOutput?.jobAnalysis;
+    const savedArtifacts = await commitStageResult({
+      workflowId, lockVersion, stageRunId: stageRun.id, sequence: currentIdx + 1,
+      output: {
+        automationId: agentId, schemaVersion: getSchemaVersion(agentId),
+        digest: await sha256Hex(JSON.stringify(output)), data: output,
+      },
+      analysis: analysis ? {
+        automationId: "application_job_lens", schemaVersion: getSchemaVersion("application_job_lens"),
+        digest: await sha256Hex(JSON.stringify(analysis)), data: analysis,
+      } : undefined,
+      provider: resolvedProviderName, model: resolvedModel, keyId: resolvedKeyId,
+      promptVersion: agentConfig?.prompt_version ?? null, inputTokens: resolvedInputTokens,
+      outputTokens: resolvedOutputTokens, cost: resolvedCostUsd, latencyMs,
     });
+    if (!savedArtifacts.length) return;
 
     // Phase 2 consumption point (c): Hiring Panel/Final Polish attach their
     // computed DeterministicQaResult as `.qa` on their own output (see
@@ -1196,7 +1258,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     }
 
     // Final polish complete → finalize
-    if (agentId === "application_final_polish") {
+    if (currentIdx === agentOrder.length - 1) {
       // Check for cancellation before finalizing
       const currentWf2 = await findWorkflowById(workflowId);
       if (currentWf2?.status === "cancelled") {
@@ -1222,10 +1284,10 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         // re-query through Hyperdrive's cache - see comment in
         // finalizeWorkflow for why that re-query can miss this exact
         // artifact.
-        const finalArtifacts = [...previousArtifacts, artifact];
-        const missingStage = firstMissingApplicationStage(finalArtifacts);
+        const finalArtifacts = [...previousArtifacts, ...savedArtifacts];
+        const missingStage = agentOrder.findIndex(agent => !finalArtifacts.some(artifact => artifact.automation_id === agent));
         if (missingStage >= 0) {
-          await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, finalArtifacts);
+          await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, finalArtifacts, agentOrder);
           return;
         }
         await finalizeWorkflow(workflowId, lockVersion, finalArtifacts);
@@ -1285,10 +1347,10 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     // weekly quota, not a transient blip). 8 cycles = ~2 hours of patience
     // before converting it to a real, visible failure instead of a workflow
     // that silently never completes.
-    const MAX_COOLDOWN_RETRIES = 8;
+    const MAX_COOLDOWN_RETRIES = stageSettings.cooldownLimit;
     const cooldownRetryCount = wf.cooldown_retry_count ?? 0;
     const cooldownExhausted = isProviderCooldown && cooldownRetryCount >= MAX_COOLDOWN_RETRIES;
-    const shouldRequeue = isProviderCooldown ? !cooldownExhausted : retryAttemptNumber < maxAttempts;
+    const shouldRequeue = !(err instanceof ResumeModelCheckpointError) && (isProviderCooldown ? !cooldownExhausted : retryAttemptNumber < maxAttempts);
 
     // Provider capacity is not a content/agent attempt. Even if the normal
     // max_attempts budget was already consumed, leave the stage queued behind
@@ -1301,7 +1363,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         stage_retry_count: isProviderCooldown ? (wf.stage_retry_count ?? 0) : retryAttemptNumber,
         cooldown_retry_count: isProviderCooldown ? cooldownRetryCount + 1 : cooldownRetryCount,
         next_retry_at: isProviderCooldown
-          ? new Date(Date.now() + 15 * 60_000).toISOString()
+          ? new Date(Date.now() + stageSettings.cooldownDelaySeconds * 1000).toISOString()
           : null,
       }, lockVersion);
       await syncWorkflowToApplication(workflowId, "queued");
@@ -1337,13 +1399,14 @@ const WORKFLOWS_PER_DISPATCH_CALL = 1;
  *  invocation, staying under Cloudflare's per-invocation subrequest limit.
  *  Returns dispatch result metadata with the count of workflows processed. */
 export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
+  const settings = resumePipelineSettings(await getAiRuntimeConfig());
   let count = 0;
   let lastDispatched: { id: string; current_stage: number } | null = null;
 
   console.log(`[Dispatch Chain] dispatchNextQueuedWorkflow started (WORKFLOWS_PER_DISPATCH_CALL=${WORKFLOWS_PER_DISPATCH_CALL})`);
 
   for (let i = 0; i < WORKFLOWS_PER_DISPATCH_CALL; i++) {
-    const wf = await claimNextPendingWorkflow();
+    const wf = await claimNextPendingWorkflow(settings.recoveryMode === "enabled");
     if (!wf) {
       console.log(`[Dispatch Chain] claimNextPendingWorkflow returned null (no queued workflows or at concurrency cap). Stopping.`);
       break;
@@ -1385,16 +1448,7 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
       // current_stage 3 (Final Polish) for 10+ minutes with last_error still
       // null and no way to tell why. Persisting the error here at least
       // makes the next stall debuggable via GET .../ai-workflow.
-      const message = err?.message ?? String(err);
-      console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
-      const requeued = await updateWorkflowStatus(wf.id, "queued", {
-        current_stage: wf.current_stage,
-        last_error: `Dispatcher error: ${message}`,
-        next_retry_at: new Date(Date.now() + 60_000).toISOString(),
-      } as any, wf.lock_version).catch(() => false);
-      if (requeued) {
-        await syncWorkflowToApplication(wf.id, "queued").catch(() => { });
-      }
+      await recordDispatchFailure(wf, err, settings);
     }
   }
 
@@ -1437,20 +1491,42 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   // stage_runs indefinitely after auto-trigger, even with the waitUntil fix
   // (ef4e182) in place - because that fix wrapped the outer dispatch call,
   // not this inner one.
-  await processWorkflowStage(workflowId, claimed.lock_version).catch(async err => {
-    console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
-    const latest = await findWorkflowById(workflowId).catch(() => null);
-    const requeued = await updateWorkflowStatus(workflowId, "queued", {
-      current_stage: latest?.current_stage ?? wf.current_stage,
-      last_error: `Dispatcher error: ${err?.message ?? String(err)}`,
-      next_retry_at: new Date(Date.now() + 60_000).toISOString(),
-    }, claimed.lock_version).catch(() => false);
-    if (requeued) {
-      await syncWorkflowToApplication(workflowId, "queued").catch(() => { });
-    }
+  await processWorkflowStage(workflowId, claimed.lock_version).catch(async error => {
+    await recordDispatchFailure(claimed, error, resumePipelineSettings(await getAiRuntimeConfig()));
   });
 
   return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
+}
+
+async function recordDispatchFailure(wf: WorkflowRow, error: unknown, settings: ReturnType<typeof resumePipelineSettings>) {
+  const nextAttempt = (wf.stage_retry_count ?? 0) + 1;
+  const status = nextAttempt >= settings.recoveryLimit ? "failed" : "queued";
+  const message = `Dispatcher error: ${error instanceof Error ? error.message : String(error)}`;
+  await query(
+    `WITH changed AS (
+       UPDATE application_ai_workflows w SET status = $3::text, last_error = $4,
+         stage_retry_count = $5,
+         next_retry_at = CASE WHEN $3::text = 'queued' THEN NOW() + make_interval(secs => $6) ELSE NULL END,
+         claimed_at = NULL, claim_expires_at = NULL, claimed_by = NULL, heartbeat_at = NULL, updated_at = NOW()
+       WHERE w.id = $1 AND w.lock_version = $2 AND w.status = 'running' AND w.claim_expires_at >= NOW()
+       RETURNING w.id, w.application_id
+     ), closed AS (
+       UPDATE application_ai_stage_runs sr SET status = 'failed', completed_at = NOW(), error_code = 'dispatcher_error', error_message = $4
+       FROM changed WHERE sr.workflow_id = changed.id AND sr.status = 'running'
+     )
+     UPDATE applications a SET resume_generation_status = $3::text, resume_generation_error = $4
+       FROM changed WHERE a.id = changed.application_id AND a.ai_workflow_id = changed.id AND a.applied_at IS NULL`,
+    [wf.id, wf.lock_version, status, message, nextAttempt, settings.recoveryDelaySeconds],
+  );
+}
+
+function completedStageOutputIds(
+  runs: Awaited<ReturnType<typeof listStageRuns>>,
+  snapshot: { resumeReplayThrough?: Record<string, number> },
+) {
+  return new Set(runs.filter(run => run.status === "success"
+    && run.attempt_number > (snapshot.resumeReplayThrough?.[run.sequence_number] ?? 0))
+    .map(run => run.output_artifact_id));
 }
 
 function getAgentFn(id: ApplicationAgentId): (options: AgentOptions, provider: AiProvider, ctx: AgentContext) => Promise<any> {
@@ -1468,62 +1544,14 @@ function getSchemaVersion(id: ApplicationAgentId): string {
     case "application_resume_forge": return SCHEMA_VERSIONS.resumeDraft;
     case "application_hiring_panel": return SCHEMA_VERSIONS.reviewScore;
     case "application_final_polish": return SCHEMA_VERSIONS.finalResume;
+    case "application_opportunity_reviewer": return "OpportunityReviewV2";
+    case "application_release_editor": return "EvidenceReleaseV2";
     default: throw new Error(`Unknown agent ID: ${id}`);
   }
 }
 
-async function refreshWorkflowBaseResume(workflowId: string, wf: WorkflowRow): Promise<void> {
-  const appRow = await queryOne<{ candidate_id: string; job_id: string | null }>(
-    "SELECT candidate_id, job_id FROM applications WHERE id = $1",
-    [wf.application_id]
-  );
-  if (!appRow || !appRow.job_id) return;
-
-  const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
-  const job: any = jobRow ?? {};
-
-  // A retry may target a legacy workflow created before target_jobs was
-  // materialized. Repair this deterministic prerequisite before spending on
-  // another AI attempt; the row is keyed idempotently by candidate + job.
-  await upsertTargetJobByCandidateAndJob(appRow.candidate_id, appRow.job_id, {
-    raw_description: jobDescriptionForTargetJob(job),
-  });
-
-  let targetResumeRow = await queryOne<any>(
-    `SELECT arv.* FROM application_resume_versions arv
-     WHERE arv.target_job_id IN (
-       SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
-     )
-     AND arv.source_type = 'base_resume' AND arv.status = 'active'
-     ORDER BY arv.created_at DESC LIMIT 1`,
-    [appRow.candidate_id, appRow.job_id]
-  );
-
-  let resumeRow: any = null;
-  if (targetResumeRow?.base_resume_id) {
-    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined, targetResumeRow.base_resume_id);
-  } else {
-    const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
-    if (best) {
-      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined, best.resume.id);
-    } else {
-      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined);
-    }
-  }
-
-  if (resumeRow) {
-    const snapshot = (wf.config_snapshot ?? {}) as any;
-    snapshot.baseResume = resumeRow;
-    await query(
-      "UPDATE application_ai_workflows SET config_snapshot = $1::jsonb WHERE id = $2",
-      [JSON.stringify(snapshot), workflowId]
-    );
-  }
-}
-
-export async function cancelWorkflow(workflowId: string): Promise<void> {
-  await updateWorkflowStatus(workflowId, "cancelled");
-  await syncWorkflowToApplication(workflowId, "cancelled");
+export async function cancelWorkflow(workflowId: string): Promise<boolean> {
+  return transitionForRetry(workflowId, "cancel", null);
 }
 
 /**
@@ -1588,67 +1616,19 @@ export async function refreshWorkflowRoutingSnapshot(workflowId: string): Promis
 }
 
 /** Retry a failed/cancelled workflow from its current stage (preserves progress). */
-export async function retryWorkflow(workflowId: string): Promise<void> {
-  const wf = await findWorkflowById(workflowId);
-  if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
-  await closeOrphanedStageRuns(workflowId);
-  await refreshWorkflowBaseResume(workflowId, wf);
-  await refreshWorkflowRoutingSnapshot(workflowId);
-  // last_error must be cleared here, not just status - otherwise the Kanban
-  // (and Application Queue) keep showing the PREVIOUS failure's message
-  // indefinitely after a successful retry, since nothing else ever
-  // overwrites it until the workflow fails again. Confirmed live: a
-  // freshly re-queued, not-yet-processed workflow displayed a stale
-  // "All configured routes failed" error from before the retry, reading
-  // as a brand-new failure when it wasn't one.
-  await updateWorkflowStatus(workflowId, "queued", {
-    last_error: null,
-    next_retry_at: null,
-    stage_retry_count: 0,
-    cooldown_retry_count: 0,
-  });
-  await syncWorkflowToApplication(workflowId, "queued");
-  await revertAeStageForPipelineRestart(wf.application_id);
+export async function retryWorkflow(workflowId: string): Promise<boolean> {
+  return transitionForRetry(workflowId, "retry", null);
 }
 
-/** Restart a failed/cancelled workflow from stage 0 (discards all progress). */
-export async function restartWorkflow(workflowId: string): Promise<void> {
-  const wf = await findWorkflowById(workflowId);
-  if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
-  await closeOrphanedStageRuns(workflowId);
-  await refreshWorkflowBaseResume(workflowId, wf);
-  await query(
-    "DELETE FROM application_ai_stage_runs WHERE workflow_id = $1",
-    [workflowId]
-  );
-  await query(
-    "DELETE FROM application_ai_artifacts WHERE workflow_id = $1",
-    [workflowId]
-  );
-  await updateWorkflowStatus(workflowId, "queued", {
-    current_stage: 0,
-    last_error: null,
-    next_retry_at: null,
-    stage_retry_count: 0,
-    cooldown_retry_count: 0,
-  });
-  await syncWorkflowToApplication(workflowId, "queued");
-  await revertAeStageForPipelineRestart(wf.application_id);
+export async function restartWorkflow(workflowId: string): Promise<boolean> {
+  return transitionForRetry(workflowId, "restart", null);
 }
 
-export async function rerunFromStage(workflowId: string, stage: number): Promise<void> {
-  const wf = await findWorkflowById(workflowId);
-  if (!wf) return;
-  await closeOrphanedStageRuns(workflowId);
-  await refreshWorkflowBaseResume(workflowId, wf);
-  await refreshWorkflowRoutingSnapshot(workflowId);
-  await updateWorkflowStatus(workflowId, "queued", {
-    current_stage: Math.max(0, stage),
-    last_error: null,
-    next_retry_at: null,
-    stage_retry_count: 0,
-    cooldown_retry_count: 0,
-  });
-  await syncWorkflowToApplication(workflowId, "queued");
-  await revertAeStageForPipelineRestart(wf.application_id);
+export async function rerunFromStage(workflowId: string, stage: number): Promise<boolean> {
+  return transitionForRetry(workflowId, "rerun", stage);
+}
+
+async function transitionForRetry(id: string, action: "retry" | "restart" | "rerun" | "cancel", stage: number | null) {
+  const settings = resumePipelineSettings(await getAiRuntimeConfig());
+  return Boolean(await manualResumeTransition({ id, action, stage, staleHeartbeatSeconds: settings.staleHeartbeatSeconds }));
 }

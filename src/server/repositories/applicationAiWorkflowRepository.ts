@@ -37,6 +37,8 @@ export interface WorkflowRow {
   routing_state_id: string | null;
   route_snapshot: unknown;
   cooldown_retry_count: number;
+  stage_deadline_at?: string | null;
+  recovery_reason?: string | null;
 }
 
 export interface StageRunRow {
@@ -91,10 +93,16 @@ export async function createWorkflow(input: {
   routeSnapshot?: unknown;
 }): Promise<WorkflowRow> {
   const rows = await query<WorkflowRow>(
-    `INSERT INTO application_ai_workflows
+    `WITH inserted AS (
+       INSERT INTO application_ai_workflows
       (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, match_score, match_reason, routing_state_id, route_snapshot, next_retry_at, stage_retry_count, started_at)
      VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $8, $9::jsonb, NULL, 0, NOW())
-     RETURNING *`,
+     RETURNING *
+     ), attached AS (
+       UPDATE applications app SET ai_workflow_id = inserted.id, resume_generation_status = 'queued',
+         resume_generation_error = NULL FROM inserted
+       WHERE app.id = inserted.application_id AND app.applied_at IS NULL
+     ) SELECT * FROM inserted`,
     [
       input.applicationId,
       input.baseResumeId ?? null,
@@ -167,12 +175,13 @@ export async function updateWorkflowStatus(
     fields.push(`cancelled_at = $${idx++}`);
     values.push(new Date().toISOString());
   }
-  if (status === "queued") {
-    // A deliberate retry is a new recovery window. Without resetting this
-    // counter, a workflow that previously exhausted stale-claim recovery is
-    // requeued and immediately terminal-fails on its next claim, even when
-    // the underlying provider/orchestration issue has been fixed.
-    fields.push("recovery_count = 0");
+  if (extra?.recovery_count !== undefined) {
+    fields.push(`recovery_count = $${idx++}`);
+    values.push(extra.recovery_count as number);
+  }
+  if (extra?.cooldown_retry_count !== undefined) {
+    fields.push(`cooldown_retry_count = $${idx++}`);
+    values.push(extra.cooldown_retry_count as number);
   }
   if (extra?.stage_retry_count !== undefined) {
     fields.push(`stage_retry_count = $${idx++}`);
@@ -198,7 +207,7 @@ export async function updateWorkflowStatus(
   let where = `WHERE id = $${idx}`;
   if (expectedLockVersion !== undefined) {
     values.push(expectedLockVersion);
-    where += ` AND lock_version = $${idx + 1}`;
+    where += ` AND lock_version = $${idx + 1} AND status = 'running' AND claim_expires_at >= NOW()`;
   }
   const result = await execute(
     `UPDATE application_ai_workflows SET ${fields.join(", ")} ${where}`,
@@ -244,7 +253,7 @@ export async function updateWorkflowStatus(
 // the same workflow means something is structurally broken (not a transient
 // dispatcher blip), so it should surface as a failure immediately rather
 // than silently eating up to an hour of retries before anyone notices.
-export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
+export async function claimNextPendingWorkflow(ownStaleRecovery = false): Promise<WorkflowRow | null> {
   const [, rows] = await sql().transaction((tx) => [
     tx.query("SELECT pg_advisory_xact_lock($1::bigint)", [WORKFLOW_CLAIM_LOCK_ID]),
     tx.query<WorkflowRow>(
@@ -258,7 +267,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       ),
       next_workflow AS (
         SELECT id FROM application_ai_workflows
-        WHERE (status = 'running'
+        WHERE (NOT $1::boolean AND status = 'running'
                AND (claim_expires_at IS NULL OR claim_expires_at < NOW())
                AND (heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')
                AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
@@ -267,7 +276,11 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
                AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
         ORDER BY
           CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
-          created_at ASC
+          CASE WHEN $1::boolean AND
+            (to_jsonb(application_ai_workflows)->>'recovery_due_at' IS NOT NULL)
+            = (mod(floor(extract(epoch FROM NOW()) / 60)::bigint, 2) = 0)
+          THEN 0 ELSE 1 END,
+          COALESCE(NULLIF(to_jsonb(application_ai_workflows)->>'recovery_due_at', '')::timestamptz, created_at) ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
@@ -292,7 +305,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       FROM next_workflow n
       WHERE w.id = n.id
       RETURNING w.*`,
-      []
+      [ownStaleRecovery]
     ),
   ]);
   return (rows[0] as WorkflowRow | undefined) ?? null;
@@ -301,7 +314,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
 /** Claim one explicitly requested workflow through the same atomic path as
  * the scheduled dispatcher. Manual retries must not bypass backoff or the
  * concurrency cap. */
-export async function claimWorkflowById(workflowId: string): Promise<WorkflowRow | null> {
+export async function claimWorkflowById(workflowId: string, ownStaleRecovery = false): Promise<WorkflowRow | null> {
   const [, rows] = await sql().transaction((tx) => [
     tx.query("SELECT pg_advisory_xact_lock($1::bigint)", [WORKFLOW_CLAIM_LOCK_ID]),
     tx.query<WorkflowRow>(
@@ -328,12 +341,12 @@ export async function claimWorkflowById(workflowId: string): Promise<WorkflowRow
           AND ((w.status = 'queued'
                 AND (w.next_retry_at IS NULL OR w.next_retry_at <= NOW())
                 AND (SELECT n FROM active_count) < c.workflow_max_concurrency)
-            OR (w.status = 'running'
+            OR (NOT $2::boolean AND w.status = 'running'
                 AND (w.claim_expires_at IS NULL OR w.claim_expires_at < NOW())
                 AND (w.heartbeat_at IS NULL OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')
                 AND ac.n < c.workflow_max_concurrency))
         RETURNING w.*`,
-      [workflowId],
+      [workflowId, ownStaleRecovery],
     ),
   ]);
   return (rows[0] as WorkflowRow | undefined) ?? null;
@@ -341,9 +354,10 @@ export async function claimWorkflowById(workflowId: string): Promise<WorkflowRow
 
 export async function assertWorkflowClaim(workflowId: string, lockVersion: number): Promise<boolean> {
   const row = await queryOne<{ id: string }>(
-    `SELECT id FROM application_ai_workflows
-     WHERE id = $1 AND status = 'running' AND lock_version = $2
-       AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()`,
+    `SELECT w.id FROM application_ai_workflows w
+     JOIN applications a ON a.id = w.application_id
+     WHERE w.id = $1 AND w.status = 'running' AND w.lock_version = $2 AND w.claim_expires_at >= NOW()
+       AND a.applied_at IS NULL AND (a.ai_workflow_id IS NULL OR a.ai_workflow_id = w.id)`,
     [workflowId, lockVersion]
   );
   return Boolean(row);
@@ -449,9 +463,10 @@ export async function updateStageRun(
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function listStageRuns(workflowId: string): Promise<StageRunRow[]> {
+export async function listStageRuns(workflowId: string, fresh = false): Promise<StageRunRow[]> {
   return query<StageRunRow>(
-    "SELECT * FROM application_ai_stage_runs WHERE workflow_id = $1::uuid ORDER BY sequence_number, attempt_number",
+    `SELECT * FROM application_ai_stage_runs WHERE workflow_id = $1::uuid
+       ORDER BY sequence_number, attempt_number${fresh ? " FOR SHARE" : ""}`,
     [workflowId]
   );
 }
@@ -506,6 +521,40 @@ export async function createArtifact(input: {
   return rows[0];
 }
 
+export async function commitStageResult(input: {
+  workflowId: string; lockVersion: number; stageRunId: string; sequence: number;
+  output: { automationId: string; schemaVersion: string; digest: string; data: unknown };
+  analysis?: { automationId: string; schemaVersion: string; digest: string; data: unknown };
+  provider: string; model: string | null; keyId: string | null; promptVersion: string | null;
+  inputTokens: number | null; outputTokens: number | null; cost: number | null; latencyMs: number;
+}): Promise<ArtifactRow[]> {
+  const payload = [input.output, ...(input.analysis ? [input.analysis] : [])];
+  return query<ArtifactRow>(
+    `WITH owned AS MATERIALIZED (
+       SELECT w.id FROM application_ai_workflows w
+       JOIN applications app ON app.id = w.application_id
+       JOIN application_ai_stage_runs sr ON sr.id = $3::uuid AND sr.workflow_id = w.id
+       WHERE w.id = $1::uuid AND w.lock_version = $2 AND w.status = 'running' AND w.claim_expires_at >= NOW()
+         AND app.applied_at IS NULL AND (app.ai_workflow_id IS NULL OR app.ai_workflow_id = w.id)
+         AND sr.status = 'running' AND sr.sequence_number = w.current_stage + 1 AND sr.automation_id = $6::text
+       FOR UPDATE OF w,sr
+     ), artifacts AS (
+       INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
+       SELECT owned.id, item->>'automationId', $4::integer, item->>'schemaVersion', item->>'digest', item->'data'
+       FROM owned CROSS JOIN jsonb_array_elements($5::jsonb) AS item RETURNING *
+     ), completed AS (
+       UPDATE application_ai_stage_runs sr SET status = 'success', output_artifact_id = a.id,
+         provider = $7, model = $8, ai_key_id = $9, prompt_version = $10,
+         input_tokens = $11, output_tokens = $12, estimated_cost_usd = $13, latency_ms = $14,
+         completed_at = NOW()
+       FROM artifacts a WHERE sr.id = $3::uuid AND a.automation_id = $6::text
+       RETURNING sr.id
+     ) SELECT artifacts.* FROM artifacts WHERE EXISTS (SELECT 1 FROM completed)`,
+    [input.workflowId, input.lockVersion, input.stageRunId, input.sequence, JSON.stringify(payload), input.output.automationId,
+      input.provider, input.model, input.keyId, input.promptVersion, input.inputTokens, input.outputTokens, input.cost, input.latencyMs],
+  );
+}
+
 export async function listArtifacts(
   workflowId: string,
   options?: { fresh?: boolean },
@@ -518,7 +567,7 @@ export async function listArtifacts(
   return query<ArtifactRow>(
     `SELECT * FROM application_ai_artifacts
       WHERE workflow_id = $1::uuid
-      ORDER BY sequence_number${freshnessClause}`,
+      ORDER BY sequence_number, created_at, id${freshnessClause}`,
     [workflowId]
   );
 }

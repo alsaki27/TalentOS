@@ -2,7 +2,7 @@
 // Google Vertex AI via an OpenAI-compatible Cloud Run gateway. Callers provide
 // the endpoint and decrypted Neon credential explicitly.
 
-import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib/ai/provider";
+import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool, requestSignal } from "@/lib/ai/provider";
 import { fromOpenAiChoice, toOpenAiMessages, toOpenAiTools } from "@/lib/ai/openAiCompatibleProvider";
 
 const DEFAULT_MODEL = "gemini-2.5-flash-lite";
@@ -113,6 +113,7 @@ export async function callVertexProxy(opts: {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   responseSchema?: Record<string, unknown>;
   responseMimeType?: string | null;
 }): Promise<AiResponse> {
@@ -134,6 +135,7 @@ export async function callVertexProxy(opts: {
     const endpoint = opts.proxyUrl.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      opts.signal?.throwIfAborted();
       try {
         const responseFormat = opts.responseSchema
           ? {
@@ -148,7 +150,7 @@ export async function callVertexProxy(opts: {
 
         res = await fetch(endpoint, {
           method: "POST",
-          signal: controller.signal,
+          signal: requestSignal(controller, opts.signal),
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${opts.proxySecret}`,

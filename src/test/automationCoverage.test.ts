@@ -38,6 +38,11 @@ import { describe, test, expect } from "vitest";
 
 const AUTOMATION_IDS_FROM_CODE = [
   "application_resume_forge",
+  "application_resume_forge_evidence_v2",
+  "application_hiring_panel_evidence_v2",
+  "application_final_polish_evidence_v2",
+  "application_opportunity_reviewer",
+  "application_release_editor",
   "application_hiring_panel",
   "application_final_polish",
   "resume_parsing",
@@ -79,6 +84,11 @@ const SEEDED_AUTOMATIONS = new Set([
   "ai_digest",
   "chat_assistant",
   "application_resume_forge",
+  "application_resume_forge_evidence_v2",
+  "application_hiring_panel_evidence_v2",
+  "application_final_polish_evidence_v2",
+  "application_opportunity_reviewer",
+  "application_release_editor",
   "application_hiring_panel",
   "application_final_polish",
   "email_triage",

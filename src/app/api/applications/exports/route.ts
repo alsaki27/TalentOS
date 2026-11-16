@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
+import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
 
 const EXPORT_TYPES = new Set(["pdf", "docx"]);
 
@@ -66,6 +67,9 @@ export async function POST(req: NextRequest) {
       { error: "applicationId/resumeVersionId do not match an existing application" },
       { status: 404 }
     );
+  }
+  if (!await evidenceResumeExportIsAllowed(applicationId, resumeVersionId)) {
+    return NextResponse.json({ error: "Use the PDF saved when the reviewer approves this resume" }, { status: 409 });
   }
 
   const buffer = new Uint8Array(await file.arrayBuffer());

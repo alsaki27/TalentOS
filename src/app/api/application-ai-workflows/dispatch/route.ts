@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dispatchNextQueuedWorkflow } from "@/server/services/applicationAiWorkflowService";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { getAiRuntimeConfig, resumePipelineSettings } from "@/server/repositories/aiRuntimeConfigRepository";
+import { recoverResumeWorkflows } from "@/server/repositories/resumeWorkflowRecoveryRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,11 @@ export async function GET(req: NextRequest) {
   // no diagnostic trail in scheduled_job_runs either. Confirmed live via
   // the E2E test's own diagnostic logging (500, empty body).
   try {
+    const settings = resumePipelineSettings(await getAiRuntimeConfig());
+    const recovery = await recoverResumeWorkflows(settings);
+    if (recovery.length) {
+      console.info("[Resume pipeline recovery]", { mode: settings.recoveryMode, candidates: recovery });
+    }
     const result = await dispatchNextQueuedWorkflow();
     const durationMs = Date.now() - startedMs;
 

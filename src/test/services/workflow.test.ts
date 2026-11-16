@@ -130,11 +130,11 @@ describe("applicationAiWorkflowRepository", () => {
       expect(sql).toContain("current_stage");
     });
 
-    it("resets stale-claim recovery count when a workflow is deliberately requeued", async () => {
+    it("preserves stale-claim recovery count during an ordinary requeue", async () => {
       (execute as any).mockResolvedValue({ rowCount: 1 });
       await updateWorkflowStatus("wf-1", "queued", { last_error: null });
       const sql = (execute as any).mock.calls[0][0];
-      expect(sql).toContain("recovery_count = 0");
+      expect(sql).not.toContain("recovery_count");
     });
   });
 });

@@ -7,6 +7,8 @@ import { findExportById } from "@/server/repositories/applicationResumeExportsRe
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { exportResumeAsDocx, exportResumeAsPdf, exportResumeAsMarkdown } from "@/server/services/resumeExportService";
+import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
+import { sha256Hex } from "@/lib/sha256";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
   const exportRecord = await findExportById(params.exportId);
   if (!exportRecord || exportRecord.application_id !== params.id) {
     return NextResponse.json({ error: "Export not found" }, { status: 404 });
+  }
+  if (!await evidenceResumeExportIsAllowed(params.id, exportRecord.resume_version_id, exportRecord.id)) {
+    return NextResponse.json({ error: "This is not the current approved resume PDF" }, { status: 409 });
   }
 
   if (exportRecord.status === "failed") {
@@ -30,6 +35,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
   if (exportRecord.storage_provider === "sharepoint" && exportRecord.storage_url) {
     try {
       const stored = await downloadFromSharePoint(exportRecord.storage_url);
+      if (exportRecord.content_sha256 && await sha256Hex(new Uint8Array(stored.buffer)) !== exportRecord.content_sha256) {
+        return NextResponse.json({ error: "The archived file does not match its recorded checksum" }, { status: 409 });
+      }
       const contentType = exportRecord.export_type === "pdf"
         ? "application/pdf"
         : exportRecord.export_type === "docx"

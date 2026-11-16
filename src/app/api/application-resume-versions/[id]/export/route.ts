@@ -6,6 +6,7 @@ import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { queryOne } from "@/server/db/neon";
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
+import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
 import {
   exportResumeAsDocx,
   exportResumeAsPdf,
@@ -51,6 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const applicationId = await findApplicationId(resumeVersionId);
   if (!applicationId) {
     return NextResponse.json({ error: "No application found for this resume version" }, { status: 404 });
+  }
+  if (!await evidenceResumeExportIsAllowed(applicationId, resumeVersionId)) {
+    return NextResponse.json({ error: "Use the PDF saved when the reviewer approves this resume" }, { status: 409 });
   }
 
   const safety = await runExportSafetyChecks(resumeVersionId, applicationId);

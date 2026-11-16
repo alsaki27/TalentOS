@@ -11,6 +11,12 @@ interface WorkflowCard {
   application_id: string;
   base_resume_id: string | null;
   status: string;
+  health: string;
+  heartbeat_at: string | null;
+  next_retry_at: string | null;
+  recovery_reason: string | null;
+  stage_name: string | null;
+  attempt_count: number;
   current_stage: number;
   last_error: string | null;
   updated_at: string;
@@ -50,12 +56,12 @@ const COLUMNS: ColumnDef[] = [
   { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => (w.current_stage === 0 && w.status !== "queued") && w.status !== "completed" && w.status !== "failed" },
   { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.current_stage === 1 && w.status !== "completed" && w.status !== "failed" },
   { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.current_stage === 2 && w.status !== "completed" && w.status !== "failed" },
+  { id: "opportunities", label: "Opportunity Reviewer", color: "var(--info)", getStage: (w) => w.stage_name === "Opportunity Reviewer" && w.status !== "completed" && w.status !== "failed" },
+  { id: "release", label: "Release Editor", color: "var(--info)", getStage: (w) => w.stage_name === "Release Editor" && w.status !== "completed" && w.status !== "failed" },
   { id: "completed", label: "Completed", color: "var(--success)", getStage: (w) => w.status === "completed" },
   { id: "failed", label: "Failed", color: "var(--danger)", getStage: (w) => w.status === "failed" },
 ];
 
-const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "resume_forge", 2: "hiring_panel", 3: "final_polish", 4: "completed" };
-const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, resume_forge: 1, hiring_panel: 2, final_polish: 3, completed: 4 };
 const WORKFLOW_DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 
 // updateWorkflowStatus() sets `updated_at = NOW()` on every status/stage
@@ -85,9 +91,9 @@ function scoreBadgeColor(score: number): "success" | "warning" | "danger" {
   return "danger";
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, label }: { status: string; label: string }) {
   const cls = status === "completed" ? "badge-success" : status === "failed" ? "badge-danger" : status === "running" ? "badge-info" : "badge-warning";
-  return <span className={`badge ${cls}`} style={{ fontSize: 10 }}>{status}</span>;
+  return <span className={`badge ${cls}`} style={{ fontSize: 10 }}>{label}</span>;
 }
 
 export default function ResumeParsingStatusPage() {
@@ -97,11 +103,8 @@ export default function ResumeParsingStatusPage() {
   const [details, setDetails] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(3);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
-  const [moving, setMoving] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fetchedIds = useRef<Set<string>>(new Set());
+  const fetchedRevisions = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     fetchActive();
@@ -115,112 +118,40 @@ export default function ResumeParsingStatusPage() {
       if (!res.ok) return;
       const data = await res.json();
 
-      // The server's own self-fetch dispatch (a Worker calling its own URL
-      // from within this same GET request) is unreliable in production -
-      // confirmed live, workflows sat queued for 5+ minutes with this page
-      // open and polling the whole time. A real client-initiated POST
-      // never failed once in the same testing, so fire it directly instead
-      // of hoping the server-side one landed. Fire-and-forget: the next
-      // 6s poll picks up whatever it advanced.
-      if (data.needsDispatch) {
-        fetch("/api/application-ai-workflows/dispatch", { method: "POST" }).catch(() => {});
-      }
-
-      const incoming: WorkflowCard[] = data.workflows ?? [];
-      setWorkflows((prev) => {
-        const prevMap = new Map(prev.map((w) => [w.id, w]));
-        const updated: WorkflowCard[] = [];
-        for (const w of incoming) {
-          const existing = prevMap.get(w.id);
-          if (!existing || existing.updated_at !== w.updated_at) {
-            updated.push({ ...w });
-          } else {
-            updated.push(existing);
-          }
-        }
-        if (updated.length !== prev.length) return updated;
-        for (let i = 0; i < updated.length; i++) {
-          if (updated[i].updated_at !== prev[i]?.updated_at) return updated;
-        }
-        return prev;
-      });
+      setWorkflows(data.workflows ?? []);
       setLoading(false);
     } catch { /* */ }
   }
 
-  const ensureDetails = useCallback((id: string) => {
-    if (fetchedIds.current.has(id)) return;
-    fetchedIds.current.add(id);
+  const ensureDetails = useCallback((id: string, revision: string) => {
+    if (fetchedRevisions.current.get(id) === revision) return;
+    fetchedRevisions.current.set(id, revision);
     fetch(`/api/application-ai-workflows/${id}?action=status`, { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => { if (data) setDetails((cur) => ({ ...cur, [id]: data })); })
-      .catch(() => { fetchedIds.current.delete(id); });
+      .then(async res => {
+        if (!res.ok) throw new Error("Workflow details unavailable");
+        const data = await res.json();
+        if (fetchedRevisions.current.get(id) === revision) setDetails(cur => ({ ...cur, [id]: data }));
+      })
+      .catch(() => {
+        if (fetchedRevisions.current.get(id) === revision) fetchedRevisions.current.delete(id);
+      });
   }, []);
 
-  const toggleExpand = useCallback((id: string) => {
-    setExpanded((cur) => (cur === id ? null : id));
-    ensureDetails(id);
-  }, [ensureDetails]);
-
-  const toggleFindings = useCallback((id: string) => {
-    setFindingsOpen((cur) => (cur === id ? null : id));
-    ensureDetails(id);
-  }, [ensureDetails]);
-
-  // Manual override — drag-drop a card to a new column
-  async function handleDrop(targetColumnId: string) {
-    const wfId = draggingId;
-    setDragOverCol(null);
-    setDraggingId(null);
-    if (!wfId) return;
-
-    const wf = workflows.find((w) => w.id === wfId);
-    if (!wf) return;
-
-    // No-op if dropping back on same column
-    const currentColId = wf.status === "failed" ? "failed"
-      : wf.status === "completed" ? "completed"
-      : STAGE_TO_COLUMN[wf.current_stage ?? 0] ?? "queued";
-    if (currentColId === targetColumnId) return;
-
-    // "failed" is a terminal state — can't move INTO it manually
-    if (targetColumnId === "failed") return;
-
-    const targetStage = COLUMN_TO_STAGE[targetColumnId] ?? 0;
-    setMoving(wfId);
-
-    // Optimistic update
-    setWorkflows((prev) => prev.map((w) =>
-      w.id === wfId
-        ? { ...w, current_stage: targetStage, status: targetStage === COLUMN_TO_STAGE.completed ? "completed" : "waiting" }
-        : w
-    ));
-
-    try {
-      const res = await fetch(`/api/application-ai-workflows/${wfId}?action=move`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stage: targetStage }),
-      });
-      if (!res.ok) {
-        await res.json().catch(() => ({}));
-        // Rollback
-        setWorkflows((prev) => prev.map((w) => w.id === wfId ? { ...w, current_stage: wf.current_stage, status: wf.status } : w));
-      }
-    } catch {
-      // Rollback
-      setWorkflows((prev) => prev.map((w) => w.id === wfId ? { ...w, current_stage: wf.current_stage, status: wf.status } : w));
-    } finally {
-      setMoving(null);
+  useEffect(() => {
+    for (const card of workflows) {
+      if (card.id === expanded || card.id === findingsOpen) ensureDetails(card.id, card.updated_at);
     }
-  }
+  }, [workflows, expanded, findingsOpen, ensureDetails]);
+
+  const toggleExpand = useCallback((id: string) => setExpanded(cur => cur === id ? null : id), []);
+  const toggleFindings = useCallback((id: string) => setFindingsOpen(cur => cur === id ? null : id), []);
 
   return (
     <div className="resume-parsing-status-page" style={{ padding: "12px", width: "100%" }}>
       <div className="page-header" style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 360px", minWidth: 0 }}>
           <h1 style={{ fontSize: 24, margin: 0, fontWeight: 700 }}>AI Resume Parsing Status</h1>
-          <span className="muted" style={{ fontSize: 14, display: "inline-block", marginTop: 4 }}>Kanban board — drag cards to manually override stage · auto-refresh every 6s</span>
+          <span className="muted" style={{ fontSize: 14, display: "inline-block", marginTop: 4 }}>Workflow progress and recent attempts</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 9, marginLeft: "auto", paddingTop: 1 }}>
           <label htmlFor="workflow-days-filter" style={{ fontSize: 16, fontWeight: 600, whiteSpace: "nowrap" }}>Show last</label>
@@ -263,16 +194,12 @@ export default function ResumeParsingStatusPage() {
           return (
             <div
               key={col.id}
-              onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
-              onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverCol(null); }}
-              onDrop={() => handleDrop(col.id)}
               style={{
                 flex: "0 0 280px",
                 minHeight: 200,
                 background: "var(--surface-1)",
                 borderRadius: 12,
-                border: `1px solid ${dragOverCol === col.id ? col.color : "var(--border)"}`,
-                boxShadow: dragOverCol === col.id ? `0 0 0 2px ${col.color}33` : "none",
+                border: "1px solid var(--border)",
                 display: "flex",
                 flexDirection: "column",
                 transition: "border-color 0.15s, box-shadow 0.15s",
@@ -300,12 +227,8 @@ export default function ResumeParsingStatusPage() {
                     isExpanded={expanded === wf.id}
                     isFindingsOpen={findingsOpen === wf.id}
                     detail={details[wf.id]}
-                    isDragging={draggingId === wf.id}
-                    isMoving={moving === wf.id}
                     onToggleExpand={toggleExpand}
                     onToggleFindings={toggleFindings}
-                    onDragStart={() => setDraggingId(wf.id)}
-                    onDragEnd={() => { setDraggingId(null); setDragOverCol(null); }}
                   />
                 ))}
               </div>
@@ -318,35 +241,22 @@ export default function ResumeParsingStatusPage() {
 }
 
 const BoardCard = memo(function BoardCard({
-  wf, isExpanded, isFindingsOpen, detail, isDragging, isMoving, onToggleExpand, onToggleFindings, onDragStart, onDragEnd,
+  wf, isExpanded, isFindingsOpen, detail, onToggleExpand, onToggleFindings,
 }: {
   wf: WorkflowCard;
   isExpanded: boolean;
   isFindingsOpen: boolean;
   detail: any;
-  isDragging: boolean;
-  isMoving: boolean;
   onToggleExpand: (id: string) => void;
   onToggleFindings: (id: string) => void;
-  onDragStart: () => void;
-  onDragEnd: () => void;
 }) {
   return (
     <div
-      draggable={!isMoving}
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", wf.id);
-        onDragStart();
-      }}
-      onDragEnd={onDragEnd}
       style={{
         padding: 14,
         borderRadius: 8,
         background: "var(--surface-2)",
         border: "1px solid var(--border)",
-        cursor: isMoving ? "wait" : "grab",
-        opacity: isDragging ? 0.4 : isMoving ? 0.6 : 1,
         borderLeft: wf.status === "failed" ? "4px solid var(--danger)" : wf.status === "completed" ? "4px solid var(--success)" : wf.status === "running" ? "4px solid var(--info)" : "4px solid transparent",
         boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
       }}
@@ -360,13 +270,18 @@ const BoardCard = memo(function BoardCard({
             {wf.job_title ?? "—"} {wf.job_company ? ` · ${wf.job_company}` : ""}
           </div>
         </div>
-        <StatusBadge status={wf.status} />
+        <StatusBadge status={wf.status} label={wf.health} />
       </div>
 
       <div className="muted" style={{ fontSize: 11, marginBottom: 8 }} title={new Date(wf.updated_at).toISOString()}>
         {wf.status === "completed" ? "Completed" : wf.status === "failed" ? "Failed" : "Entered stage"} {formatCardTime(wf.updated_at)}
       </div>
 
+      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+        {wf.stage_name && <div>{wf.stage_name} · {wf.attempt_count} {wf.attempt_count === 1 ? "attempt" : "attempts"}</div>}
+        {wf.heartbeat_at && <div>Last heartbeat {formatCardTime(wf.heartbeat_at)}</div>}
+        {wf.next_retry_at && <div>Next retry {formatCardTime(wf.next_retry_at)}</div>}
+      </div>
       {wf.match_reason && (
         <div className="muted" style={{ fontSize: 11, marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {wf.match_score != null ? `Score ${wf.match_score}: ` : ""}{wf.match_reason}
@@ -454,7 +369,7 @@ const BoardCard = memo(function BoardCard({
 function FindingsPanel({ details }: { details: any }) {
   const artifacts: any[] = details?.artifacts ?? [];
   const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
-  const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+  const finalPolish = artifacts.find((a) => a.automation_id === "application_release_editor")?.data ?? artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
 
   return (
     <div style={{ marginTop: 10, padding: 12, background: "var(--surface-3)", borderRadius: 6, fontSize: 12, display: "grid", gap: 10 }}>

@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage } from "@/server/services/applicationAiWorkflowService";
-import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } from "@/server/repositories/applicationAiWorkflowRepository";
-import { advanceAeStageAfterAiCompletion } from "@/server/repositories/applicationsRepository";
-import { APPLICATION_AGENT_IDS } from "@/lib/ai/application-agents/types";
-import { queryOne } from "@/server/db/neon";
+import { findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +35,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
+  const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
   const workflowId = params.id;
@@ -55,7 +52,9 @@ export async function POST(
       if (wf.status !== "queued" && wf.status !== "running" && wf.status !== "waiting") {
         return NextResponse.json({ error: `Cannot cancel workflow in '${wf.status}' state` }, { status: 400 });
       }
-      await cancelWorkflow(workflowId);
+      if (!await cancelWorkflow(workflowId)) {
+        return NextResponse.json({ error: "Workflow is no longer eligible for cancellation" }, { status: 409 });
+      }
       return NextResponse.json({ workflowId, status: "cancelled" });
     }
 
@@ -63,7 +62,9 @@ export async function POST(
       if (wf.status !== "failed" && wf.status !== "cancelled") {
         return NextResponse.json({ error: `Can only retry failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
-      await retryWorkflow(workflowId);
+      if (!await retryWorkflow(workflowId)) {
+        return NextResponse.json({ error: "Workflow is no longer eligible for retry" }, { status: 409 });
+      }
       return NextResponse.json({ workflowId, status: "queued" });
     }
 
@@ -71,81 +72,26 @@ export async function POST(
       if (wf.status !== "failed" && wf.status !== "cancelled") {
         return NextResponse.json({ error: `Can only restart failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
-      await restartWorkflow(workflowId);
+      if (!await restartWorkflow(workflowId)) {
+        return NextResponse.json({ error: "Workflow is no longer eligible for restart" }, { status: 409 });
+      }
       return NextResponse.json({ workflowId, status: "queued", fromStage: 0 });
     }
 
     case "rerun": {
       const stageStr = url.searchParams.get("stage");
-      const stage = stageStr ? parseInt(stageStr, 10) : 0;
-      if (isNaN(stage) || stage < 0) {
+      const stage = stageStr === null ? 0 : /^\d+$/.test(stageStr) ? Number(stageStr) : NaN;
+      if (!Number.isSafeInteger(stage) || stage < 0) {
         return NextResponse.json({ error: "Invalid stage parameter" }, { status: 400 });
       }
-      await rerunFromStage(workflowId, stage);
+      if (!await rerunFromStage(workflowId, stage)) {
+        return NextResponse.json({ error: "Workflow has an active claim or the requested stage is unavailable" }, { status: 409 });
+      }
       return NextResponse.json({ workflowId, status: "queued", fromStage: stage });
     }
 
-    case "move": {
-      // Manual override — drag-and-drop a card to a different Kanban column.
-      // Updates current_stage and adjusts status. Optionally re-dispatches
-      // if the user dragged forward past the current stage (re-runs from
-      // the new stage). If dragged to "completed", marks done without AI.
-      const body = await req.json().catch(() => ({}));
-      const targetStage = typeof body.stage === "number" ? body.stage : null;
-      if (targetStage === null || targetStage < 0 || targetStage > 4) {
-        return NextResponse.json({ error: "stage must be an integer 0-4" }, { status: 400 });
-      }
-
-      const isCompleted = targetStage === 4;
-
-      if (isCompleted) {
-        const artifacts = await listArtifacts(workflowId, { fresh: true });
-        // The 3 real pipeline stages (application_resume_forge,
-        // application_hiring_panel, application_final_polish). Not
-        // application_job_lens explicitly - Resume Forge's stage always
-        // writes that artifact together with its own in the same call (see
-        // processWorkflowStage's split-artifact write for
-        // application_resume_forge), so its presence is already implied by
-        // application_resume_forge's.
-        const missingArtifacts = APPLICATION_AGENT_IDS.slice(0, 3)
-          .filter((automationId) => !artifacts.some((artifact) => artifact.automation_id === automationId));
-        const completion = await queryOne<{ resume_generation_status: string | null; version_id: string | null }>(
-          `SELECT a.resume_generation_status, v.id AS version_id
-             FROM applications a
-             LEFT JOIN application_resume_versions v
-               ON v.id = a.tailored_resume_version_id AND v.workflow_id = $2::uuid
-            WHERE a.id = $1`,
-          [wf.application_id, workflowId],
-        );
-        if (missingArtifacts.length > 0 || completion?.resume_generation_status !== "ready" || !completion.version_id) {
-          return NextResponse.json({
-            error: "Cannot manually mark an incomplete AI pipeline as completed",
-            missingArtifacts,
-            resumeReady: completion?.resume_generation_status === "ready" && Boolean(completion.version_id),
-          }, { status: 409 });
-        }
-      }
-
-      const updates: Record<string, unknown> = {
-        current_stage: targetStage,
-        last_error: null,
-      };
-      if (isCompleted) {
-        updates.status = "completed";
-        updates.completed_at = new Date().toISOString();
-      } else {
-        updates.status = "waiting";
-      }
-
-      await updateWorkflowStatus(workflowId, isCompleted ? "completed" : "waiting", updates);
-      if (isCompleted) {
-        await advanceAeStageAfterAiCompletion(
-          wf.application_id,
-          context.profile.display_name || context.profile.email || "Manual (Kanban)"
-        );
-      }
-      return NextResponse.json({ workflowId, current_stage: targetStage, status: isCompleted ? "completed" : "waiting" });
-    }
+    case "move":
+      return NextResponse.json({ error: "Pipeline stages advance through verified workflow results" }, { status: 405 });
 
     default:
       return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

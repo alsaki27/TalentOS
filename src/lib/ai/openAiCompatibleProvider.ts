@@ -6,7 +6,7 @@
 // exact shape - factored out here instead of tripling the same conversion logic
 // across nvidiaProvider.ts/openaiProvider.ts/glmProvider.ts.
 
-import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool, textOf, toolUsesOf } from "@/lib/ai/provider";
+import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool, requestSignal, textOf, toolUsesOf } from "@/lib/ai/provider";
 
 interface OpenAiMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -117,7 +117,7 @@ export function buildOpenAiResponseFormat(
 
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): AiProvider {
   return {
-    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, signal, responseSchema, responseMimeType }) {
       var controller = new AbortController();
       var timer: ReturnType<typeof setTimeout> | undefined;
       if (timeoutMs && timeoutMs > 0) {
@@ -125,7 +125,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
       }
       try {
       const res = await fetch(config.apiUrl, {
-        signal: controller.signal,
+        signal: requestSignal(controller, signal),
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.apiKey}`,

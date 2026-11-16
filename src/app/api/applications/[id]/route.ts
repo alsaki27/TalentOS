@@ -17,6 +17,7 @@ import {
 } from "@/server/repositories/applicationsRepository";
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
+import { approveEvidenceResumeForApplication, ResumeReleaseError } from "@/server/services/resumeEvidenceReleaseService";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
 const CUSTOM_INTERVIEW_STATUS_STAGE: Record<string, string> = {
@@ -266,6 +267,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   try {
+    if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
+      try {
+        await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id);
+      } catch (error) {
+        if (error instanceof ResumeReleaseError) return NextResponse.json({ error: error.message }, { status: 409 });
+        throw error;
+      }
+    }
     const data = await updateApplication(params.id, updates);
 
     // Team reports count completed workflow actions, not page views or repeated

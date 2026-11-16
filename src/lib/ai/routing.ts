@@ -301,8 +301,10 @@ export async function getProviderForAutomation(
   // would otherwise make (skipped/fallback usage events, pool cursor advance).
   benchmarkMode?: boolean,
   scheduledPoolRecovery?: boolean,
+  resumeEvidenceRoute?: { provider: string; model: string },
 ): Promise<AutomationRouteResult | null> {
-  const keyScopedRecovery = scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check";
+  const keyScopedRecovery = (scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check")
+    || resumeEvidenceRoute?.provider === "opencode";
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
     return {
@@ -351,6 +353,7 @@ export async function getProviderForAutomation(
       const anchor = await getAiKeyWithDecryptedKey(route.ai_key_id);
       const anchorProvider = anchor?.provider ?? anchorMetadata?.provider;
       if (!anchorProvider) continue;
+      if (resumeEvidenceRoute && anchorProvider !== resumeEvidenceRoute.provider) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
       const pinConfiguredOpenCodePrimary =
         usingRoutingStateRoutes &&
@@ -365,7 +368,11 @@ export async function getProviderForAutomation(
         const keyRow = candidate.id === anchor?.id
           ? anchor
           : await getAiKeyWithDecryptedKey(candidate.id);
-        if (!keyRow || !keyRow.is_enabled || isKeyHealthBlocked(keyRow, keyScopedRecovery)) continue;
+        if (!keyRow || !keyRow.is_enabled) continue;
+        if (isKeyHealthBlocked(keyRow, keyScopedRecovery)) {
+          limitSkipped ||= Boolean(keyRow.cooldown_until || keyRow.status === "rate_limited");
+          continue;
+        }
         if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
@@ -394,6 +401,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
+        if (resumeEvidenceRoute && effectiveModel !== resumeEvidenceRoute.model) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
           : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
@@ -420,9 +428,9 @@ export async function getProviderForAutomation(
           }
           continue;
         }
-        const provider = route.reasoning_effort
-          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
-          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
+        const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
+          keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
+          resumeEvidenceRoute?.provider === "opencode" ? "opencode_go" : undefined);
         if (provider) {
           return {
             provider,
@@ -438,12 +446,16 @@ export async function getProviderForAutomation(
         }
       }
     } else if (route.provider) {
+      if (resumeEvidenceRoute && route.provider !== resumeEvidenceRoute.provider) continue;
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
       // Provider-only routes resolve from Neon and never from deployment env.
       const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds, benchmarkMode, keyScopedRecovery);
       for (const key of dbKeys) {
-        if (isKeyHealthBlocked(key as any, keyScopedRecovery)) continue;
+        if (isKeyHealthBlocked(key, keyScopedRecovery)) {
+          limitSkipped ||= Boolean(key.cooldown_until || key.status === "rate_limited");
+          continue;
+        }
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
         if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
@@ -474,6 +486,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
+        if (resumeEvidenceRoute && effectiveModel !== resumeEvidenceRoute.model) continue;
         const routeHealth = keyScopedRecovery && keyRow.provider === "opencode"
           ? await checkScheduledKeyModelHealth(automationId,keyRow.id,effectiveModel)
           : await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
@@ -500,9 +513,9 @@ export async function getProviderForAutomation(
           }
           continue;
         }
-        const dbProvider = route.reasoning_effort
-          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
-          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
+        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel,
+          keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort ?? undefined,
+          resumeEvidenceRoute?.provider === "opencode" ? "opencode_go" : undefined);
         if (dbProvider) {
           return {
             provider: dbProvider,
@@ -521,6 +534,13 @@ export async function getProviderForAutomation(
   }
 
   // 3. Optional Neon-managed emergency fallback.
+  if (resumeEvidenceRoute) {
+    throw new AiRouteCallError(
+      limitSkipped ? "The configured model has no keys available during cooldown" : "No eligible key is configured for the pinned resume model",
+      { aiKeyId: null, provider: resumeEvidenceRoute.provider, model: resumeEvidenceRoute.model, routeRank: null,
+        errorCode: limitSkipped ? "quota_exhausted" : "configuration_error" },
+    );
+  }
   if (!runtime.allow_unrouted_fallback) {
     throw new Error("All configured routes failed and global fallback is disabled. Configure a route for this automation in /admin/ai → Agents & Routing.");
   }
@@ -617,6 +637,8 @@ export interface CallContext {
   /** Bounded chunk execution; ignored by all existing callers. */
   scheduledPoolRecovery?: boolean;
   deadlineAt?: number;
+  signal?: AbortSignal;
+  resumeEvidenceRoute?: { provider: string; model: string };
   // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
   // harness). Suppresses every write this call would otherwise make against
   // live routing state - ai_usage_events rows, ai_api_keys health mutations,
@@ -655,7 +677,7 @@ export async function callWithUsageTracking<T>(
   // attempted. Off by default: every retry counts against MAX_RETRIES,
   // identical to the pre-existing behavior.
   const scheduledRecovery = ctx?.scheduledPoolRecovery === true && automationId === "scheduled_candidate_logging_eligibility_check";
-  const boundRetriesByRouteRank = scheduledRecovery || runtime.pooled_retry_bounded_by_route_rank;
+  const boundRetriesByRouteRank = !ctx?.resumeEvidenceRoute && (scheduledRecovery || runtime.pooled_retry_bounded_by_route_rank);
   // Runaway-loop safety valve for same-rank retries, not a tunable - today's
   // largest configured pool is a handful of accounts.
   const MAX_SAME_RANK_ITERATIONS = 50;
@@ -673,6 +695,7 @@ export async function callWithUsageTracking<T>(
   let iteration = 0;
 
   while (true) {
+    ctx?.signal?.throwIfAborted();
     if (scheduledRecovery && ctx?.deadlineAt && Date.now() >= ctx.deadlineAt - 500) {
       throw new AiRouteCallError("Scheduled AI check deadline exceeded; retry in a later chunk.", {
         aiKeyId:lastResolved?.aiKeyId ?? null,provider:lastResolved?.name ?? "opencode",
@@ -690,6 +713,7 @@ export async function callWithUsageTracking<T>(
         excludedKeyModels,
         ctx?.benchmarkMode,
         scheduledRecovery,
+        ctx?.resumeEvidenceRoute,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -766,7 +790,8 @@ export async function callWithUsageTracking<T>(
           const remainingMs = scheduledRecovery && ctx?.deadlineAt ? ctx.deadlineAt - Date.now() : null;
           if (remainingMs !== null && remainingMs <= 0) throw new Error("Scheduled AI request timed out before sending.");
           const requestOptions = remainingMs === null ? opts : { ...opts, timeoutMs:Math.min(opts.timeoutMs ?? 30_000, remainingMs) };
-          const response = await resolved.provider.send(requestOptions);
+          ctx?.signal?.throwIfAborted();
+          const response = await resolved.provider.send({ ...requestOptions, signal: ctx?.signal ?? opts.signal });
           if (response.usage) {
             // fn() may call send() more than once per agent run (e.g. Resume
             // Forge's job-only extraction + requirement analysis + draft).
@@ -794,6 +819,7 @@ export async function callWithUsageTracking<T>(
               providerAttemptNumber: iteration,
               requestSequence: sequence,
               request: opts,
+              privatePayload: Boolean(ctx?.resumeEvidenceRoute),
               response,
               outcome: "success",
               inputTokens: response.usage?.input_tokens ?? null,
@@ -824,6 +850,7 @@ export async function callWithUsageTracking<T>(
               providerAttemptNumber: iteration,
               requestSequence: sequence,
               request: opts,
+              privatePayload: Boolean(ctx?.resumeEvidenceRoute),
               response: null,
               outcome: classifyErrorCode(err) === "timeout" ? "timeout" : "failure",
               inputTokens: null,
@@ -925,7 +952,8 @@ export async function callWithUsageTracking<T>(
         // A provider can reject one model while the credential remains valid for
         // sibling model routes (e.g. OpenCode 403 "Model access is disabled").
         // Do not poison the shared key's health for a model-entitlement issue.
-        if (resolved.aiKeyId && errorCode !== "model_unavailable") {
+        if (resolved.aiKeyId && errorCode !== "model_unavailable" &&
+          (!ctx?.resumeEvidenceRoute || errorCode === "billing_error" || errorCode === "auth_error")) {
           await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
         }
       }
@@ -1136,6 +1164,7 @@ type AiCallTraceInput = {
   providerAttemptNumber: number;
   requestSequence: number;
   request: Parameters<AiProvider["send"]>[0];
+  privatePayload?: boolean;
   response: Awaited<ReturnType<AiProvider["send"]>> | null;
   outcome: "success" | "failure" | "timeout";
   inputTokens: number | null;
@@ -1161,9 +1190,11 @@ async function recordAiCallTrace(input: AiCallTraceInput): Promise<string | null
     // agent parsing/post-processing. Credentials are added by the provider
     // adapter and are not part of AiProvider.send's request object.
     const requestPayload = {
-      system: input.request.system,
-      messages: input.request.messages,
-      tools: input.request.tools,
+      ...(input.privatePayload ? { contentOmitted: true } : {
+        system: input.request.system,
+        messages: input.request.messages,
+        tools: input.request.tools,
+      }),
       generation: {
         temperature: input.request.temperature ?? null,
         maxTokens: input.request.maxTokens ?? null,
@@ -1174,12 +1205,12 @@ async function recordAiCallTrace(input: AiCallTraceInput): Promise<string | null
     };
     const responsePayload = input.response
       ? {
-          content: input.response.content,
+          ...(!input.privatePayload ? { content: input.response.content } : { contentOmitted: true }),
           stopReason: input.response.stopReason,
           usage: input.response.usage ?? null,
         }
       : null;
-    const responseText = input.response?.content
+    const responseText = input.privatePayload ? null : input.response?.content
       .filter((block) => block.type === "text")
       .map((block) => block.type === "text" ? block.text : "")
       .join("\n") ?? null;

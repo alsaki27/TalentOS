@@ -27,6 +27,7 @@ export interface AiRuntimeConfig {
   final_polish_skip_when_clean: boolean;
   updated_by: string | null;
   updated_at: string | null;
+  resume_pipeline_settings?: unknown;
 }
 
 // workflow_claim_ttl_seconds: 720s (12min), sized to a flat retry budget of
@@ -53,12 +54,32 @@ export async function getAiRuntimeConfig(): Promise<AiRuntimeConfig> {
             c.allow_unrouted_fallback, c.workflow_max_concurrency,
             c.workflow_claim_ttl_seconds, c.pooled_retry_bounded_by_route_rank,
             c.final_polish_skip_when_clean,
-            c.updated_by, c.updated_at
+            c.updated_by, c.updated_at, to_jsonb(c)->'resume_pipeline_settings' AS resume_pipeline_settings
      FROM ai_runtime_config c
      LEFT JOIN ai_routing_states s ON s.id = c.active_routing_state_id
      WHERE c.singleton = true`
   );
   return row ?? DEFAULTS;
+}
+
+export function resumePipelineSettings(runtime: AiRuntimeConfig) {
+  const value = (runtime.resume_pipeline_settings ?? {}) as Record<string, unknown>;
+  const bounded = (name: string, fallback: number, min: number, max: number) => {
+    const n = value[name];
+    return typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? n : fallback;
+  };
+  return {
+    evidenceEnabled: value.evidence_enabled === true,
+    recoveryMode: value.recovery_mode === "enabled" ? "enabled" as const : "report" as const,
+    staleHeartbeatSeconds: bounded("stale_heartbeat_seconds", 300, 60, 3600),
+    recoveryLimit: bounded("recovery_limit", 2, 1, 8),
+    recoveryBatch: bounded("recovery_batch", 12, 1, 40),
+    recoveryDelaySeconds: bounded("recovery_delay_seconds", 60, 1, 1800),
+    cooldownLimit: bounded("cooldown_limit", 8, 1, 20),
+    cooldownDelaySeconds: bounded("cooldown_delay_seconds", 900, 30, 86400),
+    forgeInputChars: bounded("forge_input_chars", 10000, 4000, 20000),
+    resumeMaxPages: bounded("resume_max_pages", 2, 1, 3),
+  };
 }
 
 export async function activateRoutingState(stateId: string, actorUserId?: string | null): Promise<void> {

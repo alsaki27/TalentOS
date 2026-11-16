@@ -73,6 +73,13 @@ const h = vi.hoisted(() => {
     artifacts.set(input.workflowId, rows);
     return row;
   });
+  const commitStageResult = vi.fn(async (input: any) => {
+    const rows = await Promise.all([input.output, ...(input.analysis ? [input.analysis] : [])].map(entry =>
+      createArtifact({ ...entry, contentHash: entry.digest, sequenceNumber: input.sequence, workflowId: input.workflowId }),
+    ));
+    await updateStageRun(input.stageRunId, { status: "success", output_artifact_id: rows[0].id });
+    return rows;
+  });
 
   return {
     workflows,
@@ -85,6 +92,7 @@ const h = vi.hoisted(() => {
     createStageRun,
     updateStageRun,
     createArtifact,
+    commitStageResult,
     listStageRuns: vi.fn(async (id: string) => stageRuns.get(id) ?? []),
     listArtifacts: vi.fn(async (id: string) => artifacts.get(id) ?? []),
     updateWorkflowHeartbeat: vi.fn(async () => true),
@@ -103,7 +111,8 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   ...h,
 }));
 
-vi.mock("@/server/repositories/aiRuntimeConfigRepository", () => ({
+vi.mock("@/server/repositories/aiRuntimeConfigRepository", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/server/repositories/aiRuntimeConfigRepository")>(),
   getAiRuntimeConfig: vi.fn().mockResolvedValue({ active_routing_state_id: "state-test" }),
 }));
 
@@ -151,9 +160,20 @@ vi.mock("@/lib/ai/application-agents/finalizationService", () => ({
   }),
 }));
 
+vi.mock("@/server/repositories/resumeModelCheckpointRepository", () => ({
+  withResumeModelCheckpoint: vi.fn(async (_input: unknown, run: () => Promise<unknown>) => ({ result: await run(), reused: false })),
+  ResumeModelCheckpointError: class extends Error {},
+}));
+
 vi.mock("@/lib/ai/routing", () => ({
-  callWithUsageTracking: vi.fn(async (_automationId: string, _context: unknown, fn: (provider: any) => Promise<unknown>) => ({
-    result: await fn({ send: vi.fn() }),
+  callWithUsageTracking: vi.fn(async (automationId: string, _context: unknown, fn: (provider: any) => Promise<unknown>) => ({
+    result: await fn({ send: async () => ({
+      stopReason: "end_turn", content: [{ type: "text", text: JSON.stringify(
+        automationId === "application_hiring_panel_evidence_v2"
+          ? { atsScore: 8, recruiterScore: 8, roleFitScore: 8, risk: "clear", issues: [] }
+          : { prioritize: ["s1"] },
+      ) }],
+    }) }),
     providerName: "test-provider",
     aiKeyId: "test-key",
     model: "test-model",
@@ -163,6 +183,7 @@ vi.mock("@/lib/ai/routing", () => ({
 
 import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 
 describe("application AI pipeline reliability — 10-log E2E state machine", () => {
   beforeEach(() => {
@@ -220,5 +241,33 @@ describe("application AI pipeline reliability — 10-log E2E state machine", () 
     expect(finalizeWorkflow).toHaveBeenCalledTimes(10);
     expect(h.updateStageRun).toHaveBeenCalled();
     expect(h.markOrphanedStageRuns).not.toHaveBeenCalled();
+  });
+
+  it("runs the five-stage version with one Luna draft and skips clean downstream edits", async () => {
+    const id = "historical-log-1";
+    const workflow = h.workflows.get(id);
+    const forge = "application_resume_forge_evidence_v2";
+    const panel = "application_hiring_panel_evidence_v2";
+    const config = { is_active: true, max_output_tokens: 800, timeout_ms: 1000, max_attempts: 1 };
+    Object.assign(workflow.config_snapshot, {
+      pipelineVariant: "resume_evidence_v2",
+      evidenceConfigs: Object.fromEntries([
+        forge, panel, "application_final_polish_evidence_v2", "application_opportunity_reviewer", "application_release_editor",
+      ].map(key => [key, config])),
+      evidenceRoutes: {
+        [forge]: {provider: "openai", model: "gpt-6-luna"},
+        [panel]: {provider: "anthropic", model: "claude-haiku-5-5"},
+      },
+      verifiedSkills: ["Kubernetes"], forgeInputChars: 6000, resumeMaxPages: 2,
+      job: { title: "Engineer", description: "Required qualifications\nMust know Kubernetes." },
+      baseResume: { content: { header: {fullName:"Example Person"}, experience: [], education: [], skills: ["Linux"] } },
+    });
+    for (let index = 0; index < 5; index++) await processWorkflowStage(id);
+    expect(workflow.status).toBe("completed");
+    expect(h.stageRuns.get(id)?.map(run => run.status)).toEqual(Array(5).fill("success"));
+    expect(vi.mocked(callWithUsageTracking).mock.calls.map(call => call[0])).toEqual([forge, panel]);
+    const release = h.artifacts.get(id)?.find(row => row.automation_id === "application_release_editor");
+    expect(release?.data.exportReady).toBe(true);
+    expect(release?.data.documentValidation.pdfHash).toMatch(/^[0-9a-f]{64}$/);
   });
 });

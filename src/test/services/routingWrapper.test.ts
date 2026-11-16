@@ -300,7 +300,7 @@ describe("callWithUsageTracking error paths", () => {
 
     expect(mockBuildProviderFromDbKey).toHaveBeenCalledWith(
       "google_vertex_proxy", "secret", "gemini-2.5-pro", "https://vertex.example.com/v1",
-      "/chat/completions", null, {}
+      "/chat/completions", null, {}, undefined, undefined
     );
     expect(resolved?.model).toBe("gemini-2.5-pro");
     expect(resolved?.provider).toBe(routedProvider);
