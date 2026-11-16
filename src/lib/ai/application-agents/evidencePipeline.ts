@@ -210,7 +210,7 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
       };
     case "application_hiring_panel": {
       const task = {
-        system: instructions + ' Assess the cited draft selections. Return JSON only: numeric atsScore, recruiterScore, and roleFitScore (0–10), risk ("clear", "unknown" or "conflict"), and issues (an array of objects with evidenceId, detail and boolean material). Use an empty evidenceId for job-level gaps. A preferred requirement cannot be a blocker.',
+        system: instructions + ' Assess the cited draft selections. Return JSON only: numeric atsScore, recruiterScore, and roleFitScore (0–10), risk ("clear", "unknown" or "conflict"), and issues (objects with evidenceId, detail and boolean material). For evidenceId, copy an exact id from proof or use "" for a gap with no proof. A preferred requirement cannot be a blocker.',
         schema: reviewSchema, body: JSON.stringify({ ...evidencePayload, selected: prior?.prioritizedIds ?? [] }),
       };
       return { task, finish: async answer => {
@@ -225,11 +225,19 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
         const [atsScore, recruiterScore, roleFitScore] = scores as number[];
         if (!Array.isArray(value.issues)) throw new Error("Invalid model output: review issues are required");
         const evidenceIssues = value.issues.map(record).map(issue => {
-          if (typeof issue.evidenceId !== "string" || (issue.evidenceId && !allowed.has(issue.evidenceId))
-            || typeof issue.detail !== "string" || typeof issue.material !== "boolean") {
-            throw new Error("Invalid model output: review issue has no supported reference");
+          const evidenceId = typeof issue.evidenceId === "string" ? issue.evidenceId.trim() : null;
+          const detail = readResumeText(issue.detail);
+          const verifiedReference = evidenceId !== null && (!evidenceId || allowed.has(evidenceId));
+          if (!verifiedReference || !detail || typeof issue.material !== "boolean") {
+            // An uncertain review finding must remain visible to the reviewer.
+            // Only a verified source ID can flow into a downstream edit.
+            return {
+              evidenceId: "",
+              detail: detail ? `Verify this review finding: ${detail}`.slice(0, 250) : "Verify an incomplete Hiring Panel finding.",
+              material: true,
+            };
           }
-          return { evidenceId: issue.evidenceId, detail: issue.detail.slice(0, 250), material: issue.material };
+          return { evidenceId, detail: detail.slice(0, 250), material: issue.material };
         });
         const risk = value.risk;
         const requiredEdits = evidenceIssues.filter(item => item.material).map((item, index) => ({

@@ -83,6 +83,31 @@ describe("evidence resume pipeline", () => {
       .rejects.toThrow(/^Invalid model output: expected one JSON object$/);
   });
 
+  it("keeps unverified issue references for human review and excludes them from automated edits", async () => {
+    const ctx = context();
+    const panel = await prepareEvidenceStage("application_hiring_panel", ctx, 6000);
+    const result = await panel.finish({
+      atsScore: 8, recruiterScore: 8, roleFitScore: 7, risk: "clear",
+      issues: [
+        { evidenceId: "unknown", detail: "Confirm the scope of the listed project.", material: false },
+        { detail: "Check this finding." },
+      ],
+    });
+    expect(result).toMatchObject({
+      passFail: "review",
+      evidenceIssues: [
+        { evidenceId: "", detail: "Verify this review finding: Confirm the scope of the listed project.", material: true },
+        { evidenceId: "", detail: "Verify this review finding: Check this finding.", material: true },
+      ],
+    });
+    ctx.previousOutputs.application_hiring_panel = { data: result } as any;
+    const polish = await prepareEvidenceStage("application_final_polish", ctx, 6000);
+    expect(polish.task).toBeNull();
+    expect(await polish.finish()).toMatchObject({ reviewerWarnings: [
+      "Verify this review finding: Confirm the scope of the listed project.", "Verify this review finding: Check this finding.",
+    ] });
+  });
+
   it("produces identical PDF bytes and digest for the same saved content", async () => {
     const content = context().baseResume.content;
     const a = await renderEvidenceReleasePdf(content, 2);
