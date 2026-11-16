@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { evidenceRouteId, LEGACY_RESUME_STAGES } from "@/lib/ai/application-agents/workflowStages";
 import { PROVIDER_LABELS, PROVIDER_NATIVE_DEFAULTS, PROVIDER_MODEL_PRESETS } from "@/lib/ai/providerPresets";
 
 // ── Types ──
@@ -79,6 +80,53 @@ interface RouteItem {
   key_fingerprint: string | null;
   key_status: string | null;
   reasoning_effort?: string | null;
+}
+
+interface EditableRoute {
+  keyId: string;
+  provider: string | null;
+  modelOverride: string;
+  reasoningEffort: string;
+  isEnabled: boolean;
+}
+
+function listCurrentAgents(catalog: AgentItem[]): AgentItem[] {
+  const agents = new Map(catalog.map(agent => [agent.id, agent]));
+  for (const stage of LEGACY_RESUME_STAGES) {
+    const current = agents.get(evidenceRouteId(stage));
+    if (!current) continue;
+    const previous = agents.get(stage);
+    const label = previous?.label ?? current.label.replace(/ \(evidence pipeline\)$/i, "");
+    agents.set(current.id, {
+      ...current,
+      label,
+      group_label: previous?.group_label ?? current.group_label,
+      config: current.config?.display_name === current.label
+        ? { ...current.config, display_name: label }
+        : current.config,
+    });
+    agents.delete(stage);
+  }
+  return [...agents.values()].sort((a, b) =>
+    a.group_label.localeCompare(b.group_label) || a.label.localeCompare(b.label),
+  );
+}
+
+function providerPoolLabel(provider: string): string {
+  return `${PROVIDER_LABELS[provider] || provider} pool`;
+}
+
+function RouteSummary({ route }: { route?: RouteItem }) {
+  const provider = route?.key_provider || route?.provider;
+  const label = route?.key_label || (!route?.ai_key_id && provider ? providerPoolLabel(provider) : null);
+  const model = route?.model_override || route?.key_model;
+  if (!label) return <span className="text-muted">—</span>;
+  return (
+    <div>
+      <div>{label}</div>
+      <div className="text-muted">{[route?.key_label && provider, model].filter(Boolean).join(" · ")}</div>
+    </div>
+  );
 }
 
 interface AgentConfig {
@@ -1143,7 +1191,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [states, setStates] = useState<RoutingState[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; reasoningEffort: string; rank: number }[]>([]);
+  const [editRoutes, setEditRoutes] = useState<EditableRoute[]>([]);
   const [editRouteVersion, setEditRouteVersion] = useState<number>(0);
   const [editConfig, setEditConfig] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
@@ -1170,7 +1218,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         fetch("/api/admin/ai/keys"),
         fetch("/api/admin/ai/states"),
       ]);
-      if (agentsRes.ok) setAgents((await agentsRes.json()).agents ?? []);
+      if (agentsRes.ok) setAgents(listCurrentAgents((await agentsRes.json()).agents ?? []));
       if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
       if (statesRes.ok) {
         const nextStates = (await statesRes.json()).states ?? [];
@@ -1229,11 +1277,22 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     if (groupFilter && a.group_label !== groupFilter) return false;
     return true;
   });
+  const agentBeingEdited = agents.find(agent => agent.id === editingAgent);
+  const savedRoutes = editingAgent ? stateRoutesByAutomation[editingAgent] ?? agentBeingEdited?.routes ?? [] : [];
+  const poolProviders = [...new Set(savedRoutes.flatMap(route =>
+    route.provider && !route.ai_key_id ? [route.provider] : [],
+  ))];
 
   function startEdit(agent: AgentItem) {
     setEditingAgent(agent.id);
     const routes = stateRoutesByAutomation[agent.id] ?? agent.routes;
-    setEditRoutes(routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", reasoningEffort: r.reasoning_effort || "", rank: r.rank })));
+    setEditRoutes(routes.map(r => ({
+      keyId: r.ai_key_id || "",
+      provider: r.provider,
+      modelOverride: r.model_override || "",
+      reasoningEffort: r.reasoning_effort || "",
+      isEnabled: r.is_enabled,
+    })));
     setEditRouteVersion(agent.route_version ?? 0);
     setEditConfig(agent.config || { is_active: agent.is_active } as any);
     setMessage(null);
@@ -1242,17 +1301,28 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     // this modal opened - without this, routeModelInfo stays undefined and
     // the model-override field silently falls back to a plain text input
     // instead of the dropdown, for every pre-existing route.
-    for (const r of agent.routes) {
+    for (const r of routes) {
       if (r.ai_key_id) fetchKeyModels(r.ai_key_id);
     }
   }
 
   async function saveRoutes(agentId: string) {
+    if (!selectedStateId && editRoutes.some(route => route.provider && !route.keyId)) {
+      setMessage({ type: "error", text: "Select a routing state to edit shared provider routes." });
+      return;
+    }
     setSaving(true);
     try {
       const routes = editRoutes
-        .filter(r => r.keyId)
-        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, reasoning_effort: r.reasoningEffort || null, rank: i + 1 }));
+        .filter(r => r.keyId || r.provider)
+        .map((r, i) => ({
+          ai_key_id: r.keyId || null,
+          provider: r.provider,
+          model_override: r.modelOverride || null,
+          reasoning_effort: r.reasoningEffort || null,
+          is_enabled: r.isEnabled,
+          rank: i + 1,
+        }));
       const endpoint = selectedStateId
         ? `/api/admin/ai/states/${selectedStateId}/routes`
         : `/api/admin/ai/agents/${agentId}/routes`;
@@ -1344,7 +1414,9 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     finally { setStateSaving(false); }
   }
 
-  function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", reasoningEffort: "", rank: p.length + 1 }]); }
+  function addRouteRow() {
+    setEditRoutes(p => [...p, { keyId: "", provider: null, modelOverride: "", reasoningEffort: "", isEnabled: true }]);
+  }
   function removeRouteRow(idx: number) { setEditRoutes(p => p.filter((_, i) => i !== idx)); }
 
   if (loading) return <div className="loading-panel" style={{ padding: 40, textAlign: "center" }}>Loading agents...</div>;
@@ -1414,7 +1486,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
               <th>Agent</th>
               <th>Group</th>
               <th>Status</th>
-              <th>Primary Key</th>
+              <th>Primary Route</th>
               <th>Fallback 1</th>
               <th>Today</th>
               <th>Success</th>
@@ -1440,20 +1512,10 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                     </span>
                   </td>
                   <td style={{ fontSize: 12 }}>
-                    {primary?.key_label ? (
-                      <div>
-                        <div>{primary.key_label}</div>
-                        <div className="text-muted">{primary.key_provider} {(primary.model_override || primary.key_model) && `· ${primary.model_override || primary.key_model}`}</div>
-                      </div>
-                    ) : <span className="text-muted">—</span>}
+                    <RouteSummary route={primary} />
                   </td>
                   <td style={{ fontSize: 12 }}>
-                    {fallback1?.key_label ? (
-                      <div>
-                        <div>{fallback1.key_label}</div>
-                        <div className="text-muted">{fallback1.key_provider} {(fallback1.model_override || fallback1.key_model) && ` · ${fallback1.model_override || fallback1.key_model}`}</div>
-                      </div>
-                    ) : <span className="text-muted">—</span>}
+                    <RouteSummary route={fallback1} />
                   </td>
                   <td style={{ fontSize: 12 }}>
                     <div>{formatNumber(a.today_calls)} calls</div>
@@ -1474,7 +1536,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
       {editingAgent && (
         <div className="modal-overlay" onClick={() => setEditingAgent(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
-            <h2>{agents.find(a => a.id === editingAgent)?.label || "Agent"} Configuration</h2>
+            <h2>{agentBeingEdited?.label || "Agent"} Configuration</h2>
             <div className="text-muted" style={{ marginBottom: 16 }}>
               {selectedStateId
                 ? `Editing routes in ${states.find(s => s.id === selectedStateId)?.name || "selected state"}. Changes to the active state take effect immediately; draft states remain isolated until activated.`
@@ -1508,14 +1570,19 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                   return (
                   <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
                     <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i + 1}</span>
-                    <select className="input" style={{ flex: 1, minWidth: 180 }} value={r.keyId} onChange={e => {
-                      const keyId = e.target.value;
-                      const updated = [...editRoutes];
-                      updated[i].keyId = keyId;
-                      setEditRoutes(updated);
+                    <select className="input" style={{ flex: 1, minWidth: 180 }} value={r.keyId || (r.provider ? `pool:${r.provider}` : "")} onChange={e => {
+                      const value = e.target.value;
+                      const pool = poolProviders.find(provider => value === `pool:${provider}`);
+                      const keyId = pool ? "" : value;
+                      setEditRoutes(previous => previous.map((route, index) =>
+                        index === i ? { ...route, keyId, provider: pool ?? null } : route,
+                      ));
                       if (keyId) fetchKeyModels(keyId);
                     }}>
-                      <option value="">— Select key —</option>
+                      <option value="">— Select connection —</option>
+                      {poolProviders.map(provider => (
+                        <option key={provider} value={`pool:${provider}`}>{providerPoolLabel(provider)}</option>
+                      ))}
                       {enabledKeys.map(k => (
                         <option key={k.id} value={k.id}>{k.label} ({PROVIDER_LABELS[k.provider] || k.provider})</option>
                       ))}
@@ -1543,7 +1610,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                           }} />
                       )}
                     </div>
-                    {selectedKey?.provider === "opencode" && (
+                    {(selectedKey?.provider ?? r.provider) === "opencode" && (
                       <select className="input" style={{ minWidth: 130, marginTop: 0 }} value={r.reasoningEffort}
                         onChange={e => {
                           const updated = [...editRoutes];
