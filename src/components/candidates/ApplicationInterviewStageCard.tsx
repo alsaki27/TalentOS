@@ -10,7 +10,8 @@ import {
   INTERVIEW_STAGE_STATUS, safeMeetingUrl,
   type ApplicationInterviewStage, type InterviewPreparationFile,
 } from "@/lib/applicationInterviewPreparation";
-import ApplicationPreparationFiles, { requestJson } from "./ApplicationPreparationFiles";
+import { requestJson } from "./ApplicationPreparationFiles";
+import InterviewAudioPanel from "@/components/shared/InterviewAudioPanel";
 import styles from "./CandidateApplicationWorkspace.module.css";
 
 export function StageEditor({ api, stage, onSaved, onCancel }: {
@@ -202,7 +203,7 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
         </dl>
         <div className={styles.stageFileSummary}>
           <div className={styles.sectionLabel}><h4>Interview audio</h4></div>
-          <ApplicationPreparationFiles files={files} endpoint={fileUrl} audio editable showManager={false} />
+          <InterviewAudioPanel files={files} endpoint={fileUrl} onChange={onChange} />
         </div>
         {error && <p role="alert" className={styles.error}>{error}</p>}
       </article>
@@ -221,7 +222,7 @@ export function InterviewStageCard({ stage, files, api, candidateZone, onChange 
             </section>
             <section className={styles.modalSection}>
               <div className={styles.sectionLabel}><h3>Interview audio</h3></div>
-              <ApplicationPreparationFiles files={files} endpoint={fileUrl} audio editable onChange={onChange} onBusyChange={setBusy} />
+              <InterviewAudioPanel files={files} endpoint={fileUrl} onChange={onChange} onBusyChange={setBusy} />
             </section>
           </div>
         </section>

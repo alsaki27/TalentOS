@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, CalendarDays, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText, Headphones } from "lucide-react";
+import { ArrowLeft, CalendarDays, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
 import { formatZonedDateTime } from "@/lib/easternTime";
 import { INTERVIEW_STAGE_STATUS, isInterviewAudio, safeMeetingUrl } from "@/lib/applicationInterviewPreparation";
 import ApplicationPreparationFiles from "@/components/candidates/ApplicationPreparationFiles";
+import InterviewAudioPanel from "@/components/shared/InterviewAudioPanel";
 import type { InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
 import ApplicationProgress from "@/components/candidates/shared/ApplicationProgress";
 import type { CandidatePortalApplicationDetail as ApplicationDetail } from "@/lib/candidatePortalDashboardService";
@@ -91,10 +92,7 @@ function PortalInterviewStage({ interview, audio, endpoint }: {
         <h4>Preparation notes</h4>
         <p>{interview.preparation_notes}</p>
       </section>}
-      {audio.length > 0 && <section className="portal-interview-media">
-        <h4><Headphones size={15} /> Interview recordings</h4>
-        <ApplicationPreparationFiles files={audio} endpoint={endpoint} audio />
-      </section>}
+      <InterviewAudioPanel files={audio} endpoint={endpoint} />
     </article>
   );
 }
@@ -197,6 +195,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
         </div>
         <span className="portal-detail-status">{application.public_status.label}</span>
       </div>
+      <ResumePreview resume={resume} candidateName={candidateName} />
       <div className="portal-card portal-detail-card">
         <ApplicationProgress stage={application.status} history={[
           ...(application.application_date ? ["applied"] : []),
@@ -294,10 +293,6 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
         </div>
       </div>
 
-      {/* Full width, below the notes - a resume is a page-shaped document and
-          reads far better across the whole column than squeezed into the
-          narrow side rail. */}
-      <ResumePreview resume={resume} candidateName={candidateName} />
     </div>
   );
 }

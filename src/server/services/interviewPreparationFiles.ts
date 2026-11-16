@@ -5,7 +5,7 @@ import { MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib
 import { query, queryOne } from "@/server/db/neon";
 import { APPLICATION_INTERVIEW_ACCESS_SQL, canAccessInterviewDetails } from "@/lib/applicationInterviewAccess";
 
-type Actor = { user_id: string; email: string | null; display_name: string };
+type Actor = { user_id: string | null; email: string | null; display_name: string };
 
 const FILE_COLUMNS = "f.id, f.schedule_id, f.filename, f.content_type, f.size_bytes, f.visible_to_candidate";
 const DOCUMENT_TYPES = {
@@ -60,8 +60,9 @@ function error(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export async function uploadInterviewPreparation(request: Request, applicationId: string, scheduleId: string | null, actor: Actor) {
+export async function uploadInterviewPreparation(request: Request, applicationId: string, scheduleId: string | null, actor: Actor, candidateId?: string) {
   const audio = scheduleId !== null;
+  if (candidateId && !audio) return error("Candidates can only upload interview recordings.", 403);
   if (Number(request.headers.get("content-length")) > MAX_PREPARATION_FILE_BYTES + 65536) {
     return error("Files must be 20 MB or smaller.", 413);
   }
@@ -84,8 +85,9 @@ export async function uploadInterviewPreparation(request: Request, applicationId
     `SELECT a.candidate_id, c.name AS candidate_name, a.job_id, s.round_number, a.status, a.application_stage, a.ae_stage
      FROM applications a JOIN candidates c ON c.id = a.candidate_id
      LEFT JOIN interview_schedules s ON s.id = $2::uuid AND s.application_id = a.id
-     WHERE a.id = $1 AND ($2::uuid IS NULL OR s.id IS NOT NULL)`,
-    [applicationId, scheduleId]
+     WHERE a.id = $1 AND ($2::uuid IS NULL OR s.id IS NOT NULL)
+       AND ($3::uuid IS NULL OR a.candidate_id = $3)`,
+    [applicationId, scheduleId, candidateId ?? null]
   );
   if (!record) return error(audio ? "Interview stage not found." : "Application not found.", 404);
   if (!canAccessInterviewDetails(record.status, record.application_stage, record.ae_stage)) {
@@ -121,6 +123,7 @@ export async function uploadInterviewPreparation(request: Request, applicationId
          FROM applications a
          LEFT JOIN interview_schedules s ON s.id = $3::uuid AND s.application_id = a.id
          WHERE a.id = $2 AND ($3::uuid IS NULL OR s.id IS NOT NULL)
+           AND ($12::uuid IS NULL OR a.candidate_id = $12)
            AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
          RETURNING *
        ), audit AS (
@@ -130,8 +133,9 @@ export async function uploadInterviewPreparation(request: Request, applicationId
          FROM added f LEFT JOIN interview_schedules s ON s.id = f.schedule_id
        )
        SELECT ${FILE_COLUMNS} FROM added f`,
-      [id, applicationId, scheduleId, filename, contentType, file.size, itemId, form?.get("visible") === "true",
-        actor.user_id, actor.email, actor.display_name || actor.email]
+      [id, applicationId, scheduleId, filename, contentType, file.size, itemId,
+        candidateId ? true : form?.get("visible") === "true",
+        actor.user_id, actor.email, actor.display_name || actor.email, candidateId ?? null]
     );
     if (saved) return NextResponse.json(saved, { status: 201 });
   } catch (cause) {
@@ -163,8 +167,21 @@ export async function uploadInterviewPreparation(request: Request, applicationId
 }
 
 export async function updateInterviewPreparation(
-  applicationId: string, scheduleId: string | null, fileId: string, actor: Actor, change: { visible?: boolean; remove?: true }
+  applicationId: string, scheduleId: string | null, fileId: string, actor: Actor,
+  change: { visible?: boolean; remove?: true }, candidateId?: string
 ) {
+  const existing = await queryOne<{ sharepoint_item_id: string; content_type: string }>(
+    `SELECT f.sharepoint_item_id, f.content_type
+       FROM interview_preparation_files f
+       JOIN applications a ON a.id = f.application_id
+      WHERE f.id = $1 AND f.application_id = $2 AND f.removed_at IS NULL
+        AND (($3::uuid IS NULL AND f.content_type NOT LIKE 'audio/%') OR f.schedule_id = $3)
+        AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
+        AND ($4::uuid IS NULL OR (a.candidate_id = $4 AND f.visible_to_candidate))`,
+    [fileId, applicationId, scheduleId, candidateId ?? null]
+  );
+  if (!existing) return error("Preparation file not found.", 404);
+
   const updated = await queryOne<InterviewPreparationFile>(
     `WITH changed AS (
        UPDATE interview_preparation_files f
@@ -173,6 +190,10 @@ export async function updateInterviewPreparation(
        WHERE f.id = $1 AND f.application_id = $2 AND f.removed_at IS NULL
          AND (($3::uuid IS NULL AND f.content_type NOT LIKE 'audio/%') OR f.schedule_id = $3)
          AND EXISTS (SELECT 1 FROM applications a WHERE a.id = f.application_id AND ${APPLICATION_INTERVIEW_ACCESS_SQL})
+         AND ($9::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM applications a WHERE a.id = f.application_id
+             AND a.candidate_id = $9 AND f.visible_to_candidate
+         ))
        RETURNING f.*
      ), audit AS (
        INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata)
@@ -184,9 +205,42 @@ export async function updateInterviewPreparation(
        FROM changed
      )
      SELECT ${FILE_COLUMNS} FROM changed f`,
-    [fileId, applicationId, scheduleId, change.visible ?? null, change.remove === true, actor.user_id, actor.email, actor.display_name || actor.email]
+    [fileId, applicationId, scheduleId, change.visible ?? null, change.remove === true, actor.user_id,
+      actor.email, actor.display_name || actor.email, candidateId ?? null]
   );
-  return updated ? NextResponse.json(updated) : error("Preparation file not found.", 404);
+  if (!updated) return error("Preparation file not found.", 404);
+
+  if (change.remove === true && existing.content_type.startsWith("audio/")) {
+    try {
+      await deleteSharePointItem(existing.sharepoint_item_id);
+    } catch (cause) {
+      console.error("[interview-preparation] SharePoint audio removal failed", cause instanceof Error ? cause.name : "unknown");
+      try {
+        await queryOne(
+          `WITH restored AS (
+             UPDATE interview_preparation_files f SET removed_at = NULL
+              WHERE f.id = $1 AND f.application_id = $2 AND f.schedule_id = $3 AND f.removed_at IS NOT NULL
+              RETURNING f.*
+           ), audit AS (
+             INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata)
+             SELECT $4, $5,
+                    CASE WHEN $7::uuid IS NULL THEN 'interview_audio.remove_failed' ELSE 'candidate_interview_audio.remove_failed' END,
+                    'application', f.application_id,
+                    jsonb_build_object('stage_id', f.schedule_id, 'file_id', f.id, 'filename', f.filename,
+                                       'actor', $6::text, 'sharepoint_cleanup_failed', true)
+               FROM restored f
+           )
+           SELECT id FROM restored`,
+          [fileId, applicationId, scheduleId, actor.user_id, actor.email, actor.display_name, candidateId ?? null]
+        );
+      } catch (restoreCause) {
+        console.error("[interview-preparation] Could not restore audio metadata after SharePoint removal failed", restoreCause instanceof Error ? restoreCause.name : "unknown");
+      }
+      return error("SharePoint could not remove this recording. It remains available; try again later.", 502);
+    }
+  }
+
+  return NextResponse.json(updated);
 }
 
 export async function downloadInterviewPreparation(

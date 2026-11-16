@@ -24,3 +24,10 @@ export async function PATCH(request: Request, { params }: Params) {
   if (typeof body?.visible !== "boolean") return NextResponse.json({ error: "Specify file visibility." }, { status: 400 });
   return updateInterviewPreparation(params.id, params.scheduleId, params.fileId, context.profile, { visible: body.visible });
 }
+
+export async function DELETE(_request: Request, { params }: Params) {
+  const { context, response } = await requireCurrentUser(ALL_USER_ROLES);
+  if (response) return response;
+  if (!validIds(params)) return NextResponse.json({ error: "Preparation file not found." }, { status: 404 });
+  return updateInterviewPreparation(params.id, params.scheduleId, params.fileId, context.profile, { remove: true });
+}
