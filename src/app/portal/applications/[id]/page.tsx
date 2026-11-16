@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import CandidatePortalApplicationDetail from "@/components/portal/CandidatePortalApplicationDetail";
-import { PortalShell } from "../../PortalShell";
+
+function safeApplicationsReturnPath(value: string | null) {
+  return value === "/portal/applications" || value?.startsWith("/portal/applications?")
+    ? value
+    : "/portal/applications";
+}
 
 export default function CandidatePortalApplicationPage() {
   const params = useParams<{ id: string }>();
   const applicationId = params?.id;
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = safeApplicationsReturnPath(searchParams.get("returnTo"));
   const [application, setApplication] = useState<any>(null);
   const [resume, setResume] = useState<any>(null);
   const [candidateName, setCandidateName] = useState("");
@@ -26,7 +33,7 @@ export default function CandidatePortalApplicationPage() {
       refreshing = true;
       try {
         const response = await fetch(`/api/portal/me/applications/${id}`, { signal: controller.signal, cache: "no-store" });
-        if (response.status === 401) { router.push("/portal/login"); return; }
+        if (response.status === 401) { router.replace("/portal/login"); return; }
         if (response.ok) {
           const applicationData = await response.json();
           if (!disposed) setApplication(applicationData);
@@ -43,7 +50,7 @@ export default function CandidatePortalApplicationPage() {
       fetch(`/api/portal/me`, { signal: controller.signal, cache: "no-store" }),
     ])
       .then(async ([applicationResponse, resumeResponse, meResponse]) => {
-        if (applicationResponse.status === 401) { router.push("/portal/login"); return; }
+        if (applicationResponse.status === 401) { router.replace("/portal/login"); return; }
         if (!applicationResponse.ok) throw new Error("Application not found");
         const applicationData = await applicationResponse.json();
         const resumeData = resumeResponse.ok ? await resumeResponse.json() : null;
@@ -71,31 +78,19 @@ export default function CandidatePortalApplicationPage() {
     };
   }, [applicationId, router]);
 
-  async function logout() {
-    await fetch("/api/portal/auth/logout", { method: "POST" });
-    router.push("/portal/login");
-    router.refresh();
-  }
-
   if (loading) {
-    return (
-      <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
-        <div className="portal-skeleton" style={{ height: 360 }} />
-      </PortalShell>
-    );
+    return <div className="portal-skeleton" style={{ height: 360 }} />;
   }
   if (error || !application) {
     return (
-      <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
+      <>
         <p className="portal-error">{error || "Application not found."}</p>
-        <button className="portal-btn portal-btn-secondary" onClick={() => router.push("/portal/applications")}>Back to applications</button>
-      </PortalShell>
+        <button className="portal-btn portal-btn-secondary" onClick={() => router.push(returnTo)}>Back to applications</button>
+      </>
     );
   }
 
   return (
-    <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
-      <CandidatePortalApplicationDetail application={application} resume={resume} candidateName={candidateName} onBack={() => router.push("/portal/applications")} />
-    </PortalShell>
+    <CandidatePortalApplicationDetail application={application} resume={resume} candidateName={candidateName} onBack={() => router.push(returnTo)} />
   );
 }

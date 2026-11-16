@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import PortalLogo from "../../PortalLogo";
 
 function GoogleIcon() {
@@ -104,7 +105,7 @@ export default function PortalInvitePage({ params }: { params: { token: string }
           <div className="portal-logo"><PortalLogo /><span className="portal-logo-text">Skarion</span></div>
           <h1 className="portal-h1">Account already set up</h1>
           <p className="portal-sub">This invite has already been used.</p>
-          <a href="/portal/login" className="portal-btn portal-btn-primary">Go to sign in</a>
+          <Link href="/portal/login" className="portal-btn portal-btn-primary">Go to sign in</Link>
         </div>
       </div>
     );

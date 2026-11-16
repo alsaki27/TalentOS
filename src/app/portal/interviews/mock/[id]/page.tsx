@@ -1,36 +1,17 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { type ReactNode } from "react";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import CandidatePortalMockInterviewDetail from "@/components/portal/schedule/CandidatePortalMockInterviewDetail";
 import { usePortalPolling } from "@/components/portal/schedule/usePortalPolling";
 import type { PortalMockSessionDetail } from "@/lib/portalSchedule";
-import { PortalShell } from "../../../PortalShell";
 
 export default function CandidatePortalMockInterviewPage() {
   const params = useParams<{ id: string }>();
   const sessionId = params?.id;
-  const router = useRouter();
-  const [candidateName, setCandidateName] = useState("");
   const session = usePortalPolling<PortalMockSessionDetail>(sessionId ? `/api/portal/me/mock-sessions/${encodeURIComponent(sessionId)}` : null);
-
-  useEffect(() => {
-    fetch("/api/portal/me", { cache: "no-store" })
-      .then((response) => {
-        if (response.status === 401) { router.push("/portal/login"); return null; }
-        return response.ok ? response.json() : null;
-      })
-      .then((result) => { if (result) setCandidateName(result.name || ""); })
-      .catch(() => undefined);
-  }, [router]);
-
-  async function logout() {
-    await fetch("/api/portal/auth/logout", { method: "POST" });
-    router.push("/portal/login");
-    router.refresh();
-  }
 
   let body: ReactNode;
   if (session.loading && !session.data) {
@@ -55,9 +36,5 @@ export default function CandidatePortalMockInterviewPage() {
     );
   }
 
-  return (
-    <PortalShell candidateName={candidateName} pageTitle="Interviews" onSignOut={logout}>
-      {body}
-    </PortalShell>
-  );
+  return body;
 }

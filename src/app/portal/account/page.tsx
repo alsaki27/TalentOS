@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import QRCode from "react-qr-code";
 import { ShieldCheck } from "lucide-react";
-import { PortalShell } from "../PortalShell";
 
 // ARCHIVED 2026-09-07 — the "Email privacy controls" card is hidden pending
 // a future redesign of this section. Fully working code, just not
@@ -23,8 +21,6 @@ import { PortalShell } from "../PortalShell";
 // }
 
 export default function PortalAccountPage() {
-  const router = useRouter();
-  const [candidateName, setCandidateName] = useState("");
   const [mfaAvailable, setMfaAvailable] = useState(false);
   const [mfaEnrolled, setMfaEnrolled] = useState(false);
   const [mfaSetup, setMfaSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
@@ -38,14 +34,6 @@ export default function PortalAccountPage() {
   // const [gmailStatus, setGmailStatus] = useState<GmailPrivacyStatus | null>(null);
 
   useEffect(() => {
-    fetch("/api/portal/me", { cache: "no-store" })
-      .then((response) => {
-        if (response.status === 401) { router.push("/portal/login"); return null; }
-        return response.ok ? response.json() : null;
-      })
-      .then((result) => { if (result) setCandidateName(result.name || ""); })
-      .catch(() => undefined);
-
     // Bug fix: this card used to render unconditionally even when
     // CANDIDATE_MFA_ENABLED is off server-side, so "Set up Google
     // Authenticator" always failed with a raw "MFA_DISABLED" error. Now the
@@ -71,13 +59,7 @@ export default function PortalAccountPage() {
     //     }
     //   })
     //   .catch(() => undefined);
-  }, [router]);
-
-  async function logout() {
-    await fetch("/api/portal/auth/logout", { method: "POST" });
-    router.push("/portal/login");
-    router.refresh();
-  }
+  }, []);
 
   async function setupMfa() {
     setMfaMessage("");
@@ -111,7 +93,7 @@ export default function PortalAccountPage() {
   // }
 
   return (
-    <PortalShell candidateName={candidateName} pageTitle="Account" onSignOut={logout}>
+    <>
       <div className="portal-section">
         <div className="portal-section-heading">
           <div>
@@ -179,6 +161,6 @@ export default function PortalAccountPage() {
         </div>
         */}
       </div>
-    </PortalShell>
+    </>
   );
 }

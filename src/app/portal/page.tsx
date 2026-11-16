@@ -1,13 +1,11 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Briefcase, Activity, CalendarCheck2, Award, type LucideIcon } from "lucide-react";
 // ARCHIVED 2026-09-08 — FileCheck2 backed the "Resumes ready" stat card,
 // commented out below. To restore: uncomment the import and the stat card.
 // import { FileCheck2 } from "lucide-react";
 import CandidatePortalInsights from "@/components/portal/CandidatePortalInsights";
-import { PortalShell } from "./PortalShell";
 import { usePortalDashboard, DEFAULT_OVERVIEW_FILTERS } from "./usePortalDashboard";
 
 function initials(name: string) {
@@ -43,32 +41,17 @@ function DashboardSkeleton() {
 }
 
 export default function PortalOverviewPage() {
-  const router = useRouter();
   const { data, error, loading } = usePortalDashboard(DEFAULT_OVERVIEW_FILTERS);
 
-  async function logout() {
-    await fetch("/api/portal/auth/logout", { method: "POST" });
-    router.push("/portal/login");
-    router.refresh();
-  }
-
   if (error) {
-    return (
-      <PortalShell candidateName="" pageTitle="Overview" onSignOut={logout}>
-        <p className="portal-error">{error}</p>
-      </PortalShell>
-    );
+    return <p className="portal-error">{error}</p>;
   }
   if (!data) {
-    return (
-      <PortalShell candidateName="" pageTitle="Overview" onSignOut={logout}>
-        <DashboardSkeleton />
-      </PortalShell>
-    );
+    return <DashboardSkeleton />;
   }
 
   return (
-    <PortalShell candidateName={data.name} pageTitle="Overview" onSignOut={logout}>
+    <>
       <div className="portal-hero">
         <div className="portal-hero-left">
           <div className="portal-hero-avatar">{initials(data.name)}</div>
@@ -103,6 +86,6 @@ export default function PortalOverviewPage() {
       </div>
 
       <CandidatePortalInsights trend={data.trend} loading={loading} />
-    </PortalShell>
+    </>
   );
 }

@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import CandidatePortalApplications, { type PortalDashboardFilters } from "@/components/portal/CandidatePortalApplications";
-import { PortalShell } from "../PortalShell";
+import CandidatePortalApplications, { buildPortalApplicationsUrl, type PortalDashboardFilters } from "@/components/portal/CandidatePortalApplications";
 import { usePortalDashboard } from "../usePortalDashboard";
 
 function initialPortalFilters(): PortalDashboardFilters {
@@ -25,28 +23,11 @@ function initialPortalFilters(): PortalDashboardFilters {
 }
 
 export default function PortalApplicationsPage() {
-  const router = useRouter();
   const [filters, setFilters] = useState<PortalDashboardFilters>(initialPortalFilters);
   const { data, error, loading } = usePortalDashboard(filters);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    const values: Record<string, string> = {
-      search: filters.search,
-      status: filters.status,
-      source: filters.source,
-      dateRange: filters.dateRange === "all" ? "" : filters.dateRange,
-      dateFrom: filters.dateRange === "custom" ? filters.dateFrom : "",
-      dateTo: filters.dateRange === "custom" ? filters.dateTo : "",
-      resumeStatus: filters.resumeStatus === "all" ? "" : filters.resumeStatus,
-      interviewStatus: filters.interviewStatus === "all" ? "" : filters.interviewStatus,
-      needsAttention: filters.needsAttention ? "true" : "",
-      sort: filters.sort === "submitted_at" ? "" : filters.sort,
-      order: filters.order === "desc" ? "" : filters.order,
-      page: filters.page === 1 ? "" : String(filters.page),
-    };
-    Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
-    const nextUrl = params.toString() ? `/portal/applications?${params.toString()}` : "/portal/applications";
+    const nextUrl = buildPortalApplicationsUrl(filters);
     if (typeof window !== "undefined" && `${window.location.pathname}${window.location.search}` !== nextUrl) {
       window.history.replaceState(null, "", nextUrl);
     }
@@ -56,14 +37,8 @@ export default function PortalApplicationsPage() {
     setFilters((current) => ({ ...current, ...next }));
   }
 
-  async function logout() {
-    await fetch("/api/portal/auth/logout", { method: "POST" });
-    router.push("/portal/login");
-    router.refresh();
-  }
-
   return (
-    <PortalShell candidateName={data?.name || ""} pageTitle="Applications" onSignOut={logout}>
+    <>
       {error && <p className="portal-error">{error}</p>}
       <CandidatePortalApplications
         applications={data?.applications ?? []}
@@ -76,6 +51,6 @@ export default function PortalApplicationsPage() {
         loading={loading || !data}
         onFiltersChange={updateFilters}
       />
-    </PortalShell>
+    </>
   );
 }

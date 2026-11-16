@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, Briefcase, ListChecks, CalendarClock, ShieldCheck, Menu, X, LogOut, Sun, Moon, MonitorSmartphone } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
 import PortalLogo from "./PortalLogo";
@@ -11,12 +11,22 @@ import PortalLogo from "./PortalLogo";
 // Luminaux inspiration site's actual per-section pages) instead of
 // scrolling one long page back to a section.
 const NAV_ITEMS = [
-  { href: "/portal", label: "Overview", icon: LayoutDashboard },
-  { href: "/portal/applications", label: "Applications", icon: Briefcase },
-  { href: "/portal/next-up", label: "Next Up", icon: ListChecks },
-  { href: "/portal/interviews", label: "Interviews", icon: CalendarClock },
-  { href: "/portal/account", label: "Account", icon: ShieldCheck },
+  { href: "/portal", label: "Overview", pageTitle: "Overview", icon: LayoutDashboard },
+  { href: "/portal/applications", label: "Applications", pageTitle: "Application", icon: Briefcase },
+  { href: "/portal/next-up", label: "Next Up", pageTitle: "Next Up", icon: ListChecks },
+  { href: "/portal/interviews", label: "Interviews", pageTitle: "Interviews", icon: CalendarClock },
+  { href: "/portal/account", label: "Account", pageTitle: "Account", icon: ShieldCheck },
 ];
+
+function isPortalWorkspacePath(pathname: string) {
+  return NAV_ITEMS.some(({ href }) => pathname === href || (href !== "/portal" && pathname.startsWith(`${href}/`)));
+}
+
+function getPageTitle(pathname: string) {
+  const item = NAV_ITEMS.find(({ href }) => pathname === href || (href !== "/portal" && pathname.startsWith(`${href}/`)));
+  if (!item) return "";
+  return item.href === "/portal/applications" && pathname !== item.href ? item.pageTitle : item.label;
+}
 
 function PortalThemeToggle() {
   const { theme, setTheme, resolved } = useTheme();
@@ -39,19 +49,42 @@ function PortalThemeToggle() {
   );
 }
 
-export function PortalShell({
-  children,
-  candidateName,
-  pageTitle,
-  onSignOut,
-}: {
-  children: ReactNode;
-  candidateName: string;
-  pageTitle: string;
-  onSignOut: () => void;
-}) {
+export function PortalShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [candidateName, setCandidateName] = useState("");
   const pathname = usePathname();
+  const router = useRouter();
+  const currentPath = pathname || "/portal";
+  const workspacePath = isPortalWorkspacePath(currentPath);
+  const pageTitle = getPageTitle(currentPath);
+
+  useEffect(() => {
+    if (!workspacePath) {
+      setCandidateName("");
+      return;
+    }
+    const controller = new AbortController();
+    fetch("/api/portal/me", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (response.status === 401) {
+          router.replace("/portal/login");
+          return null;
+        }
+        return response.ok ? response.json() : null;
+      })
+      .then((profile) => {
+        if (profile && !controller.signal.aborted) setCandidateName(profile.name || "");
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [workspacePath, router]);
+
+  useEffect(() => setMobileOpen(false), [pathname]);
+
+  async function signOut() {
+    await fetch("/api/portal/auth/logout", { method: "POST" });
+    router.replace("/portal/login");
+  }
 
   function initials(name: string) {
     return (
@@ -76,6 +109,10 @@ export function PortalShell({
     if (href === "/portal") return pathname === "/portal";
     return pathname === href || pathname?.startsWith(`${href}/`);
   }
+
+  // Public login, onboarding, invite, reset, and legacy-token pages do not use
+  // the authenticated workspace chrome.
+  if (!workspacePath) return <>{children}</>;
 
   return (
     <div className={`portal-layout ${mobileOpen ? "portal-sidebar-open" : ""}`}>
@@ -111,7 +148,7 @@ export function PortalShell({
                 the "Welcome back" hero on Overview instead. */}
             <span className="portal-sidebar-profile-name">{firstName(candidateName)}</span>
           </div>
-          <button type="button" className="portal-sidebar-signout" onClick={onSignOut}>
+          <button type="button" className="portal-sidebar-signout" onClick={signOut}>
             <LogOut size={15} />
             Sign out
           </button>
@@ -136,7 +173,9 @@ export function PortalShell({
           </div>
         </header>
 
-        <main className="portal-main">{children}</main>
+        <main className="portal-main">
+          <div key={pathname} className="portal-page-transition">{children}</div>
+        </main>
       </div>
     </div>
   );

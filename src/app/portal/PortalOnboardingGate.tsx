@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 function isPublicPortalPath(pathname: string) {
@@ -19,12 +19,18 @@ export default function PortalOnboardingGate({ children }: { children: ReactNode
   const router = useRouter();
   const [state, setState] = useState<"checking" | "allowed" | "blocked">("checking");
   const [retryNonce, setRetryNonce] = useState(0);
+  const confirmedProtectedAccess = useRef(false);
 
   useEffect(() => {
     if (isPublicPortalPath(pathname) || isLegacyTokenPath(pathname)) {
+      confirmedProtectedAccess.current = false;
       setState("allowed");
       return;
     }
+
+    // Keep the shared portal visible during client-side navigation after the
+    // initial access check. Protected API routes continue to authenticate each request.
+    if (confirmedProtectedAccess.current) return;
 
     let active = true;
     setState("checking");
@@ -44,6 +50,7 @@ export default function PortalOnboardingGate({ children }: { children: ReactNode
           router.replace("/portal/onboarding");
           return;
         }
+        confirmedProtectedAccess.current = true;
         setState("allowed");
       })
       .catch(() => { if (active) setState("blocked"); });

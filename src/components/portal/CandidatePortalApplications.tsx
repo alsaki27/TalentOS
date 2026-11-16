@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { Search, SearchX, Circle, RotateCw, Gem, Star, CircleSlash, type LucideIcon } from "lucide-react";
 
 export interface PortalApplication {
@@ -51,6 +52,27 @@ export interface PortalDashboardFilters {
   sort: string;
   order: string;
   page: number;
+}
+
+export function buildPortalApplicationsUrl(filters: PortalDashboardFilters) {
+  const params = new URLSearchParams();
+  const values: Record<string, string> = {
+    search: filters.search,
+    status: filters.status,
+    source: filters.source,
+    dateRange: filters.dateRange === "all" ? "" : filters.dateRange,
+    dateFrom: filters.dateRange === "custom" ? filters.dateFrom : "",
+    dateTo: filters.dateRange === "custom" ? filters.dateTo : "",
+    resumeStatus: filters.resumeStatus === "all" ? "" : filters.resumeStatus,
+    interviewStatus: filters.interviewStatus === "all" ? "" : filters.interviewStatus,
+    needsAttention: filters.needsAttention ? "true" : "",
+    sort: filters.sort === "submitted_at" ? "" : filters.sort,
+    order: filters.order === "desc" ? "" : filters.order,
+    page: filters.page === 1 ? "" : String(filters.page),
+  };
+  Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
+  const query = params.toString();
+  return query ? `/portal/applications?${query}` : "/portal/applications";
 }
 
 interface Props {
@@ -107,6 +129,8 @@ function FilterSelect({ label, value, onChange, children }: { label: string; val
 }
 
 export default function CandidatePortalApplications({ applications, total, page, pageSize, totalPages, sourceCounts, filters, loading, onFiltersChange }: Props) {
+  const returnTo = buildPortalApplicationsUrl(filters);
+
   return (
     <section className="portal-section" aria-labelledby="applications-heading">
       <div className="portal-section-heading">
@@ -229,7 +253,12 @@ export default function CandidatePortalApplications({ applications, total, page,
                   {application.application_resume_provided !== null && application.application_resume_provided !== undefined && <span className="portal-next-action">Resume: {application.application_resume_provided ? "Provided" : "Not provided"}</span>}
                   {application.missing_info.includes("Job link") && <span className="portal-next-action">Job posting link not provided</span>}
                   {application.job?.source_url && <a className="portal-btn portal-btn-small portal-btn-secondary" href={application.job.source_url} target="_blank" rel="noreferrer">View job posting</a>}
-                  <a className="portal-btn portal-btn-small portal-btn-secondary" href={`/portal/applications/${application.id}`}>View details</a>
+                  <Link
+                    className="portal-btn portal-btn-small portal-btn-secondary"
+                    href={`/portal/applications/${encodeURIComponent(application.id)}?${new URLSearchParams({ returnTo }).toString()}`}
+                  >
+                    View details
+                  </Link>
                 </div>
               </article>
             );
