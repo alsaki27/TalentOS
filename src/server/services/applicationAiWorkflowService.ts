@@ -10,6 +10,7 @@ import { EVIDENCE_RESUME_STAGES, LEGACY_RESUME_STAGES, RESUME_EVIDENCE_VARIANT, 
 import { prepareEvidenceStage, sendEvidenceTask } from "@/lib/ai/application-agents/evidencePipeline";
 import { findCompletedResumeModelCheckpoint, ResumeModelCheckpointError, withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
 import { isOpenAiLuna } from "@/server/services/aiProvider";
+import { configuredOpenAiReasoningEffort, forgeReasoningOutputBudget } from "@/lib/ai/openAiReasoning";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
@@ -1114,11 +1115,16 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
           const allowOpenCodeFallback = oldPin?.provider === "anthropic" &&
             (agentId === "application_hiring_panel" || agentId === "application_final_polish");
           const forgeTask = agentId === "application_resume_forge" ? evidence?.task : null;
-          const draftIdentity = (model: string) => ({
-            candidateId: ctx.candidateId, jobId: ctx.job.id, model,
-            base: ctx.baseResume.content, job: resolveJobDescription(ctx.job), verifiedSkills: ctx.verifiedSkills,
-            promptVersion: agentConfig?.prompt_version ?? null,
-          });
+          const draftIdentity = (model: string, effort?: string | null) => {
+            const reasoning = configuredOpenAiReasoningEffort(model, effort);
+            return {
+              candidateId: ctx.candidateId, jobId: ctx.job.id, model,
+              base: ctx.baseResume.content, job: resolveJobDescription(ctx.job), verifiedSkills: ctx.verifiedSkills,
+              promptVersion: agentConfig?.prompt_version ?? null,
+              // Preserve existing checkpoints made with the default (Off).
+              ...(reasoning && reasoning !== "none" ? { reasoningEffort: reasoning } : {}),
+            };
+          };
           const callCtx: CallContext = {
             userId: wf.started_by ?? undefined, workflowId, applicationId: wf.application_id,
             stageRunId: stageRun.id, promptVersion: agentConfig?.prompt_version ?? null,
@@ -1132,7 +1138,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
                 return { result: await invoke(), reused: false };
               }
               return withResumeModelCheckpoint({
-                workflowId, task: forgeTask, identity: draftIdentity(route.model),
+                workflowId, task: forgeTask, identity: draftIdentity(route.model, route.reasoningEffort),
               }, invoke);
             } : undefined,
             signal: deadline.signal,
@@ -1142,7 +1148,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
           const primaryModel = primary?.model_override ?? oldPin?.model;
           const cached = forgeTask && primaryProvider === "openai" && isOpenAiLuna(primaryModel)
             ? await findCompletedResumeModelCheckpoint<CallWithUsageTrackingResult<unknown>>({
-                task: forgeTask, identity: draftIdentity(primaryModel),
+                task: forgeTask, identity: draftIdentity(primaryModel, primary?.reasoning_effort),
               })
             : null;
           const runStage = () => callWithUsageTracking(routeId, callCtx, async (provider, route) => {
@@ -1150,7 +1156,13 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
               const task = forgeTask && route && (route.name !== "openai" || !isOpenAiLuna(route.model))
                 ? { ...evidence.task, system: evidence.task.system + ' Return JSON only with a "prioritize" array of evidence IDs.' }
                 : evidence.task;
-              const output = await sendEvidenceTask(task, provider, agentOptions);
+              const reasoningBudget = forgeTask && route?.name === "openai"
+                ? forgeReasoningOutputBudget(configuredOpenAiReasoningEffort(route.model, route.reasoningEffort))
+                : 0;
+              const output = await sendEvidenceTask(task, provider, reasoningBudget ? {
+                ...agentOptions,
+                max_output_tokens: Math.max(agentOptions.max_output_tokens ?? 0, reasoningBudget),
+              } : agentOptions);
               if (agentId === "application_resume_forge") {
                 await evidence.finish(output);
                 return output;

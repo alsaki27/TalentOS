@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { evidenceRouteId, LEGACY_RESUME_STAGES } from "@/lib/ai/application-agents/workflowStages";
 import { PROVIDER_LABELS, PROVIDER_NATIVE_DEFAULTS, PROVIDER_MODEL_PRESETS } from "@/lib/ai/providerPresets";
+import { isOpenAiLuna, openAiReasoningEfforts } from "@/lib/ai/openAiReasoning";
 
 // ── Types ──
 
@@ -89,6 +90,8 @@ interface EditableRoute {
   reasoningEffort: string;
   isEnabled: boolean;
 }
+
+const OPENCODE_REASONING_EFFORTS = ["off", "low", "medium", "high", "xhigh", "max"];
 
 function listCurrentAgents(catalog: AgentItem[]): AgentItem[] {
   const agents = new Map(catalog.map(agent => [agent.id, agent]));
@@ -1315,14 +1318,21 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     try {
       const routes = editRoutes
         .filter(r => r.keyId || r.provider)
-        .map((r, i) => ({
-          ai_key_id: r.keyId || null,
-          provider: r.provider,
-          model_override: r.modelOverride || null,
-          reasoning_effort: r.reasoningEffort || null,
-          is_enabled: r.isEnabled,
-          rank: i + 1,
-        }));
+        .map((r, i) => {
+          const key = enabledKeys.find(k => k.id === r.keyId);
+          const provider = key?.provider ?? r.provider;
+          const model = r.modelOverride.trim() || key?.model;
+          const reasoning = provider === "openai" && !openAiReasoningEfforts(model).includes(r.reasoningEffort)
+            ? null : r.reasoningEffort || null;
+          return {
+            ai_key_id: r.keyId || null,
+            provider: r.provider,
+            model_override: r.modelOverride || null,
+            reasoning_effort: reasoning,
+            is_enabled: r.isEnabled,
+            rank: i + 1,
+          };
+        });
       const endpoint = selectedStateId
         ? `/api/admin/ai/states/${selectedStateId}/routes`
         : `/api/admin/ai/agents/${agentId}/routes`;
@@ -1557,6 +1567,12 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                   const isRouteModelCustom = !!(r.modelOverride && routeModelInfo &&
                     !routeModels.some((m: any) => m.id === r.modelOverride));
                   const selectedKey = r.keyId ? enabledKeys.find(k => k.id === r.keyId) : null;
+                  const routeProvider = selectedKey?.provider ?? r.provider;
+                  const routeModel = r.modelOverride.trim() || selectedKey?.model;
+                  const reasoningEfforts = routeProvider === "opencode" ? OPENCODE_REASONING_EFFORTS
+                    : routeProvider === "openai" && selectedStateId ? openAiReasoningEfforts(routeModel)
+                    : [];
+                  const currentEffort = reasoningEfforts.includes(r.reasoningEffort) ? r.reasoningEffort : "";
                   const capabilityWarnings: string[] = [];
                   if (editingAgent && PIPELINE_AGENT_IDS.has(editingAgent) && selectedKey) {
                     if (selectedKey.supports_tools === false) {
@@ -1610,20 +1626,16 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                           }} />
                       )}
                     </div>
-                    {(selectedKey?.provider ?? r.provider) === "opencode" && (
-                      <select className="input" style={{ minWidth: 130, marginTop: 0 }} value={r.reasoningEffort}
+                    {reasoningEfforts.length > 0 && (
+                      <select className="input" aria-label={`Reasoning effort for rank ${i + 1}`}
+                        style={{ minWidth: 130, marginTop: 0 }} value={currentEffort}
                         onChange={e => {
                           const updated = [...editRoutes];
                           updated[i].reasoningEffort = e.target.value;
                           setEditRoutes(updated);
                         }}>
-                        <option value="">Reasoning: default</option>
-                        <option value="off">Reasoning: off</option>
-                        <option value="low">Reasoning: low</option>
-                        <option value="medium">Reasoning: medium</option>
-                        <option value="high">Reasoning: high</option>
-                        <option value="xhigh">Reasoning: xhigh</option>
-                        <option value="max">Reasoning: max</option>
+                        <option value="">Reasoning: {routeProvider === "openai" && isOpenAiLuna(routeModel) ? "default (off)" : "default"}</option>
+                        {reasoningEfforts.map(effort => <option key={effort} value={effort}>Reasoning: {effort}</option>)}
                       </select>
                     )}
                     <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)} style={{ marginTop: 6 }}>×</button>

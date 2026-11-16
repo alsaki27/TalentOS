@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { sanitizeApiError } from "@/lib/utils";
+import { openAiReasoningEfforts } from "@/lib/ai/openAiReasoning";
 import { sql as getSql, query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -91,15 +92,20 @@ export async function PUT(
     });
 
     const keyIds = [...new Set(normalized.map((route) => route.aiKeyId).filter(Boolean))] as string[];
-    if (keyIds.length > 0) {
-      const keys = await query<any>(
-        "SELECT id FROM ai_api_keys WHERE id = ANY($1) AND is_enabled = true",
+    const enabledKeys = keyIds.length > 0
+      ? await query<{ id: string; provider: string; model: string | null }>(
+        "SELECT id, provider, COALESCE(model, default_model) AS model FROM ai_api_keys WHERE id = ANY($1) AND is_enabled = true",
         [keyIds],
-      );
-      const enabledIds = new Set(keys.map((key: any) => key.id));
-      const missing = keyIds.find((id) => !enabledIds.has(id));
-      if (missing) {
-        return NextResponse.json({ error: "Every selected connection must exist and be enabled" }, { status: 400 });
+      ) : [];
+    const keysById = new Map(enabledKeys.map(key => [key.id, key]));
+    if (keyIds.some(id => !keysById.has(id))) {
+      return NextResponse.json({ error: "Every selected connection must exist and be enabled" }, { status: 400 });
+    }
+    for (const route of normalized) {
+      const key = route.aiKeyId ? keysById.get(route.aiKeyId) : undefined;
+      if ((key?.provider ?? route.provider) === "openai" && route.reasoningEffort &&
+          !openAiReasoningEfforts(route.modelOverride ?? key?.model).includes(route.reasoningEffort)) {
+        return NextResponse.json({ error: `Route ${route.rank} has an unsupported reasoning effort for the OpenAI model` }, { status: 400 });
       }
     }
 

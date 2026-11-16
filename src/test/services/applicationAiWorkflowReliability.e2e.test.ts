@@ -185,6 +185,7 @@ vi.mock("@/lib/ai/routing", () => ({
 import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import { callWithUsageTracking } from "@/lib/ai/routing";
+import { findCompletedResumeModelCheckpoint, withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
 
 describe("application AI pipeline reliability — 10-log E2E state machine", () => {
   beforeEach(() => {
@@ -271,4 +272,44 @@ describe("application AI pipeline reliability — 10-log E2E state machine", () 
     expect(release?.data.exportReady).toBe(true);
     expect(release?.data.documentValidation.pdfHash).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it.each([[null, 850], ["off", 850], ["high", 4096]] as const)(
+    "uses reasoning %s in the Forge checkpoint and sends at most %i tokens for the fixture",
+    async (effort, expectedBudget) => {
+      const id = "historical-log-1";
+      const workflow = h.workflows.get(id);
+      const forge = "application_resume_forge_evidence_v2";
+      const route = { name: "openai", model: "gpt-6-luna", reasoningEffort: effort };
+      Object.assign(workflow.config_snapshot, {
+        pipelineVariant: "resume_evidence_v2",
+        evidenceConfigs: { [forge]: { is_active: true, max_output_tokens: 850, timeout_ms: 1000, max_attempts: 1 } },
+        evidenceRouteChains: {
+          [forge]: [{ automation_id: forge, provider: "openai", model_override: route.model,
+            ai_key_id: "luna-test", rank: 1, reasoning_effort: effort }],
+        },
+        verifiedSkills: ["Kubernetes"], forgeInputChars: 6000,
+        job: { title: "Engineer", description: "Required qualifications\nMust know Kubernetes." },
+        baseResume: { content: { skills: ["Linux"], experience: [], education: [] } },
+      });
+      const send = vi.fn(async () => ({
+        stopReason: "end_turn",
+        content: [{ type: "text" as const, text: '{"prioritize":["s1"]}' }],
+      }));
+      vi.mocked(callWithUsageTracking).mockImplementationOnce(async (_id, ctx, fn) =>
+        (await ctx!.checkpointResumeDraft!(route, async () => ({
+          result: await fn({ send }, route), providerName: route.name, aiKeyId: "luna-test",
+          model: route.model, routeRank: 1, inputTokens: 200, outputTokens: 100, estimatedCostUsd: null, latencyMs: 200,
+        }))).result,
+      );
+      await processWorkflowStage(id);
+      expect(send).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: expectedBudget }));
+      const lookup = vi.mocked(findCompletedResumeModelCheckpoint).mock.calls[0][0];
+      const reservation = vi.mocked(withResumeModelCheckpoint).mock.calls[0][0];
+      expect(lookup.identity).toEqual(reservation.identity);
+      if (effort === "high") expect(lookup.identity).toHaveProperty("reasoningEffort", "high");
+      else expect(lookup.identity).not.toHaveProperty("reasoningEffort");
+      expect(h.stageRuns.get(id)?.[0]?.status).toBe("success");
+    },
+  );
 });

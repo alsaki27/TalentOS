@@ -675,7 +675,7 @@ export interface CallContext {
   signal?: AbortSignal;
   resumeEvidenceRoute?: ResumeEvidenceRoute;
   checkpointResumeDraft?: <T>(
-    route: Pick<AutomationRouteResult, "name" | "model">,
+    route: Pick<AutomationRouteResult, "name" | "model" | "reasoningEffort">,
     invoke: () => Promise<CallWithUsageTrackingResult<T>>,
   ) => Promise<{ result: CallWithUsageTrackingResult<T>; reused: boolean }>;
   // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
@@ -701,7 +701,7 @@ export interface CallContext {
 export async function callWithUsageTracking<T>(
   automationId: string,
   ctx: CallContext | undefined,
-  fn: (provider: AiProvider, route: Pick<AutomationRouteResult, "name" | "model">) => Promise<T>,
+  fn: (provider: AiProvider, route: Pick<AutomationRouteResult, "name" | "model" | "reasoningEffort">) => Promise<T>,
   excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
 

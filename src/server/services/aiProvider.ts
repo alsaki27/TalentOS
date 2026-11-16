@@ -7,6 +7,7 @@ import { AiProvider, requestSignal, textOf, type AiContentBlock } from "@/lib/ai
 import { callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
 import { createOpenAiResponsesProvider } from "@/lib/ai/openAiResponsesProvider";
+import { configuredOpenAiReasoningEffort, isOpenAiLuna } from "@/lib/ai/openAiReasoning";
 import { PROVIDER_NATIVE_DEFAULTS } from "@/lib/ai/providerPresets";
 import {
   listEnabledAiKeys,
@@ -25,8 +26,7 @@ interface ActiveProvider {
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
-export const isOpenAiLuna = (model: string | null | undefined): model is string =>
-  !!model && /^gpt-(?:6|5\.6)-luna(?:-|$)/.test(model);
+export { isOpenAiLuna } from "@/lib/ai/openAiReasoning";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
 
 function unwrapProxyReviewText(text: string): string {
@@ -475,11 +475,12 @@ export function buildProviderFromDbKey(
     }
     case "openai": {
       const preset = PROVIDER_NATIVE_DEFAULTS["openai"];
-      if (isOpenAiLuna(model)) {
+      const effort = configuredOpenAiReasoningEffort(model, reasoningEffort);
+      if (model && effort) {
         return createOpenAiResponsesProvider({
           apiUrl: resolveApiUrl(baseUrl, "/responses", "https://api.openai.com/v1/responses"),
           apiKey, model, native: true, errorLabel: "OpenAI API",
-          reasoningEffort: !reasoningEffort || reasoningEffort === "off" ? "none" : reasoningEffort,
+          reasoningEffort: effort,
         });
       }
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.openai.com/v1/chat/completions";
