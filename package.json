@@ -23,6 +23,7 @@
     "cf:types:check": "node scripts/verify-cloudflare-types.mjs"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^2.0.0",
     "@neondatabase/serverless": "^1.1.0",
     "@radix-ui/react-accordion": "^1.2.14",
     "@radix-ui/react-alert-dialog": "^1.1.17",

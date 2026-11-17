@@ -1,7 +1,7 @@
 import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
-import { renderEvidenceReleasePdf } from "@/lib/ai/application-agents/resumeReleasePdf";
 import { queryOne } from "@/server/db/neon";
 import { archiveResumeToSharePoint } from "./resumeSharePointArchiveService";
+import { renderStudioResumePdf, StudioResumeLayoutError } from "./studioResumePdf";
 
 export class ResumeReleaseError extends Error {}
 
@@ -30,12 +30,12 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
   const source = await queryOne<{
     version_id: string | null; content: unknown; candidate_id: string; candidate_name: string;
     job_id: string | null; job_title: string | null; company: string | null;
-    finalized: boolean; review_required: boolean; updated_at: string; max_pages: number | null;
+    finalized: boolean; review_required: boolean; updated_at: string;
     edited: boolean; approval_status: string | null; export_id: string | null;
   }>(
     `SELECT v.id AS version_id, v.content, a.candidate_id, c.name AS candidate_name,
             a.job_id, j.title AS job_title, j.company, w.status = 'completed' AS finalized,
-            v.updated_at::text AS updated_at, (w.config_snapshot->>'resumeMaxPages')::integer AS max_pages,
+            v.updated_at::text AS updated_at,
             release_artifact.data->>'exportReady' IS DISTINCT FROM 'true' AS review_required,
             v.updated_by_user_id IS NOT NULL AS edited,
             a.review_status AS approval_status, stored.id::text AS export_id
@@ -65,8 +65,11 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
     throw new ResumeReleaseError("Open the draft and resolve the review findings before approving it");
   }
 
-  const pdf = await renderEvidenceReleasePdf(source.content, source.max_pages ?? 2).catch(() => null);
-  if (!pdf?.passed) throw new ResumeReleaseError("The current PDF needs layout or identity corrections");
+  const pdf = await renderStudioResumePdf(source.content).catch(error => {
+    if (error instanceof StudioResumeLayoutError) throw new ResumeReleaseError(error.message);
+    console.error("[resume-approval] Studio PDF rendering failed", error instanceof Error ? error.name : typeof error);
+    throw new ResumeReleaseError("Could not render the saved Studio PDF. Please retry approval.");
+  });
   const result = await archiveResumeToSharePoint({
     applicationId, resumeVersionId: source.version_id, exportType: "pdf",
     candidateId: source.candidate_id, candidateName: source.candidate_name,
@@ -91,4 +94,5 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
     [applicationId, source.version_id, JSON.stringify(source.content), JSON.stringify(receipt), source.updated_at],
   );
   if (!approved) throw new ResumeReleaseError("The resume changed while approving it. Reopen the current version and try again.");
+  return { pageCount: pdf.metrics.pageCount };
 }

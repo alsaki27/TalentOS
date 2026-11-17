@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import { LEGACY_PAGE_FIT_BATCH_SIZE, STUDIO_PAGE_FIT_CHANNEL } from "@/lib/falood/studioPageFit";
-import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
-import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
+import { formatScoreOutOfTen } from "@/lib/scoreScale";
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 import { hiringPanelScoreText, missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
 import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { ResumeQcDialog } from "./components/ResumeQcDialog";
+import { WorkflowFindingsDialog } from "./components/WorkflowFindingsDialog";
 import { LegacyPageFitBatch, type LegacyPageFitResult } from "./components/LegacyPageFitBatch";
 
 interface PageFitMetrics {
@@ -339,8 +339,8 @@ export default function ApplicationQueuePage() {
   const [transferTarget, setTransferTarget] = useState<{ id: string; name: string } | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
 
-  const [expandedWorkflow, setExpandedWorkflow] = useState<string | null>(null);
-  const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
+  const [findingsItem, setFindingsItem] = useState<QueueItem | null>(null);
+  const findingsTrigger = useRef<HTMLElement | null>(null);
   const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
   const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
 
@@ -822,7 +822,9 @@ export default function ApplicationQueuePage() {
         ae_applied_by_name: updated?.ae_applied_by_name ?? item.ae_applied_by_name,
       } : item));
       setActionLoading(null);
-      setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".` });
+      const pageCount = updated?.resume_release?.pageCount;
+      const pageNotice = pageCount > 1 ? ` The approved PDF has ${pageCount} pages.` : "";
+      setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".${pageNotice}` });
       load(page, false);
     } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
   }
@@ -901,20 +903,10 @@ export default function ApplicationQueuePage() {
     finally { setActionLoading(null); }
   }
 
-  async function fetchWorkflowDetails(item: QueueItem) {
+  function openWorkflowDetails(item: QueueItem) {
     if (!item.workflow_id) return;
-    if (workflowDetails[item.workflow_id]) {
-      setExpandedWorkflow(expandedWorkflow === item.workflow_id ? null : item.workflow_id);
-      return;
-    }
-    setExpandedWorkflow(item.workflow_id);
-    try {
-      const res = await fetch(`/api/application-ai-workflows/${item.workflow_id}?action=status`, { cache: "no-store" });
-      if (res.ok) {
-        const data = await res.json();
-        setWorkflowDetails(p => ({ ...p, [item.workflow_id!]: data }));
-      }
-    } catch {}
+    findingsTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setFindingsItem(item);
   }
 
 
@@ -1472,7 +1464,7 @@ export default function ApplicationQueuePage() {
             </thead>
             <tbody>
               {items.map(item => (
-                <tr key={item.id} className={[expandedWorkflow === item.id ? "row-expanded" : "", item.jobs?.eligibility_restricted ? "row-restricted" : ""].filter(Boolean).join(" ")}>
+                <tr key={item.id} className={item.jobs?.eligibility_restricted ? "row-restricted" : undefined}>
                   <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
                   
                   <td className="cell-main">
@@ -1541,7 +1533,7 @@ export default function ApplicationQueuePage() {
                         : legacyPageFit[item.id]?.target.key === legacyPageFitKey(item) ? legacyPageFit[item.id].metrics : null}
                       onStartWorkflow={startWorkflow}
                       onRegenerate={regenerateWorkflow}
-                      onFetchDetails={fetchWorkflowDetails}
+                      onFetchDetails={openWorkflowDetails}
                       onReview={async (wfId: string, action: string) => {
                         setActionLoading(`${item.id}:${action}`);
                         try {
@@ -1567,35 +1559,8 @@ export default function ApplicationQueuePage() {
                         } catch (err: any) { alert(err.message); }
                         finally { setActionLoading(null); }
                       }}
-                      expandedWorkflow={expandedWorkflow}
-                      workflowDetails={workflowDetails}
                       workflowStageLabel={workflowStageLabel}
                     />
-                    {expandedWorkflow === item.workflow_id && item.workflow_id && (
-                      <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
-                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (() => {
-                          const lastError: string = workflowDetails[item.workflow_id].workflow.last_error;
-                          const classification = classifyWorkflowFailure(lastError);
-                          return (
-                            <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
-                              <strong>Why this failed:</strong> {classification?.reason ?? lastError}
-                              {classification && classification.category !== "other" && (
-                                <details style={{ marginTop: 6 }}>
-                                  <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>Technical details</summary>
-                                  <div style={{ fontSize: 11, marginTop: 4, opacity: 0.85 }}>{lastError}</div>
-                                </details>
-                              )}
-                            </div>
-                          );
-                        })()}
-                        {(item.workflow_stage ?? 0) >= 1 && (
-                          <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
-                        )}
-                        <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
-                          View full pipeline in Status page →
-                        </Link>
-                      </div>
-                    )}
                   </td>
 
                   <td className="queue-score-column">
@@ -1818,6 +1783,15 @@ export default function ApplicationQueuePage() {
           onSaved={() => { void refreshQueueInPlace(); }}
         />
       )}
+      <WorkflowFindingsDialog
+        workflowId={findingsItem?.workflow_id ?? null}
+        ticketNumber={findingsItem?.app_number ?? null}
+        candidate={findingsItem?.candidates?.name}
+        job={findingsItem?.jobs?.title}
+        company={findingsItem?.jobs?.company}
+        onClose={() => setFindingsItem(null)}
+        restoreFocus={() => findingsTrigger.current?.focus()}
+      />
     </div>
   );
 }
@@ -1880,152 +1854,11 @@ function QueueScoreCell({ item }: { item: QueueItem }) {
   );
 }
 
-/** Findings are displayed inline in the queue, matching the pipeline board,
- * so reviewers do not lose their place by opening another page. */
-function QueueFindingsPanel({ details }: { details: any }) {
-  const artifacts: any[] = details?.artifacts ?? [];
-  const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
-  const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
-  const qualificationFit = artifacts.find((a) => a.automation_id === "application_qualification_fit")?.data;
-  const qualificationFitText = qualificationFit
-    ? qualificationFitScoreText(qualificationFit.score, qualificationFit.scoreRange)
-    : "—";
-  return (
-    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
-      {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 4 }}>
-            {[
-              ["ATS", hiringPanel.atsScore],
-              ["Recruiter", hiringPanel.recruiterScore],
-              ["Role fit", hiringPanel.roleFitScore],
-              ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
-            ].map(([label, value]) => (
-              <div key={String(label)} style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>{label}</div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{scoreLabel(value as number | null) }</div>
-              </div>
-            ))}
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>Qualification</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{qualificationFitText}</div>
-            </div>
-          </div>
-          {qualificationFit && (
-            <div style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 5, display: "grid", gap: 5 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <strong>Qualification fit {qualificationFitText}</strong>
-                <span className={`badge ${qualificationFit.status === "scored" ? "badge-success" : "badge-warning"}`}>
-                  {qualificationFit.status === "scored" ? "evidence scored" : qualificationFit.status.replaceAll("_", " ")}
-                </span>
-                {typeof qualificationFit.evidenceCoverage === "number" && (
-                  <span className="text-muted">{qualificationFit.evidenceCoverage}% candidate evidence</span>
-                )}
-                {typeof qualificationFit.jobGroundingCoverage === "number" && (
-                  <span className="text-muted">{qualificationFit.jobGroundingCoverage}% job requirements grounded</span>
-                )}
-              </div>
-              <div className="muted">{qualificationFit.summary}</div>
-              <div className="text-muted" style={{ fontSize: 10 }}>
-                Range: the lower end uses confirmed earned weight over all requirement weight; the upper end includes unresolved requirement weight. Candidate evidence coverage and job requirement grounding are shown separately. A verified hard experience gap caps the result at 4.0. Rubric: {qualificationFit.rubricVersion}.
-                {typeof qualificationFit.rawScore === "number" && typeof qualificationFit.score === "number" && qualificationFit.score < qualificationFit.rawScore
-                  ? ` Raw score ${scoreLabel(qualificationFit.rawScore)} was capped to ${scoreLabel(qualificationFit.score)}.`
-                  : ""}
-              </div>
-              {Array.isArray(qualificationFit.criteria) && qualificationFit.criteria.length > 0 && (
-                <div style={{ display: "grid", gap: 4 }}>
-                  {qualificationFit.criteria.slice(0, 8).map((criterion: any, index: number) => (
-                    <div key={`${criterion.requirement}-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(130px, 1fr) auto", gap: 8, alignItems: "start" }}>
-                      <div>
-                        <div>{criterion.requirement}</div>
-                        {criterion.jobEvidence && (
-                          <div className="text-muted" style={{ fontSize: 10 }}>Job: {criterion.jobEvidence}</div>
-                        )}
-                        {Array.isArray(criterion.evidenceExcerpts) && criterion.evidenceExcerpts.length > 0 && (
-                          <div className="text-muted" style={{ fontSize: 10 }}>Candidate evidence: {criterion.evidenceExcerpts.join("; ")}</div>
-                        )}
-                        {Array.isArray(criterion.evidence) && criterion.evidence.length > 0 && (
-                          <div className="text-muted" style={{ fontSize: 10 }}>Source: {criterion.evidence.join(", ")}</div>
-                        )}
-                      </div>
-                      <span className="text-muted" title={criterion.explanation}>
-                        {String(criterion.status).replace(/_/g, " ")} · {criterion.points}/{criterion.weight}
-                      </span>
-                    </div>
-                  ))}
-                  {qualificationFit.criteria.length > 8 && <span className="text-muted">+ {qualificationFit.criteria.length - 8} more criteria</span>}
-                </div>
-              )}
-            </div>
-          )}
-          {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--ink-soft)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
-          {hiringPanel.disposition && (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-              <span
-                className={`badge badge-${hiringPanel.disposition === "pursue" ? "success" : hiringPanel.disposition === "review" ? "info" : hiringPanel.disposition === "deprioritize" ? "warning" : "danger"}`}
-                style={{ fontSize: 9, textTransform: "capitalize" }}
-              >
-                {hiringPanel.disposition}
-              </span>
-              {Array.isArray(hiringPanel.dispositionReasons) && hiringPanel.dispositionReasons.length > 0 && (
-                <span style={{ color: "var(--ink-soft)" }}>{hiringPanel.dispositionReasons.join(" · ")}</span>
-              )}
-            </div>
-          )}
-          {hiringPanel.requiredEdits?.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
-              {hiringPanel.requiredEdits.map((e: any, i: number) => (
-                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
-                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
-                  <span>{e.description}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {finalPolish && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>
-                Final Polish
-                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
-                  {finalPolish.exportReady ? "ready" : "not ready"}
-                </span>
-              </div>
-              {Array.isArray(finalPolish.unresolvedWarnings) && finalPolish.unresolvedWarnings.length > 0 && (
-                <div style={{ display: "grid", gap: 3 }}>
-                  {finalPolish.unresolvedWarnings.map((warning: string, i: number) => {
-                    const isEvidenceGap = /candidate evidence gap/i.test(warning);
-                    return (
-                      <div
-                        key={i}
-                        style={{ color: isEvidenceGap ? "var(--ink-soft)" : "var(--warn)", fontStyle: isEvidenceGap ? "italic" : undefined }}
-                      >
-                        {isEvidenceGap ? "↳ " : "⚠ "}
-                        {warning}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-          {(finalPolish?.pageFit || hiringPanel?.pageFit) && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>Page fit at AI review</div>
-              <div>{formatPageFitSummary(finalPolish?.pageFit ?? hiringPanel?.pageFit)}</div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void; expandedWorkflow: string | null }) {
+function FindingsButton({ item, onFetchDetails }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void }) {
   if (!item.workflow_id || (item.workflow_stage ?? 0) < 1) return null;
   return (
-    <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} title="Show Hiring Panel and Final Polish findings inline">
-      {expandedWorkflow === item.workflow_id ? "▲ Hide findings" : "📋 Findings"}
+    <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} aria-haspopup="dialog">
+      📋 Findings
     </button>
   );
 }
@@ -2056,7 +1889,7 @@ function PageFitBadge({ metrics }: { metrics?: PageFitMetrics | null }) {
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
   item, pageFitMetrics, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
-  expandedWorkflow, workflowDetails, workflowStageLabel
+  workflowStageLabel
 }: {
   item: QueueItem;
   pageFitMetrics: PageFitMetrics | null;
@@ -2065,8 +1898,6 @@ function PipelineActions({
   onRegenerate: (item: QueueItem) => void;
   onFetchDetails: (item: QueueItem) => void;
   onReview: (wfId: string, action: string) => void;
-  expandedWorkflow: string | null;
-  workflowDetails: Record<string, any>;
   workflowStageLabel: (stage: number | null | undefined) => string;
 }) {
   const genStatus = item.resume_generation_status;
@@ -2086,10 +1917,10 @@ function PipelineActions({
         )}
         {item.workflow_id && (
           <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-            {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+            Details
           </button>
         )}
-        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} />
       </div>
     );
   }
@@ -2125,7 +1956,7 @@ function PipelineActions({
           title="Restart the full AI pipeline from scratch and replace this tailored resume">
           {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
         </button>
-        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} />
       </div>
     );
   }
@@ -2145,7 +1976,7 @@ function PipelineActions({
           disabled={actionLoading === `${item.id}:workflow`}>
           {actionLoading === `${item.id}:workflow` ? "Retrying..." : "🔄 Retry"}
         </button>
-        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} />
       </div>
     );
   }
@@ -2179,9 +2010,9 @@ function PipelineActions({
               </button>
             </div>
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-              {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+              Details
             </button>
-            <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+            <FindingsButton item={item} onFetchDetails={onFetchDetails} />
           </>
         )}
       </div>
@@ -2204,7 +2035,7 @@ function PipelineActions({
         </button>
         {item.workflow_id && (
           <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-            {expandedWorkflow === item.workflow_id ? "▲ Hide details" : "▼ Details"}
+            Details
           </button>
         )}
       </div>

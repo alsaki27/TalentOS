@@ -35,6 +35,7 @@ function isPublicPath(pathname: string) {
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/privacy" ||
+    pathname === "/resume-print" ||
     isPortalAuthPublicPath(pathname) ||
     isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||

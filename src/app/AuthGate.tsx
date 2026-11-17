@@ -7,6 +7,7 @@ function isPublicPath(pathname: string) {
   return (
     pathname === "/login" ||
     pathname === "/signup" ||
+    pathname === "/resume-print" ||
     pathname.startsWith("/portal")
   );
 }

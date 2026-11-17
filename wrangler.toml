@@ -11,6 +11,9 @@ compatibility_flags = ["nodejs_compat"]
 # Workers + Assets: host static frontend files
 assets = { directory = ".open-next/assets", binding = "ASSETS" }
 
+[browser]
+binding = "RESUME_BROWSER"
+
 [vars]
 TALENTOS_BASE_URL = "https://talent.skarion.com"
 TEAM_ACTIVITY_REPORT_RECIPIENTS = "info@skarion.com,shohanhyder@gmail.com,akash@skarion.com"

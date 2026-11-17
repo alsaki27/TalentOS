@@ -1,7 +1,13 @@
 // Runs the real App Queue component in Chromium with fixture API responses.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { build } from "esbuild";
 import { chromium, expect } from "@playwright/test";
+import postcss from "postcss";
+import tailwindcss from "tailwindcss";
+
+const { css } = await postcss([tailwindcss()]).process(readFileSync("src/app/globals.css", "utf8"), {
+  from: "src/app/globals.css",
+});
 
 const bundle = await build({
   stdin: {
@@ -57,7 +63,9 @@ try {
     switch (url.pathname) {
       case "/application-queue":
         documents++;
-        return route.fulfill({ contentType: "text/html", body: '<div id="root"></div><script src="/queue.js"></script>' });
+        return route.fulfill({ contentType: "text/html", body: '<link rel="stylesheet" href="/queue.css"><div id="root"></div><script src="/queue.js"></script>' });
+      case "/queue.css":
+        return route.fulfill({ contentType: "text/css", body: css });
       case "/queue.js":
         return route.fulfill({ contentType: "text/javascript", body: script });
       case "/api/application-queue":
@@ -99,7 +107,14 @@ try {
       default:
         if (url.searchParams.get("action") === "status") {
           detailRequests.push(url.pathname);
-          return route.fulfill({ json: { workflow: { status: "running" }, stages: [], artifacts: [] } });
+          return route.fulfill({ json: {
+            workflow: { status: "running" },
+            stages: [],
+            artifacts: [
+              { automation_id: "application_hiring_panel", data: { atsScore: 7, roleFitScore: 8, overallComment: "Fixture panel summary." } },
+              { automation_id: "application_release_editor", data: { exportReady: false, unresolvedWarnings: ["Fixture review warning."] } },
+            ],
+          } });
         }
         return route.fulfill({ status: 404 });
     }
@@ -130,8 +145,22 @@ try {
   await expect(row.getByText(/Hiring Panel/)).toBeVisible();
   await expect(row.locator(".pipeline-live-dot-running")).toHaveCount(1);
   await expect(retry).toHaveCount(0);
-  await row.getByRole("button", { name: /Details/ }).click();
+  const findings = row.getByRole("button", { name: /Findings/ });
+  await findings.click();
   await expect.poll(() => detailRequests).toEqual(["/api/application-ai-workflows/replacement-workflow"]);
+  const dialog = page.getByRole("dialog", { name: "Review findings · A#35878" });
+  await expect(dialog.getByText("Fixture Planner", { exact: false })).toBeVisible();
+  await expect(dialog.getByText("7.0/10", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Fixture review warning.")).toBeVisible();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 760 }]) {
+    await page.setViewportSize(viewport);
+    await expect.poll(async () => Math.round((await dialog.boundingBox()).width)).toBe(Math.round(viewport.width * 0.9));
+    await expect.poll(() => dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  }
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(findings).toBeFocused();
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   // A real terminal failure exposes Retry, and a concurrent start corrects it immediately.
   latest = { ...latest, status: "failed" };

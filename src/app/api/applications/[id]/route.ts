@@ -267,9 +267,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   try {
+    let resumeRelease: Awaited<ReturnType<typeof approveEvidenceResumeForApplication>>;
     if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
       try {
-        await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id);
+        resumeRelease = await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id);
       } catch (error) {
         if (error instanceof ResumeReleaseError) return NextResponse.json({ error: error.message }, { status: 409 });
         throw error;
@@ -397,7 +398,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       backgroundDispatch(Promise.all(backgroundTasks));
     }
 
-    return NextResponse.json(createdInterview ? { ...data, interview: createdInterview } : data);
+    if (!createdInterview && !resumeRelease) return NextResponse.json(data);
+    return NextResponse.json({
+      ...data,
+      ...(createdInterview ? { interview: createdInterview } : {}),
+      ...(resumeRelease ? { resume_release: resumeRelease } : {}),
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

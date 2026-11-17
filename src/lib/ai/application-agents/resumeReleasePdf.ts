@@ -2,7 +2,7 @@ import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdap
 import { renderResumePdfWithMetrics } from "@/lib/falood/skarionPdfDocument";
 import { sha256Hex } from "@/lib/sha256";
 
-function canonicalContent(value: unknown): string {
+export function canonicalContent(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonicalContent).join(",") + "]";
   if (value && typeof value === "object") {
     const fields = Object.entries(value).filter(([, entry]) => entry !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);

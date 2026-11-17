@@ -217,8 +217,8 @@ interface ResumeContextType {
 
 const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
 
-export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [state, dispatch] = useReducer(resumeReducer, initialState);
+export const ResumeProvider: React.FC<{ children: ReactNode; initialResume?: ResumeData }> = ({ children, initialResume }) => {
+  const [state, dispatch] = useReducer(resumeReducer, initialResume ? { ...initialState, resumeData: initialResume } : initialState);
 
   const updatePersonalInfo = useCallback((data: Partial<ResumeData['personalInfo']>) => {
     dispatch({ type: 'UPDATE_PERSONAL_INFO', payload: data });
