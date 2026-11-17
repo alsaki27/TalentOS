@@ -42,6 +42,7 @@ function applyRuntimeSecrets(env) {
   }
   for (const name of [
     "BROWSER_WORKER_PREPARE_ENABLED",
+    "BROWSER_WORKER_QUEUE_ENABLED",
     "BROWSER_WORKER_ENVIRONMENT",
     "BROWSER_WORKER_PRODUCTION_PILOT_APPLICATION_ID",
   ]) {

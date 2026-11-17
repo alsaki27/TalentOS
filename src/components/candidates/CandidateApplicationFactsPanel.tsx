@@ -256,9 +256,10 @@ export function CandidateApplicationFactsPanel({
       setError("Use Add profile note to save text for staff review.");
       return;
     }
+    const approve = !editing && (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "approve";
     const saved = editing
       ? await write("PATCH", { operation: "revise", factId: editing.id, expectedRevision: editing.revision, draft })
-      : await write("POST", draft);
+      : await write("POST", approve ? { ...draft, approve: true } : draft);
     if (saved) closeDraft();
   }
 
@@ -515,7 +516,8 @@ export function CandidateApplicationFactsPanel({
                   </label>
                 </div>
                 <div className={styles.editorActions}>
-                  <button type="submit" className="btn-primary btn-sm" disabled={busy}>{busy ? "Saving…" : "Save draft"}</button>
+                  <button type="submit" className="btn-outline btn-sm" disabled={busy}>{busy ? "Saving…" : "Save draft"}</button>
+                  {!editing && <button type="submit" value="approve" className="btn-primary" disabled={busy}>Save and approve</button>}
                   <button type="button" className="btn-outline btn-sm" disabled={busy} onClick={closeDraft}>Cancel</button>
                 </div>
               </form>

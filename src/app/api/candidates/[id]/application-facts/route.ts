@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { assertStaffOperatorOrigin } from "@/app/api/browser-worker/v2/_http";
 import {
   isApplicationFactUuid,
   parseApplicationFactDraft,
@@ -49,14 +50,27 @@ export async function POST(request: Request, { params }: RouteParams) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
   if (!context || !isApplicationFactUuid(params.id)) return error("Invalid candidate request.", 400);
-  const draft = parseApplicationFactDraft(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  const approve = body?.approve === true;
+  if (approve) {
+    try {
+      assertStaffOperatorOrigin(request);
+    } catch {
+      return error("Same-origin operator request required.", 403);
+    }
+  }
+  const draft = parseApplicationFactDraft(body);
   if (!draft) return error("Provide a valid question, typed value or non-answer, and source reference.", 400);
   try {
     const profile = await loadApplicationFactProfile(params.id);
     if (!profile) return error("Candidate not found.", 404);
     if (!profileMatchesApplicationFact(draft, profile)) return error("The source profile value changed. Reload before saving.", 409);
-    const fact = await createApplicationFactDraft(params.id, draft, context.profile.user_id);
-    if (!fact) return error("Select a job linked to this candidate, or check the answer bank limit.", 409);
+    const fact = approve
+      ? await createApplicationFactDraft(params.id, draft, context.profile.user_id, true)
+      : await createApplicationFactDraft(params.id, draft, context.profile.user_id);
+    if (!fact) return error(approve
+      ? "Check the job scope and expiry. If an answer already exists for this question and scope, edit or review it."
+      : "Select a job linked to this candidate, or check the answer bank limit.", 409);
     return NextResponse.json({ fact }, { status: 201, headers });
   } catch (cause) {
     return serviceError(cause);
