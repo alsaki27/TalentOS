@@ -17,7 +17,11 @@ import {
 } from "@/server/repositories/applicationsRepository";
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
-import { approveEvidenceResumeForApplication, ResumeReleaseError } from "@/server/services/resumeEvidenceReleaseService";
+import {
+  approveEvidenceResumeForApplication, isResumeReleaseGateError,
+  RESUME_RELEASE_REQUIRED_MESSAGE, ResumeReleaseError,
+} from "@/server/services/resumeEvidenceReleaseService";
+import { buildAppliedApplicationUpdates } from "@/server/services/applicationAppliedStage";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
 const CUSTOM_INTERVIEW_STATUS_STAGE: Record<string, string> = {
@@ -59,6 +63,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   ]);
   if (!currentUser) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  if (needsCurrentApplication && !prefetchedApplication) {
+    return NextResponse.json({ error: "Application not found" }, { status: 404 });
   }
 
   const allowedFields = [
@@ -163,12 +170,30 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     previousApplicationStage = currentApplication?.application_stage ?? null;
   }
 
+  const effectiveStage = previousApplicationStage ?? previousAeStage;
+  if (updates.status === "applied" && !("ae_stage" in updates) && effectiveStage === "ready_for_application") {
+    updates.ae_stage = "applied";
+  }
+  const marksAeApplied = updates.ae_stage === "applied" && !customInterviewStageChanged;
+  const reapproveResume = body.approve_resume === true;
+  if (reapproveResume && (body.ae_stage !== "ready_for_application" || Object.keys(updates).length !== 1)) {
+    return NextResponse.json({ error: "Résumé approval must be requested separately from other updates." }, { status: 400 });
+  }
+  if (reapproveResume && (effectiveStage !== "ready_for_application" || currentApplication?.applied_at)) {
+    return NextResponse.json({ error: "The application changed. Reload the queue before approving the résumé." }, { status: 409 });
+  }
+
   // AE hand-off stage: In AI Pipeline -> Ready for AE Review -> Ready for AE
   // Application -> AE Applied. Anyone touching it (AE or manager - no role
   // gate here, unlike assignmentFields above) gets stamped as the last editor.
   // The reviewer identity is captured separately and persists even after the
   // ticket moves on to "applied", so whoever applies can see who reviewed it.
-  if ("ae_stage" in updates && updates.ae_stage !== previousAeStage && !customInterviewStageChanged) {
+  if (marksAeApplied && currentApplication) {
+    Object.assign(updates, buildAppliedApplicationUpdates(currentApplication, {
+      userId: currentUser.profile.user_id,
+      name: currentUser.profile.display_name || currentUser.profile.email,
+    }, new Date().toISOString()));
+  } else if ("ae_stage" in updates && updates.ae_stage !== effectiveStage && !customInterviewStageChanged) {
     if (updates.ae_stage === "in_ai_pipeline" && currentApplication?.resume_generation_status === "ready") {
       return NextResponse.json(
         { error: "Cannot move back to AI Pipeline when a resume is already generated. Please use 'Regenerate' if you need a new draft." },
@@ -177,39 +202,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     updates.application_stage = updates.ae_stage;
-    updates.ae_stage_updated_at = new Date().toISOString();
+    const changedAt = new Date().toISOString();
+    updates.ae_stage_updated_at = changedAt;
     updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
     updates.ae_stage_updated_by_name = currentUser.profile.display_name || currentUser.profile.email;
+    updates.application_stage_changed_at = changedAt;
+    updates.application_stage_changed_by_user_id = updates.ae_stage_updated_by_user_id;
+    updates.application_stage_changed_by_name = updates.ae_stage_updated_by_name;
 
-    if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
+    if (effectiveStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
       updates.ae_reviewed_by_user_id = currentUser.profile.user_id;
       updates.ae_reviewed_by_name = currentUser.profile.display_name || currentUser.profile.email;
       updates.ae_reviewed_at = new Date().toISOString();
     }
 
-    // Same pattern as the reviewer capture above, for the final hand-off:
-    // whoever moves it to "applied" is attributed here, and (like the
-    // reviewer field) this is never overwritten by any later transition.
-    if (updates.ae_stage === "applied") {
-      updates.ae_applied_by_user_id = currentUser.profile.user_id;
-      updates.ae_applied_by_name = currentUser.profile.display_name || currentUser.profile.email;
-      updates.ae_applied_at = new Date().toISOString();
-    }
-
-    // AE Applied is a real lifecycle transition, not only a display label.
-    // Keep the legacy status fields synchronized so candidate dashboards,
-    // follow-up views, exports, and analytics all see the same truth.
-    if (updates.ae_stage === "applied") {
-      const appliedAt = currentApplication?.applied_at ?? new Date().toISOString();
-      updates.status = "applied";
-      updates.applied_at = appliedAt;
-      updates.completed_at = currentApplication?.completed_at ?? appliedAt;
-    } else {
-      updates.status = "in_progress";
-      if (previousAeStage === "applied") {
-        updates.applied_at = null;
-        updates.completed_at = null;
-      }
+    updates.status = "in_progress";
+    if (effectiveStage === "applied") {
+      updates.applied_at = null;
+      updates.completed_at = null;
     }
 
   }
@@ -231,7 +241,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  if ("status" in updates) {
+  if ("status" in updates && !(marksAeApplied && previousStatus === "applied")) {
     const automated = applicationAutomation({
       status: String(updates.status),
       explicitFollowUp: "follow_up_at" in body,
@@ -268,13 +278,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   try {
     let resumeRelease: Awaited<ReturnType<typeof approveEvidenceResumeForApplication>>;
-    if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
+    const entersReadyStage = updates.ae_stage === "ready_for_application" && effectiveStage !== "ready_for_application";
+    if (entersReadyStage || reapproveResume) {
       try {
-        resumeRelease = await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id);
+        resumeRelease = await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id, effectiveStage);
       } catch (error) {
         if (error instanceof ResumeReleaseError) return NextResponse.json({ error: error.message }, { status: 409 });
         throw error;
       }
+    }
+    if (reapproveResume) {
+      return NextResponse.json({
+        ...currentApplication,
+        ...(resumeRelease ? { resume_release: { pageCount: resumeRelease.pageCount } } : {}),
+      });
     }
     const stageWriteStarted = performance.now();
     const data = await updateApplication(params.id, updates);
@@ -286,9 +303,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // successful application update.
     if (currentUser.profile.is_active) {
       const reachedReviewComplete =
-        previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application";
+        effectiveStage === "ready_for_review" && updates.ae_stage === "ready_for_application";
       const reachedApplied =
-        (updates.ae_stage === "applied" && previousAeStage !== "applied") ||
+        (updates.ae_stage === "applied" && effectiveStage !== "applied") ||
         (updates.status === "applied" && previousStatus !== "applied");
 
       const activityWrites: Promise<unknown>[] = [];
@@ -340,11 +357,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const backgroundTasks: Promise<unknown>[] = [];
 
-    if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
-      const previousStage = customInterviewStageChanged ? previousApplicationStage : previousAeStage;
+    if ("ae_stage" in updates && updates.ae_stage !== effectiveStage) {
       backgroundTasks.push(execute(
         'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [params.id, previousStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
+        [params.id, effectiveStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
       ));
     }
 
@@ -417,6 +433,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       ...(resumeRelease ? { resume_release: { pageCount: resumeRelease.pageCount } } : {}),
     }, { headers });
   } catch (error: any) {
+    if (isResumeReleaseGateError(error)) {
+      return NextResponse.json({ error: RESUME_RELEASE_REQUIRED_MESSAGE, code: "resume_release_required" }, { status: 409 });
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
