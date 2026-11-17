@@ -87,7 +87,9 @@ function isMcpApiPath(pathname: string) {
 function isBrowserWorkerPreparePath(pathname: string) {
   return pathname === "/api/browser-worker/v2/claims" ||
     pathname === "/api/browser-worker/v2/pilot/device" ||
-    /^\/api\/browser-worker\/v2\/runs\/[a-f0-9-]+\/(artifact|facts|result)$/.test(pathname);
+    pathname === "/api/browser-worker/v3/claims" ||
+    /^\/api\/browser-worker\/v2\/runs\/[a-f0-9-]+\/(artifact|facts|result)$/.test(pathname) ||
+    /^\/api\/browser-worker\/v3\/jobs\/[a-f0-9-]+\/(artifact|facts|result)$/.test(pathname);
 }
 
 // CRM calls these machine-to-machine endpoints with CRM_INTEGRATION_SECRET.

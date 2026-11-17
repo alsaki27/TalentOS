@@ -16,6 +16,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { LegacyPageFitBatch, type LegacyPageFitResult } from "./components/LegacyPageFitBatch";
+import { LinkedInWorkerActions, LinkedInWorkerSetup, type RegisteredBrowserWorker } from "./components/LinkedInWorkerActions";
+import { browserQueueJobUrl } from "@/lib/browserWorkerQueuePosting";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -49,6 +51,7 @@ interface QueueItem {
   proof_uploaded_at: string | null;
   source_type: string | null;
   ae_stage: "in_ai_pipeline" | "ready_for_review" | "ready_for_application" | "applied";
+  effective_application_stage?: string | null;
   ae_review_pending_since?: string | null;
   ae_stage_updated_at: string | null;
   ae_stage_updated_by_name: string | null;
@@ -62,8 +65,8 @@ interface QueueItem {
   approved_resume_archive_state?: string | null;
   pdf_refresh_state?: string | null;
   pdf_refresh_error?: string | null;
-  candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
-  jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null; eligibility_restricted?: boolean | null; requires_citizenship?: boolean | null; citizenship_countries?: string[] | null; export_control_restricted?: boolean | null; eligibility_restriction_evidence?: string | null } | null;
+  candidates: { id: string; name: string; status?: string; pipeline_stage?: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
+  jobs: { id: string; title: string; company: string | null; location: string | null; is_active?: boolean; source_url: string | null; apply_url?: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null; eligibility_restricted?: boolean | null; requires_citizenship?: boolean | null; citizenship_countries?: string[] | null; export_control_restricted?: boolean | null; eligibility_restriction_evidence?: string | null } | null;
   workflow_status?: string | null;
   workflow_id?: string | null;
   workflow_stage?: number | null;
@@ -311,6 +314,25 @@ export default function ApplicationQueuePage() {
   useEffect(() => { itemsRef.current = items; }, [items]);
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [me, setMe] = useState<{ profile: { user_id: string; role: string } } | null>(null);
+  const [registeredWorkers, setRegisteredWorkers] = useState<RegisteredBrowserWorker[] | null>(null);
+  const [workerListVersion, setWorkerListVersion] = useState(0);
+  const workerManager = me?.profile?.role === "admin" || me?.profile?.role === "manager";
+  useEffect(() => {
+    if (!workerManager) {
+      setRegisteredWorkers(null);
+      return;
+    }
+    const controller = new AbortController();
+    void fetch("/api/browser-worker/v3/jobs", { cache: "no-store", signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (!controller.signal.aborted) setRegisteredWorkers(data?.enabled === true && Array.isArray(data.workers) ? data.workers : null);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setRegisteredWorkers(null);
+      });
+    return () => controller.abort();
+  }, [workerManager, workerListVersion]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
@@ -1274,6 +1296,9 @@ export default function ApplicationQueuePage() {
         </div>
       </div>
 
+      {registeredWorkers && <LinkedInWorkerSetup workers={registeredWorkers}
+        onRegistered={() => setWorkerListVersion(version => version + 1)} />}
+
       {feedback && (
         <div className={`alert ${feedback.kind === "error" ? "alert-error" : "alert-success"}`} style={{ marginBottom: 12 }}>
           {feedback.text}
@@ -1765,6 +1790,13 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {registeredWorkers && item.candidates?.status === "active" && item.candidates.pipeline_stage === "applying" &&
+                        item.jobs?.is_active && !item.applied_at && !item.ae_applied_at &&
+                        ["assigned", "in_progress", "stacked"].includes(item.status) &&
+                        (item.effective_application_stage ?? item.ae_stage) === "ready_for_application" &&
+                        (item.review_status === "approved" || item.review_status === "not_required") &&
+                        browserQueueJobUrl(item.jobs.apply_url?.trim() || item.jobs.source_url) &&
+                        <LinkedInWorkerActions applicationId={item.id} candidateId={item.candidates.id} workers={registeredWorkers} />}
                       {(item.jobs?.source_url || item.id) && (
                         <button
                           className="btn-compact btn-sm"

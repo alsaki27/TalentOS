@@ -79,6 +79,23 @@ describe("Candidate application facts API", () => {
     expect((await response.json()).fact.reviewState).toBe("draft");
   });
 
+  it("creates an approved fact in one operation for the authenticated reviewer", async () => {
+    services.createApplicationFactDraft.mockResolvedValue({ id: factId, reviewState: "approved" });
+    const response = await POST(request("POST", { ...validDraft, approve: true }), params);
+    expect(response.status).toBe(201);
+    expect(services.createApplicationFactDraft).toHaveBeenCalledWith(candidateId, expect.objectContaining({ value: false }), actor, true);
+    expect(services.reviewApplicationFact).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-origin Save and approve requests", async () => {
+    const response = await POST(new Request("https://app.example.test/api/candidates/facts", {
+      method: "POST", headers: { Origin: "https://unrelated.example.test" },
+      body: JSON.stringify({ ...validDraft, approve: true }),
+    }), params);
+    expect(response.status).toBe(403);
+    expect(services.createApplicationFactDraft).not.toHaveBeenCalled();
+  });
+
   it("binds approval to the authenticated actor, candidate, and expected revision", async () => {
     services.reviewApplicationFact.mockResolvedValue(null);
     const response = await PATCH(request("PATCH", { factId, operation: "approve", expectedRevision: 3, reviewedBy: "ignored" }), params);

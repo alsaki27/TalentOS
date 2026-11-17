@@ -9,7 +9,8 @@ import {
   type ApprovedApplicationAnswers,
   type CandidateApplicationFact,
 } from "@/lib/candidateApplicationFacts";
-import { query, queryOne } from "@/server/db/neon";
+import { BROWSER_QUEUE_JOB_URL_SQL } from "@/lib/browserWorkerQueuePosting";
+import { query, queryOne, sql } from "@/server/db/neon";
 
 const maxFacts = 500;
 const columns = `id, candidate_id AS "candidateId", job_id AS "jobId", revision, section, question,
@@ -23,6 +24,8 @@ type FactRow = Omit<CandidateApplicationFact, "expiresAt" | "reviewedAt"> & {
 };
 
 interface MissingQuestionRun {
+  applicationId: string;
+  status: "needs_human" | "prepared";
   jobId: string;
   jobTitle: string | null;
   detectedAt: string | Date;
@@ -106,7 +109,7 @@ export async function listMissingApplicationQuestions(
   try {
     runs = await query<MissingQuestionRun>(
       `WITH latest AS (
-        SELECT DISTINCT ON (e.application_id) r.id, r.status, r.completed_at,
+        SELECT DISTINCT ON (e.application_id) e.application_id, r.id, r.status, r.completed_at,
           e.job_id, j.title, r.result->'missingQuestions' AS questions
         FROM browser_worker_prepare_enrollments e
         JOIN browser_worker_prepare_runs r ON r.enrollment_id = e.id
@@ -115,25 +118,50 @@ export async function listMissingApplicationQuestions(
         WHERE e.candidate_id = $1 AND a.applied_at IS NULL AND j.is_active
           AND COALESCE(NULLIF(j.apply_url, ''), j.source_url) = e.job_url
           AND r.completed_at IS NOT NULL AND (
-            (r.status = 'needs_human' AND r.result->>'reason' = 'missing_required_answers') OR
-            (r.status = 'prepared' AND r.result->>'reason' = 'final_review_ready')
+            (r.status = 'needs_human' AND r.result->>'reason' IN
+              ('missing_required_answers', 'linkedin_missing_required_answers', 'linkedin_missing_verified_contact')) OR
+            (r.status = 'prepared' AND r.result->>'reason' IN ('final_review_ready', 'linkedin_final_review_ready'))
           )
         ORDER BY e.application_id, r.completed_at DESC, r.id DESC
       )
-      SELECT job_id AS "jobId", title AS "jobTitle", completed_at AS "detectedAt", questions
-      FROM latest WHERE status = 'needs_human'
+      SELECT application_id AS "applicationId", status, job_id AS "jobId", title AS "jobTitle", completed_at AS "detectedAt", questions
+      FROM latest
       ORDER BY completed_at DESC, id DESC`,
       [candidateId],
     );
   } catch (cause) {
     // The answer bank can be deployed without the optional worker tables.
-    if ((cause as { code?: string } | null)?.code === "42P01") return [];
-    throw cause;
+    if ((cause as { code?: string } | null)?.code !== "42P01") throw cause;
+    runs = [];
+  }
+  if (process.env.BROWSER_WORKER_QUEUE_ENABLED === "true") {
+    try {
+      runs.push(...await query<MissingQuestionRun>(
+        `SELECT DISTINCT ON (w.application_id) w.application_id AS "applicationId", w.status,
+          w.job_id AS "jobId", j.title AS "jobTitle", w.completed_at AS "detectedAt",
+          w.result->'missingQuestions' AS questions
+        FROM browser_worker_queue_jobs w
+        JOIN applications a ON a.id = w.application_id AND a.candidate_id = w.candidate_id AND a.job_id = w.job_id
+        JOIN jobs j ON j.id = w.job_id
+        WHERE w.candidate_id = $1 AND a.applied_at IS NULL AND j.is_active
+          AND ${BROWSER_QUEUE_JOB_URL_SQL} = w.job_url AND w.completed_at IS NOT NULL
+          AND ((w.status = 'needs_human' AND w.result->>'reason' IN ('missing_required_answers', 'missing_verified_contact'))
+            OR (w.status = 'prepared' AND w.result->>'reason' = 'final_review_ready'))
+        ORDER BY w.application_id, w.completed_at DESC, w.id DESC`,
+        [candidateId],
+      ));
+    } catch (cause) {
+      if ((cause as { code?: string } | null)?.code !== "42P01") throw cause;
+    }
   }
 
   const byJob = new Map<string, Map<string, MissingApplicationQuestion>>();
+  const seenApplications = new Set<string>();
+  runs.sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
   for (const run of runs) {
-    if (!Array.isArray(run.questions)) continue;
+    if (seenApplications.has(run.applicationId)) continue;
+    seenApplications.add(run.applicationId);
+    if (run.status !== "needs_human" || !Array.isArray(run.questions)) continue;
     const questions = byJob.get(run.jobId) ?? new Map<string, MissingApplicationQuestion>();
     byJob.set(run.jobId, questions);
     for (const raw of run.questions) {
@@ -161,16 +189,28 @@ export async function listMissingApplicationQuestions(
 }
 
 export async function createApplicationFactDraft(
-  candidateId: string, draft: ApplicationFactDraft, userId: string,
+  candidateId: string, draft: ApplicationFactDraft, userId: string, approve = false,
 ): Promise<CandidateApplicationFact | null> {
-  const row = await queryOne<FactRow>(
-    `INSERT INTO candidate_application_facts (${writeColumns})
-     SELECT ${writeValues} FROM candidates WHERE id = $1 AND ${permittedJob}
+  if (approve && draft.section === APPLICATION_PROFILE_NOTES_SECTION) return null;
+  const statement = `INSERT INTO candidate_application_facts (${writeColumns}${approve ? ", review_state, reviewed_by_user_id, reviewed_at" : ""})
+     SELECT ${writeValues}${approve ? ", 'approved', $12::uuid, now()" : ""} FROM candidates WHERE id = $1 AND ${permittedJob}
        AND (SELECT COUNT(DISTINCT id) FROM candidate_application_facts WHERE candidate_id = $1) < ${maxFacts}
-     RETURNING ${columns}`,
-    draftValues(candidateId, draft, userId),
-  );
-  return row && asFact(row);
+       ${approve ? `AND ($11::timestamptz IS NULL OR $11::timestamptz > now())
+         AND ($9 <> 'profile' OR btrim(to_jsonb(candidates)->>$10) = ($8::jsonb #>> '{}'))
+         AND NOT EXISTS (
+           SELECT 1 FROM candidate_application_facts f
+           WHERE f.candidate_id = $1 AND f.job_id IS NOT DISTINCT FROM $2::uuid
+             AND f.question_key = $5 AND f.review_state <> 'revoked'
+             AND NOT EXISTS (SELECT 1 FROM candidate_application_facts newer
+               WHERE newer.id = f.id AND newer.revision > f.revision)
+         )` : ""}
+     RETURNING ${columns}`;
+  const values = draftValues(candidateId, draft, userId);
+  const [, rows] = await sql().transaction<FactRow[]>(tx => [
+    tx.query("SELECT id FROM candidates WHERE id = $1 FOR UPDATE", [candidateId]),
+    tx.query<FactRow[]>(statement, values),
+  ]);
+  return rows[0] ? asFact(rows[0]) : null;
 }
 
 export async function reviseApplicationFact(

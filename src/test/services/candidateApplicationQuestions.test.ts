@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listMissingApplicationQuestions } from "@/server/services/candidateApplicationFactsService";
 import type { CandidateApplicationFact } from "@/lib/candidateApplicationFacts";
 
@@ -9,6 +9,8 @@ const candidateId = "00000000-0000-0000-0000-000000000011";
 const otherCandidateId = "00000000-0000-0000-0000-000000000012";
 const jobId = "00000000-0000-0000-0000-000000000013";
 const secondJobId = "00000000-0000-0000-0000-000000000014";
+const applicationId = "00000000-0000-0000-0000-000000000021";
+const secondApplicationId = "00000000-0000-0000-0000-000000000022";
 const detectedAt = "2026-11-09T10:00:00.000Z";
 const reusable: CandidateApplicationFact = {
   id: "00000000-0000-0000-0000-000000000015",
@@ -29,13 +31,18 @@ const reusable: CandidateApplicationFact = {
 };
 
 describe("Candidate application questions", () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubEnv("BROWSER_WORKER_QUEUE_ENABLED", "false");
+  });
+  afterEach(() => vi.unstubAllEnvs());
 
   it("deduplicates job-scoped prompts and ignores malformed labels", async () => {
     query.mockResolvedValue([
-      { jobId, jobTitle: "Sample Role", detectedAt, questions: ["Can you commute?", "  can you COMMUTE? ", "", 12, "x".repeat(401)] },
-      { jobId, jobTitle: "Sample Role", detectedAt, questions: ["Can  you commute?"] },
-      { jobId: secondJobId, jobTitle: null, detectedAt, questions: ["Can you commute?"] },
+      { applicationId, status: "needs_human", jobId, jobTitle: "Sample Role", detectedAt,
+        questions: ["Can you commute?", "  can you COMMUTE? ", "Can  you commute?", "", 12, "x".repeat(401)] },
+      { applicationId: secondApplicationId, status: "needs_human", jobId: secondJobId, jobTitle: null,
+        detectedAt, questions: ["Can you commute?"] },
     ]);
     const missing = await listMissingApplicationQuestions(candidateId, {}, []);
     expect(missing).toEqual([
@@ -47,8 +54,8 @@ describe("Candidate application questions", () => {
 
   it("uses the worker's approved-answer rules and honors a job-specific draft over a reusable approval", async () => {
     query.mockResolvedValue([
-      { jobId, detectedAt, questions: ["Can you commute?", "Do you have a degree?"] },
-      { jobId: secondJobId, detectedAt, questions: ["Can you commute?"] },
+      { applicationId, status: "needs_human", jobId, detectedAt, questions: ["Can you commute?", "Do you have a degree?"] },
+      { applicationId: secondApplicationId, status: "needs_human", jobId: secondJobId, detectedAt, questions: ["Can you commute?"] },
     ]);
     const draft: CandidateApplicationFact = { ...reusable, id: "draft", jobId, reviewState: "draft" };
     const otherCandidate: CandidateApplicationFact = { ...reusable, id: "other", candidateId: otherCandidateId, question: "Do you have a degree?" };
@@ -56,6 +63,21 @@ describe("Candidate application questions", () => {
     expect(missing.map(({ jobId, question }) => ({ jobId, question }))).toEqual([
       { jobId, question: "Can you commute?" },
       { jobId, question: "Do you have a degree?" },
+    ]);
+  });
+
+  it("uses the latest screening observation across the pilot and dedicated worker without hiding another ticket", async () => {
+    vi.stubEnv("BROWSER_WORKER_QUEUE_ENABLED", "true");
+    const later = "2026-11-10T10:00:00.000Z";
+    query.mockResolvedValueOnce([
+      { applicationId, status: "needs_human", jobId, detectedAt, questions: ["Can you commute?"] },
+    ]).mockResolvedValueOnce([
+      { applicationId, status: "prepared", jobId, detectedAt: later, questions: [] },
+      { applicationId: secondApplicationId, status: "needs_human", jobId: secondJobId, detectedAt: later,
+        jobTitle: "Another Role", questions: ["Mobile phone number"] },
+    ]);
+    await expect(listMissingApplicationQuestions(candidateId, {}, [])).resolves.toEqual([
+      { jobId: secondJobId, jobTitle: "Another Role", detectedAt: later, question: "Mobile phone number" },
     ]);
   });
 
