@@ -79,7 +79,7 @@ export function LinkedInWorkerSetup({ workers, onRegistered }: {
       <button type="submit" className="btn-compact" disabled={busy || !label.trim()}>Register worker</button>
     </form>
     {credential && <div>
-      <p>Set this key as <code>TALENTOS_DEDICATED_WORKER_KEY</code> on the registered PC.</p>
+      <p>On the worker PC, run <code>&amp; '.\scripts\run-dedicated-worker.ps1' -SaveKey</code> from the worker checkout, then paste this key into the prompt.</p>
       <input aria-label="New worker key" className="input" readOnly value={credential} />
       <button type="button" className="btn-compact" onClick={() => setCredential("")}>Hide key</button>
     </div>}
