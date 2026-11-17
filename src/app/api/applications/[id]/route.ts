@@ -11,6 +11,7 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 import { queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import {
+  ApplicationStageChangedError,
   findApplicationById,
   updateApplication,
   deleteApplication,
@@ -18,8 +19,8 @@ import {
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 import {
-  approveEvidenceResumeForApplication, isResumeReleaseGateError,
-  RESUME_RELEASE_REQUIRED_MESSAGE, ResumeReleaseError,
+  approveEvidenceResumeForApplication, findResumeApprovalRevision, isResumeReleaseGateError,
+  RESUME_RELEASE_REQUIRED_MESSAGE, ResumeReleaseChangedError, ResumeReleaseError,
 } from "@/server/services/resumeEvidenceReleaseService";
 import { buildAppliedApplicationUpdates } from "@/server/services/applicationAppliedStage";
 
@@ -176,8 +177,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   const marksAeApplied = updates.ae_stage === "applied" && !customInterviewStageChanged;
   const reapproveResume = body.approve_resume === true;
-  if (reapproveResume && (body.ae_stage !== "ready_for_application" || Object.keys(updates).length !== 1)) {
+  const approveAndApply = reapproveResume && body.ae_stage === "applied";
+  const approvalRevision = typeof body.resume_approval_revision === "string" ? body.resume_approval_revision : undefined;
+  if (reapproveResume && ((!approveAndApply && body.ae_stage !== "ready_for_application") || Object.keys(updates).length !== 1)) {
     return NextResponse.json({ error: "Résumé approval must be requested separately from other updates." }, { status: 400 });
+  }
+  if (approveAndApply && !approvalRevision) {
+    return NextResponse.json({ error: "Confirm the current saved résumé before marking the application applied." }, { status: 400 });
+  }
+  if (approveAndApply && effectiveStage === "applied" && currentApplication?.applied_at) {
+    return NextResponse.json(currentApplication);
   }
   if (reapproveResume && (effectiveStage !== "ready_for_application" || currentApplication?.applied_at)) {
     return NextResponse.json({ error: "The application changed. Reload the queue before approving the résumé." }, { status: 409 });
@@ -281,20 +290,27 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const entersReadyStage = updates.ae_stage === "ready_for_application" && effectiveStage !== "ready_for_application";
     if (entersReadyStage || reapproveResume) {
       try {
-        resumeRelease = await approveEvidenceResumeForApplication(params.id, currentUser.profile.user_id, effectiveStage);
+        resumeRelease = await approveEvidenceResumeForApplication(
+          params.id, currentUser.profile.user_id, effectiveStage, approveAndApply ? approvalRevision : undefined,
+        );
       } catch (error) {
+        if (error instanceof ResumeReleaseChangedError) {
+          return NextResponse.json({ error: error.message, code: "resume_release_changed" }, { status: 409 });
+        }
         if (error instanceof ResumeReleaseError) return NextResponse.json({ error: error.message }, { status: 409 });
         throw error;
       }
     }
-    if (reapproveResume) {
+    if (reapproveResume && !approveAndApply) {
       return NextResponse.json({
         ...currentApplication,
         ...(resumeRelease ? { resume_release: { pageCount: resumeRelease.pageCount } } : {}),
       });
     }
     const stageWriteStarted = performance.now();
-    const data = await updateApplication(params.id, updates);
+    const data = await updateApplication(params.id, updates, marksAeApplied && effectiveStage === "ready_for_application"
+      ? { stage: effectiveStage, reviewStatus: previousReviewStatus }
+      : undefined);
     const stageWriteMs = Math.round(performance.now() - stageWriteStarted);
 
     // Team reports count completed workflow actions, not page views or repeated
@@ -434,7 +450,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }, { headers });
   } catch (error: any) {
     if (isResumeReleaseGateError(error)) {
-      return NextResponse.json({ error: RESUME_RELEASE_REQUIRED_MESSAGE, code: "resume_release_required" }, { status: 409 });
+      const revision = marksAeApplied && effectiveStage === "ready_for_application"
+        ? await findResumeApprovalRevision(params.id).catch(() => null) : null;
+      return NextResponse.json({
+        error: revision ? RESUME_RELEASE_REQUIRED_MESSAGE : "Review and approve the current résumé PDF before moving this application forward.",
+        code: "resume_release_required",
+        ...(revision ? { resume_approval_revision: revision } : {}),
+      }, { status: 409 });
+    }
+    if (error instanceof ApplicationStageChangedError) {
+      return NextResponse.json({ error: error.message, code: "application_stage_changed" }, { status: 409 });
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

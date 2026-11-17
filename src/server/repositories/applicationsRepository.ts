@@ -309,12 +309,13 @@ export async function createApplications(
   return query<ApplicationRow>(sql, values);
 }
 
-/**
- * Update an application by ID.
- */
+export class ApplicationStageChangedError extends Error {}
+
+/** Update an application by ID, optionally requiring an unchanged handoff. */
 export async function updateApplication(
   id: string,
-  input: UpdateApplicationInput
+  input: UpdateApplicationInput,
+  expected?: { stage: string; reviewStatus: string | null },
 ): Promise<ApplicationRow> {
   const updates: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
@@ -328,8 +329,14 @@ export async function updateApplication(
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
   const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
   values.push(id);
-  const sql = `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
+  const guard = expected
+    ? ` AND COALESCE(application_stage, ae_stage) = $${keys.length + 2}
+        AND applied_at IS NULL AND review_status IS NOT DISTINCT FROM $${keys.length + 3}`
+    : "";
+  if (expected) values.push(expected.stage, expected.reviewStatus);
+  const sql = `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1}${guard} RETURNING *`;
   const result = await queryOne<ApplicationRow>(sql, values);
+  if (!result && expected) throw new ApplicationStageChangedError("The application or its review changed. Reload the queue and try again.");
   if (!result) throw new Error("Update failed");
   return result;
 }

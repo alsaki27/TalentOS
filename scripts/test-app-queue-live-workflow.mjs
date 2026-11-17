@@ -57,6 +57,9 @@ try {
   let polls = 0;
   let aeStage = "in_ai_pipeline";
   let finishApproval;
+  let needsApproval = false;
+  let finishApplied;
+  const approvedRevision = "fixture-version:saved-content-hash";
   let latest = { id: "old-failed-workflow", application_id: appId, status: "failed", current_stage: 2 };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.clock.install();
@@ -80,6 +83,7 @@ try {
             app_number: 35878,
             status: "assigned",
             ae_stage: aeStage,
+            resume_approval_required: needsApproval,
             priority: "normal",
             candidates: { id: "candidate", name: "Fixture Candidate" },
             jobs: { id: "job", title: "Fixture Planner", company: "Fixture Company" },
@@ -99,7 +103,20 @@ try {
         return route.fulfill({ json: { workflows: [latest], needsDispatch: false } });
       case `/api/applications/${appId}`:
         if (route.request().method() === "PATCH") {
-          const { ae_stage: requested } = route.request().postDataJSON();
+          const { ae_stage: requested, approve_resume, resume_approval_revision } = route.request().postDataJSON();
+          if (requested === "applied" && needsApproval) {
+            if (!approve_resume) {
+              return route.fulfill({ status: 409, json: {
+                code: "resume_release_required", resume_approval_revision: approvedRevision,
+                error: "The current saved résumé needs approval.",
+              } });
+            }
+            expect(resume_approval_revision).toBe(approvedRevision);
+            await new Promise(resolve => { finishApplied = resolve; });
+            needsApproval = false;
+            aeStage = "applied";
+            return route.fulfill({ json: { ae_stage: aeStage, resume_release: { pageCount: 1 } } });
+          }
           if (requested === "ready_for_application") {
             const confirmed = await new Promise(resolve => { finishApproval = resolve; });
             if (!confirmed) return route.fulfill({ status: 409, json: { error: "The PDF archive could not be confirmed." } });
@@ -208,6 +225,28 @@ try {
   finishApproval(true);
   await expect(stage).toHaveValue("ready_for_application");
   await expect(page.getByText("The approved PDF has 2 pages.", { exact: false })).toBeVisible();
+
+  needsApproval = true;
+  await page.reload();
+  await expect(stage).toHaveValue("ready_for_application");
+  await expect(stage.locator('option[value="applied"]')).toBeEnabled();
+  const confirmation = page.getByRole("alertdialog", { name: "Confirm résumé and application" });
+  await stage.selectOption("applied");
+  await expect(confirmation.getByText(/A#35878/)).toBeVisible();
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(stage).toHaveValue("ready_for_application");
+  expect(finishApplied).toBeUndefined();
+
+  await stage.selectOption("applied");
+  await confirmation.getByRole("button", { name: "Approve PDF and mark applied" }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(stage).toBeDisabled();
+  await expect(stage).toHaveValue("ready_for_application");
+  await expect.poll(() => Boolean(finishApplied)).toBe(true);
+  finishApplied();
+  await expect(stage).toHaveValue("applied");
+  await expect(page.getByText("Saved résumé approved and application marked applied.")).toBeVisible();
   expect(errors).toEqual([]);
   console.log("App Queue live workflow test passed.");
 } finally {

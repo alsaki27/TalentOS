@@ -4,9 +4,30 @@ import { archiveResumeToSharePoint } from "./resumeSharePointArchiveService";
 import { getStudioApprovalPdf, StudioResumeLayoutError } from "./studioResumePdf";
 
 export class ResumeReleaseError extends Error {}
+export class ResumeReleaseChangedError extends ResumeReleaseError {}
 
 export const RESUME_RELEASE_REQUIRED_MESSAGE =
-  "Review the current résumé in Studio and approve its saved PDF before marking this application applied.";
+  "The current saved résumé needs approval. Select AE Applied on the ticket to confirm it.";
+
+// Approval changes status and timestamps. The confirmation follows the saved
+// document fields that invalidate the release receipt, not timestamp writes.
+const savedResumeRevisionSql = `v.id::text || ':' ||
+  encode(sha256(convert_to(jsonb_build_array(v.content, v.formatting, v.generated_text)::text, 'UTF8')), 'hex')`;
+
+export async function findResumeApprovalRevision(applicationId: string) {
+  const source = await queryOne<{ revision: string }>(
+    `SELECT ${savedResumeRevisionSql} AS revision
+       FROM applications a JOIN application_ai_workflows w ON w.id = a.ai_workflow_id
+       JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
+         AND v.application_id = a.id AND v.workflow_id = w.id
+      WHERE a.id = $1 AND a.applied_at IS NULL
+        AND COALESCE(a.application_stage, a.ae_stage) = 'ready_for_application'
+        AND w.config_snapshot->>'pipelineVariant' = $2 AND w.status = 'completed'
+        AND v.content IS NOT NULL`,
+    [applicationId, RESUME_EVIDENCE_VARIANT],
+  );
+  return source?.revision ?? null;
+}
 
 export function isResumeReleaseGateError(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "23514"
@@ -34,17 +55,19 @@ export async function evidenceResumeExportIsAllowed(applicationId: string, resum
   return gate?.allowed === true;
 }
 
-export async function approveEvidenceResumeForApplication(applicationId: string, reviewerId: string, expectedStage: string | null) {
+export async function approveEvidenceResumeForApplication(
+  applicationId: string, reviewerId: string, expectedStage: string | null, expectedRevision?: string,
+) {
   const started = performance.now();
   const source = await queryOne<{
     version_id: string | null; content: unknown; candidate_id: string; candidate_name: string;
     job_id: string | null; job_title: string | null; company: string | null; workflow_id: string;
     finalized: boolean; review_required: boolean; updated_at: string;
-    edited: boolean; approval_status: string | null; export_id: string | null;
+    edited: boolean; approval_status: string | null; export_id: string | null; revision: string | null;
   }>(
     `SELECT v.id AS version_id, v.content, a.candidate_id, c.name AS candidate_name,
             a.job_id, j.title AS job_title, j.company, w.id AS workflow_id, w.status = 'completed' AS finalized,
-            v.updated_at::text AS updated_at,
+            v.updated_at::text AS updated_at, ${savedResumeRevisionSql} AS revision,
             release_artifact.data->>'exportReady' IS DISTINCT FROM 'true' AS review_required,
             v.updated_by_user_id IS NOT NULL AS edited,
             a.review_status AS approval_status, stored.id::text AS export_id
@@ -68,6 +91,9 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
      WHERE a.id = $1 AND a.applied_at IS NULL AND w.config_snapshot->>'pipelineVariant' = $2`,
     [applicationId, RESUME_EVIDENCE_VARIANT],
   );
+  if (expectedRevision !== undefined && source?.revision !== expectedRevision) {
+    throw new ResumeReleaseChangedError("The saved résumé changed. Review the current version in Studio and select AE Applied again.");
+  }
   if (!source || source.export_id) return;
   if (!source.finalized || !source.version_id || !source.content) {
     throw new ResumeReleaseError("The current resume draft is still being prepared");
@@ -110,7 +136,7 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
        RETURNING v.id`,
     [applicationId, source.version_id, JSON.stringify(source.content), JSON.stringify(receipt), source.updated_at, source.workflow_id, expectedStage],
   );
-  if (!approved) throw new ResumeReleaseError("The resume changed while approving it. Reopen the current version and try again.");
+  if (!approved) throw new ResumeReleaseChangedError("The resume changed while approving it. Reopen the current version and try again.");
   return {
     pageCount: pdf.metrics.pageCount,
     prepared: pdf.prepared,

@@ -11,6 +11,10 @@ import { hiringPanelScoreText, missingQualificationFitDisplay, qualificationFitS
 import { DEFAULT_QUEUE_SORT, QUEUE_ACTIVITY_WINDOWS, parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
 import { ResumeQcDialog } from "./components/ResumeQcDialog";
 import { WorkflowFindingsDialog } from "./components/WorkflowFindingsDialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { LegacyPageFitBatch, type LegacyPageFitResult } from "./components/LegacyPageFitBatch";
 
 interface PageFitMetrics {
@@ -328,6 +332,8 @@ export default function ApplicationQueuePage() {
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [pendingStages, setPendingStages] = useState<Record<string, string>>({});
   const [resumeStageErrors, setResumeStageErrors] = useState<Record<string, string>>({});
+  const [approvalConfirmation, setApprovalConfirmation] = useState<{ item: QueueItem; revision: string } | null>(null);
+  const approvalTrigger = useRef<HTMLSelectElement | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
@@ -805,22 +811,35 @@ export default function ApplicationQueuePage() {
     } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
   }
 
-  async function changeAeStage(id: string, stage: string, approveResume = false) {
+  async function changeAeStage(id: string, stage: string, approvalRevision?: string) {
     setPendingStages(prev => ({ ...prev, [id]: stage }));
     setFeedback(null);
     try {
       const res = await fetch(`/api/applications/${id}`, {
         method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ae_stage: stage, ...(approveResume && { approve_resume: true }) }),
+        body: JSON.stringify({
+          ae_stage: stage,
+          ...(approvalRevision && { approve_resume: true, resume_approval_revision: approvalRevision }),
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         const error = data.error || "Update failed.";
-        if (approveResume || data.code === "resume_release_required") {
+        if (data.code === "resume_release_required") {
+          const item = items.find(row => row.id === id);
+          const revision = typeof data.resume_approval_revision === "string" && data.resume_approval_revision;
+          if (!approvalRevision && stage === "applied" && item && revision) {
+            setItems(prev => prev.map(row => row.id === id ? { ...row, resume_approval_required: true } : row));
+            setApprovalConfirmation({ item, revision });
+            return;
+          }
+        }
+        if (approvalRevision || data.code === "resume_release_required") {
           setResumeStageErrors(prev => ({ ...prev, [id]: error }));
         } else {
           setFeedback({ kind: "error", text: error });
         }
+        if (data.code === "application_stage_changed" || data.code === "resume_release_changed") load(page, false);
         return;
       }
       const updated = await res.json().catch(() => null);
@@ -844,8 +863,8 @@ export default function ApplicationQueuePage() {
       } : item));
       const pageCount = updated?.resume_release?.pageCount;
       const pageNotice = pageCount > 1 ? ` The approved PDF has ${pageCount} pages.` : "";
-      setFeedback({ kind: "success", text: approveResume
-        ? `Résumé approved. You can now select AE Applied after submitting the application.${pageNotice}`
+      setFeedback({ kind: "success", text: approvalRevision && updated?.resume_release
+        ? `Saved résumé approved and application marked applied.${pageNotice}`
         : `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".${pageNotice}` });
       load(page, false);
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error." }); }
@@ -1639,7 +1658,10 @@ export default function ApplicationQueuePage() {
                       value={item.ae_stage}
                       disabled={Boolean(pendingStages[item.id])}
                       aria-busy={Boolean(pendingStages[item.id])}
-                      onChange={(e) => changeAeStage(item.id, e.target.value)}
+                      onChange={(e) => {
+                        approvalTrigger.current = e.currentTarget;
+                        void changeAeStage(item.id, e.target.value);
+                      }}
                       title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
                       style={{
                         width: "100%", minWidth: 0, fontSize: 13, fontWeight: 700, padding: "8px 8px",
@@ -1657,12 +1679,13 @@ export default function ApplicationQueuePage() {
                           text on near-black. The global `select option` rule (solid
                           surface background + solid ink text) is reliably readable. */}
                       {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-                        <option key={value} value={value} disabled={value === "applied" && item.resume_approval_required}>{label}</option>
+                        <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
                     {pendingStages[item.id] && (
                       <div className="queue-stage-meta" role="status">
-                        {pendingStages[item.id] === "ready_for_application"
+                        {pendingStages[item.id] === "ready_for_application" ||
+                          (pendingStages[item.id] === "applied" && item.resume_approval_required)
                           ? "Checking and archiving the Studio PDF…"
                           : "Saving stage…"}
                       </div>
@@ -1671,13 +1694,7 @@ export default function ApplicationQueuePage() {
                       <div className="queue-stage-meta">
                         {resumeStageErrors[item.id]
                           ? <div role="alert">{resumeStageErrors[item.id]}</div>
-                          : <div>Review the current résumé in Studio before approving its PDF.</div>}
-                        {item.ae_stage === "ready_for_application" && (
-                          <button type="button" className="btn-compact btn-sm" disabled={Boolean(pendingStages[item.id])}
-                            onClick={() => changeAeStage(item.id, "ready_for_application", true)}>
-                            Approve saved résumé
-                          </button>
-                        )}
+                          : <div>Review the saved résumé in Studio. AE Applied will ask for confirmation.</div>}
                       </div>
                     )}
                     {item.ae_stage === "ready_for_review" && item.ae_review_pending_since && (
@@ -1857,6 +1874,33 @@ export default function ApplicationQueuePage() {
         onClose={() => setFindingsItem(null)}
         restoreFocus={() => findingsTrigger.current?.focus()}
       />
+      <AlertDialog open={approvalConfirmation !== null} onOpenChange={open => { if (!open) setApprovalConfirmation(null); }}>
+        <AlertDialogContent
+          className="w-[calc(100%-2rem)] rounded-xl"
+          onCloseAutoFocus={event => {
+            event.preventDefault();
+            approvalTrigger.current?.focus();
+          }}
+        >
+          <AlertDialogTitle>Confirm résumé and application</AlertDialogTitle>
+          {approvalConfirmation && (
+            <p className="text-sm font-medium">
+              {[approvalConfirmation.item.app_number && `A#${approvalConfirmation.item.app_number}`,
+                approvalConfirmation.item.candidates?.name, approvalConfirmation.item.jobs?.title].filter(Boolean).join(" · ")}
+            </p>
+          )}
+          <AlertDialogDescription>
+            Confirm that you reviewed the current saved résumé in Studio and submitted this application. TalentOS will validate
+            and archive that PDF, then record AE Applied.
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => {
+              if (approvalConfirmation) void changeAeStage(approvalConfirmation.item.id, "applied", approvalConfirmation.revision);
+            }}>Approve PDF and mark applied</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
