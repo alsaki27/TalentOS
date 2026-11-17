@@ -276,7 +276,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         throw error;
       }
     }
+    const stageWriteStarted = performance.now();
     const data = await updateApplication(params.id, updates);
+    const stageWriteMs = Math.round(performance.now() - stageWriteStarted);
 
     // Team reports count completed workflow actions, not page views or repeated
     // saves. These events are written only when the application crosses the
@@ -399,11 +401,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     if (!createdInterview && !resumeRelease) return NextResponse.json(data);
+    const headers = new Headers();
+    if (resumeRelease) {
+      const timings = { ...resumeRelease.timings, stage_write: stageWriteMs };
+      const timing = Object.entries(timings)
+        .filter(([, ms]) => typeof ms === "number")
+        .map(([name, ms]) => `${name};dur=${ms}`)
+        .join(", ");
+      headers.set("Server-Timing", timing);
+      console.info("[resume-approval] completed", { prepared: resumeRelease.prepared, ...timings });
+    }
     return NextResponse.json({
       ...data,
       ...(createdInterview ? { interview: createdInterview } : {}),
-      ...(resumeRelease ? { resume_release: resumeRelease } : {}),
-    });
+      ...(resumeRelease ? { resume_release: { pageCount: resumeRelease.pageCount } } : {}),
+    }, { headers });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

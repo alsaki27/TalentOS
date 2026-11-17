@@ -25,7 +25,13 @@ type Evidence = { id: string; text: string; scope: "skill" | "bullet"; group?: s
 type Requirement = { id: string; text: string; strength: "required" | "preferred" | "unclear"; supported: string[] };
 type Review = ReviewScoreV1 & { risk: "clear" | "unknown" | "conflict"; evidenceIssues: { evidenceId: string; detail: string; material: boolean }[] };
 type PrioritizedDraft = ResumeDraftV1 & { prioritizedIds: string[]; reviewerWarnings?: string[] };
-export type EvidenceStage = { task: { system: string; body: string; schema: Record<string, unknown> } | null; finish: (answer?: unknown) => Promise<unknown> };
+type EvidenceTask = { system: string; body: string; schema: Record<string, unknown> };
+export type EvidenceStage = {
+  task: EvidenceTask | null;
+  providerTask?: EvidenceTask;
+  fallbackSelection?: { prioritize: string[] };
+  finish: (answer?: unknown) => Promise<unknown>;
+};
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -202,12 +208,36 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
   const polished = ctx.previousOutputs.application_final_polish?.data as PrioritizedDraft | undefined;
   const opportunity = ctx.previousOutputs.application_opportunity_reviewer?.data as { selected: string[] } | undefined;
   switch (agent) {
-    case "application_resume_forge":
-      return {
-        task: proof.length > 1 || proof.some(item => item.additional)
-          ? { system: instructions + " Prioritize only the existing resume evidence that best fits the job. Return an empty list if no useful change.", schema: selectionSchema, body: JSON.stringify(evidencePayload) } : null,
-        finish: async answer => ({ jobAnalysis: jobAnalysis(ctx, source.requirements), draft: applySelection(source, readSelection(answer, allowed)) }),
+    case "application_resume_forge": {
+      // Keep the original checkpoint fingerprint so these inputs still find
+      // their prior paid result. The provider sees only selectable references.
+      const task = proof.length > 1 || proof.some(item => item.additional)
+        ? { system: instructions + " Prioritize only the existing resume evidence that best fits the job. Return an empty list if no useful change.", schema: selectionSchema, body: JSON.stringify(evidencePayload) } : null;
+      const offeredRequirements = requirements.map(item => ({ ...item, match: item.match.filter(id => allowed.has(id)) }));
+      const fallbackSelection = {
+        prioritize: [...new Set(offeredRequirements.flatMap(item => item.match))],
       };
+      return {
+        task,
+        providerTask: task ? {
+          system: task.system + ' Return {"prioritize":[...]} with IDs copied from proof[].id.',
+          schema: compactSchema({ prioritize: { type: "array", items: { type: "string", enum: [...allowed] } } }),
+          body: JSON.stringify({ ...evidencePayload, requirements: offeredRequirements }),
+        } : undefined,
+        fallbackSelection,
+        finish: async answer => {
+          // A completed response can contain a stale or invented ID. Keep
+          // only cited evidence, and use the ranked matches if all IDs fail.
+          const requested = record(answer).prioritize;
+          const verified = Array.isArray(requested) && requested.every(id => typeof id === "string")
+            ? requested.filter(id => allowed.has(id))
+            : readSelection(answer, allowed);
+          const selected = verified.length === 0 && Array.isArray(requested) && requested.length > 0
+            ? fallbackSelection.prioritize : verified;
+          return { jobAnalysis: jobAnalysis(ctx, source.requirements), draft: applySelection(source, selected) };
+        },
+      };
+    }
     case "application_hiring_panel": {
       const selected = new Set(prior?.prioritizedIds ?? []);
       const keywords = new Set(significantTokens([ctx.job.title, ...requirements.map(item => item.text)].join(" ")));

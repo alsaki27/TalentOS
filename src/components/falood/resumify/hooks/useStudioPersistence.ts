@@ -37,7 +37,7 @@ export interface UseStudioPersistenceOptions<T> {
   /** Extracts the resume-content portion of a snapshot, for the empty-content guard. Does not need to be memoized. */
   getResumeData: (snapshot: T) => Partial<ResumeData> | null | undefined;
   /** Performs the real PATCH. Resolve false (never throw) on failure. Does not need to be memoized. */
-  save: (snapshot: T) => Promise<boolean>;
+  save: (snapshot: T, options: { force: boolean }) => Promise<boolean>;
   /** Fire-and-forget PATCH for the exit-flush path (keepalive/best-effort). Does not need to be memoized. */
   flush: (snapshot: T) => void;
   /** Autosave debounce window, ms. */
@@ -141,7 +141,7 @@ export function useStudioPersistence<T>(options: UseStudioPersistenceOptions<T>)
     setIsSaving(true);
     setSaveStatus("saving");
     try {
-      const ok = await (versionSave?.save ?? saveRef.current)(snapshot);
+      const ok = versionSave ? await versionSave.save(snapshot) : await saveRef.current(snapshot, { force });
       if (ok) {
         lastSavedSnapshotRef.current = snapshot;
         setSaveStatus("saved");

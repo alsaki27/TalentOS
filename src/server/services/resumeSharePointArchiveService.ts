@@ -28,6 +28,7 @@ export interface ArchiveResumeToSharePointParams {
   buffer: Uint8Array;
   createdByUserId?: string | null;
   variantLabel?: string | null;
+  preferExistingFolder?: boolean;
 }
 
 export interface ArchiveResumeToSharePointResult {
@@ -75,7 +76,9 @@ export async function archiveResumeToSharePoint(params: ArchiveResumeToSharePoin
   }
 
   try {
-    const sp = await uploadToSharePoint(path, params.buffer, contentType);
+    const sp = params.preferExistingFolder
+      ? await uploadToSharePoint(path, params.buffer, contentType, { preferExistingFolder: true })
+      : await uploadToSharePoint(path, params.buffer, contentType);
     const rows = existing
       ? await query<{ id: string }>(
           `UPDATE application_resume_exports SET file_name = $1, file_path = $2, storage_provider = $3,

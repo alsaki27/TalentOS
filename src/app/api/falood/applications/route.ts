@@ -9,6 +9,7 @@ import {
   mergeResumifyEditorIntoBaseResume,
 } from "@/lib/falood/resumeDocumentAdapters";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { prepareSavedApprovalPdf } from "@/server/services/resumeEvidenceReleaseService";
 import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
 import { measureResumePageFitMetrics } from "@/lib/falood/resumePageFitMeasurement";
 import { studioPageFit } from "@/lib/falood/studioPageFit";
@@ -299,6 +300,11 @@ export async function PATCH(req: NextRequest) {
           editor?.profile.user_id ?? null,
           editor ? "human_falood_studio_save" : "falood_studio_save_unattributed", linked.id],
       );
+      if (body.prepareApprovalPdf === true && editor && row?.resumeVersionId && metrics && Array.isArray(body.pageUtilizations)) {
+        backgroundDispatch(prepareSavedApprovalPdf(row.resumeVersionId).catch(error => {
+          console.warn("[resume-approval] PDF preparation could not finish", error instanceof Error ? error.name : typeof error);
+        }));
+      }
     } else {
       row = await queryOne(studioUpdate, values);
     }

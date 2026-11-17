@@ -55,6 +55,8 @@ try {
   let documents = 0;
   let queueReads = 0;
   let polls = 0;
+  let aeStage = "in_ai_pipeline";
+  let finishApproval;
   let latest = { id: "old-failed-workflow", application_id: appId, status: "failed", current_stage: 2 };
   page.on("pageerror", (error) => errors.push(error.message));
   await page.clock.install();
@@ -77,7 +79,7 @@ try {
             id: appId,
             app_number: 35878,
             status: "assigned",
-            ae_stage: "in_ai_pipeline",
+            ae_stage: aeStage,
             priority: "normal",
             candidates: { id: "candidate", name: "Fixture Candidate" },
             jobs: { id: "job", title: "Fixture Planner", company: "Fixture Company" },
@@ -96,6 +98,18 @@ try {
         polls++;
         return route.fulfill({ json: { workflows: [latest], needsDispatch: false } });
       case `/api/applications/${appId}`:
+        if (route.request().method() === "PATCH") {
+          const { ae_stage: requested } = route.request().postDataJSON();
+          if (requested === "ready_for_application") {
+            const confirmed = await new Promise(resolve => { finishApproval = resolve; });
+            if (!confirmed) return route.fulfill({ status: 409, json: { error: "The PDF archive could not be confirmed." } });
+          }
+          aeStage = requested;
+          return route.fulfill({ json: {
+            ae_stage: aeStage,
+            ...(aeStage === "ready_for_application" ? { resume_release: { pageCount: 2 } } : {}),
+          } });
+        }
         return route.fulfill({ json: { resume_generation_status: "failed" } });
       case `/api/applications/${appId}/ai-workflow`:
         return route.fulfill({ status: 409, json: {
@@ -175,6 +189,25 @@ try {
   expect(polls).toBe(pollsBeforeRetry);
   expect(documents).toBe(1);
   expect(queueReads).toBe(1);
+  const stage = row.locator('select').filter({ has: page.locator('option[value="ready_for_application"]') });
+  await stage.selectOption("ready_for_review");
+  await expect(stage).toHaveValue("ready_for_review");
+  await stage.selectOption("ready_for_application");
+  await expect(row.getByRole("status")).toHaveText("Checking and archiving the Studio PDF…");
+  await expect(stage).toBeDisabled();
+  await expect(stage).toHaveValue("ready_for_review");
+  await expect.poll(() => Boolean(finishApproval)).toBe(true);
+  finishApproval(false);
+  finishApproval = undefined;
+  await expect(stage).toBeEnabled();
+  await expect(stage).toHaveValue("ready_for_review");
+  await expect(page.getByText("The PDF archive could not be confirmed.")).toBeVisible();
+
+  await stage.selectOption("ready_for_application");
+  await expect.poll(() => Boolean(finishApproval)).toBe(true);
+  finishApproval(true);
+  await expect(stage).toHaveValue("ready_for_application");
+  await expect(page.getByText("The approved PDF has 2 pages.", { exact: false })).toBeVisible();
   expect(errors).toEqual([]);
   console.log("App Queue live workflow test passed.");
 } finally {

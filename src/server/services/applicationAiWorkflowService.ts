@@ -1092,6 +1092,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         : null;
       if (evidence?.task && agentOptions.system_prompt) {
         evidence.task.system += "\nTask guidance: " + agentOptions.system_prompt;
+        if (evidence.providerTask) evidence.providerTask.system += "\nTask guidance: " + agentOptions.system_prompt;
       }
       if (evidence && !evidence.task) {
         agentOutput = await evidence.finish();
@@ -1137,9 +1138,17 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
               if (route.name !== "openai" || !isOpenAiLuna(route.model)) {
                 return { result: await invoke(), reused: false };
               }
+              const fallback = evidence?.fallbackSelection;
               return withResumeModelCheckpoint({
                 workflowId, task: forgeTask, identity: draftIdentity(route.model, route.reasoningEffort),
-              }, invoke);
+              }, invoke, fallback ? {
+                model: route.model,
+                result: () => ({
+                  result: fallback as unknown as Awaited<ReturnType<typeof invoke>>["result"],
+                  providerName: "deterministic", aiKeyId: null, model: null, routeRank: null, limitSkipped: false,
+                  inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, latencyMs: 0,
+                }),
+              } : undefined);
             } : undefined,
             signal: deadline.signal,
           };
@@ -1153,9 +1162,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
             : null;
           const runStage = () => callWithUsageTracking(routeId, callCtx, async (provider, route) => {
             if (evidence?.task) {
-              const task = forgeTask && route && (route.name !== "openai" || !isOpenAiLuna(route.model))
-                ? { ...evidence.task, system: evidence.task.system + ' Return JSON only with a "prioritize" array of evidence IDs.' }
-                : evidence.task;
+              const task = evidence.providerTask ?? evidence.task;
               const reasoningBudget = forgeTask && route?.name === "openai"
                 ? forgeReasoningOutputBudget(configuredOpenAiReasoningEffort(route.model, route.reasoningEffort))
                 : 0;
@@ -1172,7 +1179,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
             return getAgentFn(agentId)(agentOptions, provider, ctx);
           });
           const call = cached
-            ? { ...cached, providerName: "checkpoint", aiKeyId: null, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
+            ? { ...cached, providerName: cached.providerName === "deterministic" ? "deterministic" : "checkpoint", aiKeyId: null, inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0 }
             : await runStage();
           agentOutput = forgeTask ? await evidence!.finish(call.result) : call.result;
           resolvedProviderName = call.providerName;

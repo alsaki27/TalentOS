@@ -67,21 +67,22 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         return layout?.resumeData === resumeData ? layout.pageUtilizations : null;
     };
 
-    const saveBody = (snapshot: TailorSnapshot, versions?: ResumeVersion[]) => JSON.stringify({
+    const saveBody = (snapshot: TailorSnapshot, versions?: ResumeVersion[], prepareApprovalPdf?: boolean) => JSON.stringify({
         jobDescription: snapshot.jobDescription,
         companyName: company || null,
         resumeData: snapshot.resumeData,
         chatHistory: snapshot.chatHistory,
         pageUtilizations: pageUtilizationsFor(snapshot.resumeData),
+        prepareApprovalPdf,
         versions,
     });
 
-    const saveSnapshot = async (snapshot: TailorSnapshot, versions?: ResumeVersion[]) => {
+    const saveSnapshot = async (snapshot: TailorSnapshot, versions?: ResumeVersion[], prepareApprovalPdf?: boolean) => {
         if (!pageUtilizationsFor(snapshot.resumeData)) await document.fonts.ready;
         const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: saveBody(snapshot, versions),
+            body: saveBody(snapshot, versions, prepareApprovalPdf),
         });
         const json = await res.json().catch(() => ({}));
         if (res.ok && json?.success && json.data?.resumeVersionId && typeof BroadcastChannel !== 'undefined') {
@@ -101,7 +102,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         enabled: true,
         snapshot: { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions },
         getResumeData: (snapshot) => snapshot.resumeData,
-        save: async (snapshot) => (await saveSnapshot(snapshot).catch(() => ({ ok: false }))).ok,
+        save: async (snapshot, { force }) => (await saveSnapshot(snapshot, undefined, force).catch(() => ({ ok: false }))).ok,
         flush: (snapshot) => {
             const body = saveBody(snapshot);
             // Browsers cap in-flight keepalive bodies at 64KB total and reject

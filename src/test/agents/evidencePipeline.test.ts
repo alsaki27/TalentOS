@@ -30,7 +30,7 @@ describe("evidence resume pipeline", () => {
     const stage = await prepareEvidenceStage("application_resume_forge", context(), 6000);
     expect(stage.task?.body).toContain("You must know Kubernetes deployment.");
     expect(stage.task?.body).not.toContain("private@example.com");
-    const task = stage.task!;
+    const task = stage.providerTask!;
     const sentPayload = JSON.parse(task.body);
     const selected = sentPayload.proof.find((item: { text: string }) => item.text === "Kubernetes");
     const send = vi.fn(async () => ({ stopReason: "end_turn", content: [{ type: "text" as const, text: JSON.stringify({ prioritize: [selected.id] }) }] }));
@@ -39,7 +39,28 @@ describe("evidence resume pipeline", () => {
     expect(result.draft.skills).toContainEqual({ title: "Verified skills", skills: ["Kubernetes"] });
     expect(result.draft.experience[0].bullets).toEqual(["Reviewed deployment workflows before release."]);
     expect(result.draft.experience[0].endDate).toBe("2023");
-    await expect(stage.finish({ prioritize: ["fabricated-evidence"] })).rejects.toThrow("unknown evidence");
+    const mixed: any = await stage.finish({ prioritize: ["fabricated-evidence", selected.id] });
+    expect(mixed.draft.prioritizedIds).toEqual([selected.id]);
+    const recovered: any = await stage.finish({ prioritize: ["fabricated-evidence"] });
+    expect(recovered.draft.prioritizedIds).toEqual(stage.fallbackSelection?.prioritize);
+    expect(recovered.draft.prioritizedIds).toContain(selected.id);
+    expect(recovered.draft.prioritizedIds).not.toContain("fabricated-evidence");
+    await expect(stage.finish({ prioritize: [42] })).rejects.toThrow("unknown evidence");
+  });
+
+  it("sends only IDs actually included after trimming proof and constrains the response", async () => {
+    const ctx = context();
+    ctx.job.description = "Required qualifications\nYou must know Kubernetes deployment and review secure deployment workflows before release.";
+    (ctx.baseResume.content as any).experience[0].bullets.push({ text: "Reviewed secure deployment workflows before release. ".repeat(30) });
+    const stage = await prepareEvidenceStage("application_resume_forge", ctx, 1800);
+    const legacy = JSON.parse(stage.task!.body);
+    const task = stage.providerTask!;
+    const payload = JSON.parse(task.body);
+    const ids = payload.proof.map((item: { id: string }) => item.id);
+    expect(legacy.requirements.some((item: { match: string[] }) => item.match.some(id => !ids.includes(id)))).toBe(true);
+    expect(payload.requirements.every((item: { match: string[] }) => item.match.every(id => ids.includes(id)))).toBe(true);
+    expect(task.schema).toMatchObject({ properties: { prioritize: { items: { enum: ids } } } });
+    expect(stage.fallbackSelection?.prioritize.every(id => ids.includes(id))).toBe(true);
   });
 
   it("skips paid polish and the extra editor when there is nothing to fix", async () => {

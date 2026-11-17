@@ -2,6 +2,7 @@ import { AiAttemptCheckpointError, AiRouteCallError, classifyAiErrorCode } from 
 import { sha256Hex } from "@/lib/sha256";
 import { execute, queryOne } from "@/server/db/neon";
 import type { EvidenceStage } from "@/lib/ai/application-agents/evidencePipeline";
+import { evidenceRouteId } from "@/lib/ai/application-agents/workflowStages";
 
 export class ResumeModelCheckpointError extends AiAttemptCheckpointError {}
 
@@ -21,6 +22,7 @@ export async function findCompletedResumeModelCheckpoint<T>(input: DraftInput): 
 
 export async function withResumeModelCheckpoint<T>(
   input: DraftInput & { workflowId: string }, run: () => Promise<T>,
+  recoverSelection?: { model: string; result: () => T },
 ): Promise<{ result: T; reused: boolean }> {
   const hash = await draftHash(input);
   const reservation = await queryOne<{ input_hash: string }>(
@@ -29,11 +31,37 @@ export async function withResumeModelCheckpoint<T>(
     [hash, input.workflowId],
   );
   if (!reservation) {
-    const existing = await queryOne<{ result: T; status: string }>(
-      "SELECT result, status FROM application_resume_model_checkpoints WHERE input_hash = $1 FOR SHARE",
+    const existing = await queryOne<{ result: T; status: string; workflow_id: string; updated_at: string }>(
+      "SELECT result, status, workflow_id, updated_at::text FROM application_resume_model_checkpoints WHERE input_hash = $1 FOR SHARE",
       [hash],
     );
     if (existing?.status === "completed") return { result: existing.result, reused: true };
+    if (existing?.status === "uncertain" && recoverSelection) {
+      // Only recover a recorded reply rejected by the old evidence selector.
+      // A timeout or missing provider result remains protected from replay.
+      const confirmed = await queryOne<{ confirmed: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM ai_usage_events WHERE workflow_id = $1
+             AND automation_id = $2 AND provider = 'openai' AND model = $3
+             AND outcome = 'failure' AND output_tokens > 0 AND error_code = 'invalid_output'
+             AND error_message = 'Invalid model output: selection includes unknown evidence'
+             AND created_at BETWEEN $4::timestamptz AND $4::timestamptz + INTERVAL '1 minute'
+         ) AS confirmed`,
+        [existing.workflow_id, evidenceRouteId("application_resume_forge"), recoverSelection.model, existing.updated_at],
+      );
+      if (confirmed?.confirmed) {
+        const result = recoverSelection.result();
+        const recovered = await queryOne<{ result: T }>(
+          `UPDATE application_resume_model_checkpoints SET status = 'completed', result = $2::jsonb, updated_at = NOW()
+             WHERE input_hash = $1 AND status = 'uncertain' RETURNING result`,
+          [hash, JSON.stringify(result)],
+        );
+        const saved = recovered ?? await queryOne<{ result: T }>(
+          "SELECT result FROM application_resume_model_checkpoints WHERE input_hash = $1 AND status = 'completed'", [hash],
+        );
+        if (saved) return { result: saved.result, reused: true };
+      }
+    }
     throw new ResumeModelCheckpointError("An earlier Luna request for these inputs has no confirmed result. Check its usage before requesting another draft.");
   }
   try {

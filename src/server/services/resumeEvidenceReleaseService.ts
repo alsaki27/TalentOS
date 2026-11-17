@@ -1,7 +1,7 @@
 import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 import { queryOne } from "@/server/db/neon";
 import { archiveResumeToSharePoint } from "./resumeSharePointArchiveService";
-import { renderStudioResumePdf, StudioResumeLayoutError } from "./studioResumePdf";
+import { getStudioApprovalPdf, StudioResumeLayoutError } from "./studioResumePdf";
 
 export class ResumeReleaseError extends Error {}
 
@@ -27,6 +27,7 @@ export async function evidenceResumeExportIsAllowed(applicationId: string, resum
 }
 
 export async function approveEvidenceResumeForApplication(applicationId: string, reviewerId: string) {
+  const started = performance.now();
   const source = await queryOne<{
     version_id: string | null; content: unknown; candidate_id: string; candidate_name: string;
     job_id: string | null; job_title: string | null; company: string | null;
@@ -65,18 +66,22 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
     throw new ResumeReleaseError("Open the draft and resolve the review findings before approving it");
   }
 
-  const pdf = await renderStudioResumePdf(source.content).catch(error => {
+  const fetched = performance.now();
+  const pdf = await getStudioApprovalPdf(source.version_id, source.content).catch(error => {
     if (error instanceof StudioResumeLayoutError) throw new ResumeReleaseError(error.message);
     console.error("[resume-approval] Studio PDF rendering failed", error instanceof Error ? error.name : typeof error);
     throw new ResumeReleaseError("Could not render the saved Studio PDF. Please retry approval.");
   });
+  if (!pdf) throw new ResumeReleaseError("Could not render the saved Studio PDF. Please retry approval.");
+  const rendered = performance.now();
   const result = await archiveResumeToSharePoint({
     applicationId, resumeVersionId: source.version_id, exportType: "pdf",
     candidateId: source.candidate_id, candidateName: source.candidate_name,
     companyName: source.company, jobTitle: source.job_title, jobId: source.job_id,
-    buffer: pdf.bytes, createdByUserId: reviewerId, variantLabel: pdf.pdfHash,
+    buffer: pdf.bytes, createdByUserId: reviewerId, variantLabel: pdf.pdfHash, preferExistingFolder: true,
   });
   if (!result.ok || !result.id) throw new ResumeReleaseError("Could not save the validated PDF. Retry approval to resume from the PDF.");
+  const archived = performance.now();
   const receipt = { exportId: result.id, pdfHash: pdf.pdfHash, contentHash: pdf.contentHash, approvedBy: reviewerId, metrics: pdf.metrics };
   const approved = await queryOne(
     `WITH authorized AS MATERIALIZED (
@@ -94,5 +99,30 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
     [applicationId, source.version_id, JSON.stringify(source.content), JSON.stringify(receipt), source.updated_at],
   );
   if (!approved) throw new ResumeReleaseError("The resume changed while approving it. Reopen the current version and try again.");
-  return { pageCount: pdf.metrics.pageCount };
+  return {
+    pageCount: pdf.metrics.pageCount,
+    prepared: pdf.prepared,
+    timings: {
+      release_lookup: Math.round(fetched - started),
+      studio_render: Math.round(rendered - fetched),
+      ...pdf.timings,
+      sharepoint_archive: Math.round(archived - rendered),
+      release_receipt: Math.round(performance.now() - archived),
+    },
+  };
+}
+
+export async function prepareSavedApprovalPdf(versionId: string) {
+  const source = await queryOne<{ content: unknown }>(
+    `SELECT v.content
+       FROM applications a
+       JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id AND v.status = 'draft'
+       JOIN application_ai_workflows w ON w.id = a.ai_workflow_id AND w.id = v.workflow_id
+      WHERE v.id = $1 AND v.updated_by_user_id IS NOT NULL
+        AND a.ae_stage = 'ready_for_review' AND a.applied_at IS NULL
+        AND a.review_status IS DISTINCT FROM 'changes_requested'
+        AND w.status = 'completed' AND w.config_snapshot->>'pipelineVariant' = $2`,
+    [versionId, RESUME_EVIDENCE_VARIANT],
+  );
+  if (source) await getStudioApprovalPdf(versionId, source.content, true);
 }

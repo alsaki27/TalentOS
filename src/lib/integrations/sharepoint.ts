@@ -88,20 +88,15 @@ async function ensureFolderPath(token: string, siteId: string, folderPath: strin
   }
 }
 
-export async function uploadToSharePoint(path: string, content: Uint8Array | Blob, contentType: string): Promise<{ url: string; itemId: string; name: string }> {
+export async function uploadToSharePoint(path: string, content: Uint8Array | Blob, contentType: string,
+  options?: { preferExistingFolder?: boolean },
+): Promise<{ url: string; itemId: string; name: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
   const graphPath = `${folder}/${path}`;
 
-  // Ensure parent folders exist before uploading (SharePoint PUT /content does not auto-create parents)
-  const lastSlash = graphPath.lastIndexOf("/");
-  if (lastSlash > 0) {
-    const parentPath = graphPath.substring(0, lastSlash);
-    await ensureFolderPath(token, siteId, parentPath);
-  }
-
-  const res = await fetch(
+  const upload = () => fetch(
     `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeGraphPath(graphPath)}:/content`,
     {
       method: "PUT",
@@ -115,6 +110,21 @@ export async function uploadToSharePoint(path: string, content: Uint8Array | Blo
       body: content instanceof Blob ? content : new Blob([new Uint8Array(content)]),
     },
   );
+  // Reviewed resumes often have an archive folder already. The direct PUT
+  // avoids recreating each ancestor. A missing parent still gets created.
+  const parentPath = graphPath.slice(0, graphPath.lastIndexOf("/"));
+  let res: Response;
+  if (options?.preferExistingFolder) {
+    res = await upload();
+    if (res.status === 404 && parentPath) {
+      await res.body?.cancel().catch(() => undefined);
+      await ensureFolderPath(token, siteId, parentPath);
+      res = await upload();
+    }
+  } else {
+    if (parentPath) await ensureFolderPath(token, siteId, parentPath);
+    res = await upload();
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`SharePoint upload failed (${res.status}) ${text}`.trim());

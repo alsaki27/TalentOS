@@ -934,7 +934,7 @@ export async function callWithUsageTracking<T>(
         ? await ctx.checkpointResumeDraft(route, attempt)
         : { result: await attempt(), reused: false };
       if (tracked.reused) {
-        return { ...tracked.result, providerName: "checkpoint", aiKeyId: null,
+        return { ...tracked.result, providerName: tracked.result.providerName === "deterministic" ? "deterministic" : "checkpoint", aiKeyId: null,
           inputTokens: 0, outputTokens: 0, estimatedCostUsd: 0, latencyMs: 0 };
       }
       const { latencyMs } = tracked.result;

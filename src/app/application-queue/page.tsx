@@ -325,6 +325,7 @@ export default function ApplicationQueuePage() {
   const [pageError, setPageError] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [pendingStages, setPendingStages] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
@@ -803,11 +804,11 @@ export default function ApplicationQueuePage() {
   }
 
   async function changeAeStage(id: string, stage: string) {
-    setActionLoading(`${id}:ae_stage`);
+    setPendingStages(prev => ({ ...prev, [id]: stage }));
     setFeedback(null);
     try {
       const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ae_stage: stage }) });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setActionLoading(null); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
       const updated = await res.json().catch(() => null);
       setItems((prev) => prev.map((item) => item.id === id ? {
         ...item,
@@ -820,12 +821,18 @@ export default function ApplicationQueuePage() {
         ae_applied_at: updated?.ae_applied_at ?? item.ae_applied_at,
         ae_applied_by_name: updated?.ae_applied_by_name ?? item.ae_applied_by_name,
       } : item));
-      setActionLoading(null);
       const pageCount = updated?.resume_release?.pageCount;
       const pageNotice = pageCount > 1 ? ` The approved PDF has ${pageCount} pages.` : "";
       setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".${pageNotice}` });
       load(page, false);
-    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
+    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error." }); }
+    finally {
+      setPendingStages(prev => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
   }
 
   async function requestReview(item: QueueItem) {
@@ -1592,7 +1599,8 @@ export default function ApplicationQueuePage() {
                   <td>
                     <select
                       value={item.ae_stage}
-                      disabled={actionLoading === `${item.id}:ae_stage`}
+                      disabled={Boolean(pendingStages[item.id])}
+                      aria-busy={Boolean(pendingStages[item.id])}
                       onChange={(e) => changeAeStage(item.id, e.target.value)}
                       title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
                       style={{
@@ -1614,6 +1622,13 @@ export default function ApplicationQueuePage() {
                         <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
+                    {pendingStages[item.id] && (
+                      <div className="queue-stage-meta" role="status">
+                        {item.ae_stage === "ready_for_review" && pendingStages[item.id] === "ready_for_application"
+                          ? "Checking and archiving the Studio PDF…"
+                          : "Saving stage…"}
+                      </div>
+                    )}
                     {item.ae_stage === "ready_for_review" && item.ae_review_pending_since && (
                       <div className="queue-stage-meta">Pending since {new Date(item.ae_review_pending_since).toLocaleString()}</div>
                     )}
