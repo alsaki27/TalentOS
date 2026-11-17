@@ -4,7 +4,7 @@ import {
   listTemporaryResumePdfs, readTemporaryResumePdf, removeTemporaryResumePdf, TEMPORARY_RESUME_PDF_PROVIDER,
 } from "@/server/storage/approvedResumePdfStorage";
 import {
-  approveEvidenceResumeForApplication, ResumeReleaseChangedError, ResumeReleaseReviewRequiredError,
+  approveEvidenceResumeForApplication, ResumeReleaseChangedError, ResumeReleaseReviewRequiredError, ResumeSavedRevisionChangedError,
 } from "./resumeEvidenceReleaseService";
 import { uploadVerifiedResumeArchive } from "./resumeSharePointArchiveService";
 
@@ -41,9 +41,15 @@ export async function refreshOneApprovedResumePdf(versionId?: string) {
     if (!ticket) state = "superseded";
     else await approveEvidenceResumeForApplication(job.application_id, job.editor_id, ticket.stage, job.revision, { refreshLease: lease });
   } catch (cause) {
-    state = cause instanceof ResumeReleaseReviewRequiredError ? "blocked" : "pending";
-    error = cause instanceof ResumeReleaseChangedError ? "The saved résumé changed during refresh."
-      : cause instanceof ResumeReleaseReviewRequiredError ? cause.message : "Could not refresh the approved PDF.";
+    if (cause instanceof ResumeSavedRevisionChangedError) {
+      state = "superseded";
+    } else if (cause instanceof ResumeReleaseReviewRequiredError) {
+      state = "blocked";
+      error = cause.message;
+    } else {
+      state = "pending";
+      error = cause instanceof ResumeReleaseChangedError ? "The saved résumé changed during refresh." : "Could not refresh the approved PDF.";
+    }
   }
   await execute(
     `WITH current_version AS MATERIALIZED (

@@ -329,8 +329,8 @@ export const APPROVED_RESUME_PDF_JOIN = `LEFT JOIN application_resume_exports ap
   AND rv.status = 'approved' AND rv.workflow_id = a.ai_workflow_id`;
 
 export const APPROVED_RESUME_PDF_COLUMNS = `
-  to_jsonb(rv)->>'pdf_refresh_state' AS pdf_refresh_state,
-  to_jsonb(rv)->>'pdf_refresh_error' AS pdf_refresh_error,
+  CASE WHEN approved_pdf.id IS NULL THEN to_jsonb(rv)->>'pdf_refresh_state' END AS pdf_refresh_state,
+  CASE WHEN approved_pdf.id IS NULL THEN to_jsonb(rv)->>'pdf_refresh_error' END AS pdf_refresh_error,
   approved_pdf.id::text AS approved_resume_export_id,
   to_jsonb(approved_pdf)->>'pdf_archive_state' AS approved_resume_archive_state,
   (approved_pdf.storage_provider = 'approved_pdf_staging') AS approved_resume_archive_pending`;

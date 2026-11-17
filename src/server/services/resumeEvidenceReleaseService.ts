@@ -8,6 +8,7 @@ import { removeTemporaryResumePdf, saveTemporaryResumePdf, stagedResumePdfWrites
 
 export class ResumeReleaseError extends Error {}
 export class ResumeReleaseChangedError extends ResumeReleaseError {}
+export class ResumeSavedRevisionChangedError extends ResumeReleaseChangedError {}
 export class ResumeReleaseReviewRequiredError extends ResumeReleaseError {}
 export class ResumeReleaseUpdatingError extends ResumeReleaseError {}
 
@@ -111,7 +112,7 @@ export async function approveEvidenceResumeForApplication(
     [applicationId, RESUME_EVIDENCE_VARIANT],
   );
   if (expectedRevision !== undefined && source?.revision !== expectedRevision) {
-    throw new ResumeReleaseChangedError("The saved résumé changed. Review the current version in Studio and select AE Applied again.");
+    throw new ResumeSavedRevisionChangedError("The saved résumé changed. Review the current version in Studio and select AE Applied again.");
   }
   if (!source || source.export_id) return;
   if (expectedRevision !== undefined && !refreshLease) {

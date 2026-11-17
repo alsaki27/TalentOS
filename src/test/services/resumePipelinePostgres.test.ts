@@ -340,6 +340,11 @@ describe.skipIf(!process.env.RESUME_PIPELINE_PGLITE_PATH)("resume recovery SQL i
     expect((await getCurrent()).release_receipt.exportId).not.toBe(secondExportId);
     expect((await db.query("SELECT submitted_resume_export_id,ae_stage FROM applications WHERE id=$1", [app])).rows[0])
       .toEqual({ submitted_resume_export_id: secondExportId, ae_stage: "applied" });
+    await save("studio-5");
+    await db.query(`UPDATE application_resume_versions SET content='{"theme":"other-workflow"}',
+      updated_source='other_workflow',updated_at=NOW() WHERE id=$1`, [version]);
+    await runApprovedResumePdfJobs();
+    expect(await getCurrent()).toMatchObject({ status: "draft", pdf_refresh_state: "superseded", release_receipt: null });
   });
 
   it("keeps older non-evidence tickets on their normal review and applied path", async () => {
