@@ -7,10 +7,13 @@ import {
   findApplicationById,
   updateApplication,
 } from "@/server/repositories/applicationsRepository";
+import { buildAppliedApplicationUpdates } from "@/server/services/applicationAppliedStage";
+import { isResumeReleaseGateError, RESUME_RELEASE_REQUIRED_MESSAGE } from "@/server/services/resumeEvidenceReleaseService";
 
 const BULK_APPLICATION_FIELDS = new Set([
   "status",
   "ae_stage",
+  "application_stage",
   "completed_at",
   "assigned_to_user_id",
   "assigned_to",
@@ -33,6 +36,8 @@ type BulkBody = {
   ids?: unknown;
   updateData?: Record<string, unknown>;
 };
+
+type BulkUpdateFailure = { id: string; error: string; code?: "resume_release_required" };
 
 function errorResponse(error: string, status: number) {
   return NextResponse.json({ error }, { status });
@@ -77,7 +82,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: failed.length === 0, updated: deleted.length, failed: failed.length, updatedIds: deleted, failures: failed }, { status: failed.length ? (deleted.length ? 207 : 500) : 200 });
   }
 
-  const input = body.updateData && typeof body.updateData === "object" ? body.updateData : null;
+  const input = body.updateData && typeof body.updateData === "object" && !Array.isArray(body.updateData)
+    ? body.updateData
+    : null;
   if (!input) return errorResponse("updateData is required.", 400);
 
   const unknownFields = Object.keys(input).filter((field) => !BULK_APPLICATION_FIELDS.has(field));
@@ -86,6 +93,23 @@ export async function POST(req: NextRequest) {
   }
 
   const updates: Record<string, unknown> = { ...input };
+  if ("application_stage" in updates) {
+    // Older queue pages sent these two actions under the stage field.
+    const stage = updates.application_stage;
+    if (stage === "in_progress" && !("ae_stage" in updates) && (updates.status ?? stage) === stage) {
+      updates.status = stage;
+    } else if (stage === "applied" && (updates.ae_stage ?? stage) === stage && (updates.status ?? stage) === stage) {
+      updates.ae_stage = stage;
+    } else {
+      return errorResponse("Use the queue's Start or Mark applied action for a bulk status change.", 400);
+    }
+    delete updates.application_stage;
+  }
+
+  const actor = {
+    userId: currentUser.profile.user_id,
+    name: currentUser.profile.display_name || currentUser.profile.email,
+  };
   const isReassignment = "assigned_to_user_id" in updates || "assigned_to" in updates;
   let ownerLabel: string | null = null;
 
@@ -114,7 +138,7 @@ export async function POST(req: NextRequest) {
   }
 
   const updated: string[] = [];
-  const failed: { id: string; error: string }[] = [];
+  const failed: BulkUpdateFailure[] = [];
 
   for (const id of ids) {
     try {
@@ -125,14 +149,20 @@ export async function POST(req: NextRequest) {
       }
 
       const rowUpdates: Record<string, unknown> = { ...updates };
-      if (rowUpdates.ae_stage === "applied") {
-        rowUpdates.application_stage = "applied";
-        rowUpdates.status = "applied";
-        rowUpdates.applied_at = current.applied_at ?? new Date().toISOString();
-        rowUpdates.completed_at = current.completed_at ?? rowUpdates.applied_at;
+      const previousStage = current.application_stage ?? current.ae_stage;
+      const markingApplied = rowUpdates.ae_stage === "applied";
+      const changedAt = new Date().toISOString();
+      if (markingApplied) {
+        Object.assign(rowUpdates, buildAppliedApplicationUpdates(current, actor, changedAt));
+        const reviewStatus = rowUpdates.review_status ?? current.review_status;
+        if (reviewStatus === "pending" || reviewStatus === "changes_requested") {
+          rowUpdates.review_status = "approved";
+          rowUpdates.reviewed_at = changedAt;
+          rowUpdates.reviewed_by_user_id = actor.userId;
+        }
       }
 
-      if ("status" in rowUpdates) {
+      if ("status" in rowUpdates && (!markingApplied || rowUpdates.status !== current.status)) {
         const automation = applicationAutomation({
           status: String(rowUpdates.status),
           explicitFollowUp: "follow_up_at" in rowUpdates,
@@ -145,6 +175,14 @@ export async function POST(req: NextRequest) {
       }
 
       await updateApplication(id, rowUpdates as any);
+
+      if (markingApplied && previousStage !== "applied") {
+        await execute(
+          `INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_at, changed_by_user_id, changed_by_name, reason, source)
+           VALUES ($1, $2, 'applied', $3, $4, $5, $6, 'queue')`,
+          [id, previousStage, changedAt, actor.userId, actor.name, "Marked applied from the queue."]
+        );
+      }
 
       if ("status" in rowUpdates && rowUpdates.status !== current.status) {
         await execute(
@@ -166,17 +204,24 @@ export async function POST(req: NextRequest) {
       );
 
       updated.push(id);
-    } catch (error: any) {
-      failed.push({ id, error: error?.message || "Update failed" });
+    } catch (error) {
+      failed.push(isResumeReleaseGateError(error)
+        ? { id, error: RESUME_RELEASE_REQUIRED_MESSAGE, code: "resume_release_required" }
+        : { id, error: error instanceof Error ? error.message : "Update failed" });
     }
   }
 
-  const status = failed.length > 0 ? (updated.length > 0 ? 207 : 500) : 200;
+  let status = 200;
+  if (failed.length > 0) {
+    if (updated.length > 0) status = 207;
+    else status = failed.every(failure => failure.code === "resume_release_required") ? 409 : 500;
+  }
   return NextResponse.json({
     ok: failed.length === 0,
     updated: updated.length,
     failed: failed.length,
     updatedIds: updated,
     failures: failed,
+    ...(failed.length > 0 && updated.length === 0 && { error: failed[0].error }),
   }, { status });
 }

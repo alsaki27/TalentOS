@@ -2,6 +2,7 @@
 // Data-access abstraction for the applications table.
 
 import { parseQueueSort, type QueueSort } from "@/lib/applicationQueueFilters";
+import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | "email_confirmation" | "custom_interview" | null;
@@ -64,6 +65,7 @@ export interface ApplicationRow {
   resume_qc_changed_by_name?: string | null;
   resume_qc_eligible?: boolean;
   resume_qc_has_notes?: boolean;
+  resume_approval_required?: boolean;
 }
 
 export interface ApplicationEventRow {
@@ -712,6 +714,17 @@ export async function listApplicationQueue(
       rq.changed_by_name AS resume_qc_changed_by_name,
       (${effectiveStage} IN ('in_ai_pipeline', 'ready_for_review', 'ready_for_application')) AS resume_qc_eligible,
       EXISTS (SELECT 1 FROM application_resume_qc_notes rqn WHERE rqn.application_id = a.id) AS resume_qc_has_notes,
+      CASE WHEN ${effectiveStage} = 'ready_for_application' AND a.applied_at IS NULL THEN
+        EXISTS (SELECT 1 FROM application_ai_workflows release_workflow
+          WHERE release_workflow.id = a.ai_workflow_id
+            AND release_workflow.config_snapshot->>'pipelineVariant' = '${RESUME_EVIDENCE_VARIANT}')
+        AND NOT EXISTS (SELECT 1 FROM application_resume_exports x
+          WHERE rv.workflow_id = a.ai_workflow_id AND rv.status = 'approved'
+            AND x.application_id = a.id AND x.resume_version_id = rv.id
+            AND x.export_type = 'pdf' AND x.status = 'created'
+            AND x.id::text = to_jsonb(rv)->'release_receipt'->>'exportId'
+            AND x.content_sha256 = to_jsonb(rv)->'release_receipt'->>'pdfHash')
+        ELSE FALSE END AS resume_approval_required,
       review_entry.pending_since as ae_review_pending_since,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
       a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,

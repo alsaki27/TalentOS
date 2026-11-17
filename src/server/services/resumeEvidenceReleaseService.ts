@@ -5,6 +5,14 @@ import { getStudioApprovalPdf, StudioResumeLayoutError } from "./studioResumePdf
 
 export class ResumeReleaseError extends Error {}
 
+export const RESUME_RELEASE_REQUIRED_MESSAGE =
+  "Review the current résumé in Studio and approve its saved PDF before marking this application applied.";
+
+export function isResumeReleaseGateError(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "23514"
+    && error.message === "Approve and validate the current resume PDF before moving this application forward";
+}
+
 export async function evidenceResumeExportIsAllowed(applicationId: string, resumeVersionId: string, exportId?: string) {
   const gate = await queryOne<{ allowed: boolean }>(
     `SELECT (w.config_snapshot->>'pipelineVariant' IS DISTINCT FROM $3 OR (
@@ -26,16 +34,16 @@ export async function evidenceResumeExportIsAllowed(applicationId: string, resum
   return gate?.allowed === true;
 }
 
-export async function approveEvidenceResumeForApplication(applicationId: string, reviewerId: string) {
+export async function approveEvidenceResumeForApplication(applicationId: string, reviewerId: string, expectedStage: string | null) {
   const started = performance.now();
   const source = await queryOne<{
     version_id: string | null; content: unknown; candidate_id: string; candidate_name: string;
-    job_id: string | null; job_title: string | null; company: string | null;
+    job_id: string | null; job_title: string | null; company: string | null; workflow_id: string;
     finalized: boolean; review_required: boolean; updated_at: string;
     edited: boolean; approval_status: string | null; export_id: string | null;
   }>(
     `SELECT v.id AS version_id, v.content, a.candidate_id, c.name AS candidate_name,
-            a.job_id, j.title AS job_title, j.company, w.status = 'completed' AS finalized,
+            a.job_id, j.title AS job_title, j.company, w.id AS workflow_id, w.status = 'completed' AS finalized,
             v.updated_at::text AS updated_at,
             release_artifact.data->>'exportReady' IS DISTINCT FROM 'true' AS review_required,
             v.updated_by_user_id IS NOT NULL AS edited,
@@ -44,9 +52,11 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
      JOIN candidates c ON c.id = a.candidate_id
      LEFT JOIN jobs j ON j.id = a.job_id
      LEFT JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id AND v.workflow_id = w.id
+       AND v.application_id = a.id
      LEFT JOIN application_resume_exports stored ON stored.id::text = to_jsonb(v)->'release_receipt'->>'exportId'
        AND stored.content_sha256 = to_jsonb(v)->'release_receipt'->>'pdfHash'
-       AND stored.status = 'created' AND v.status = 'approved'
+       AND stored.application_id = a.id AND stored.resume_version_id = v.id
+       AND stored.export_type = 'pdf' AND stored.status = 'created' AND v.status = 'approved'
      LEFT JOIN LATERAL (
        SELECT artifact.data FROM application_ai_stage_runs sr
        JOIN application_ai_artifacts artifact ON artifact.id = sr.output_artifact_id
@@ -87,16 +97,18 @@ export async function approveEvidenceResumeForApplication(applicationId: string,
     `WITH authorized AS MATERIALIZED (
        SELECT a.id FROM applications a WHERE a.id = $1 AND a.applied_at IS NULL
          AND a.tailored_resume_version_id = $2
+         AND a.ai_workflow_id = $6
+         AND COALESCE(a.application_stage, a.ae_stage) IS NOT DISTINCT FROM $7
          AND a.review_status IS DISTINCT FROM 'changes_requested'
        FOR UPDATE
      )
      UPDATE application_resume_versions v
        SET status = 'approved', release_receipt = $4::jsonb, updated_at = NOW()
        FROM authorized app
-       WHERE v.id = $2 AND v.application_id = app.id AND v.content::jsonb = $3::jsonb
+       WHERE v.id = $2 AND v.application_id = app.id AND v.workflow_id = $6 AND v.content::jsonb = $3::jsonb
          AND v.updated_at IS NOT DISTINCT FROM $5::timestamptz
        RETURNING v.id`,
-    [applicationId, source.version_id, JSON.stringify(source.content), JSON.stringify(receipt), source.updated_at],
+    [applicationId, source.version_id, JSON.stringify(source.content), JSON.stringify(receipt), source.updated_at, source.workflow_id, expectedStage],
   );
   if (!approved) throw new ResumeReleaseError("The resume changed while approving it. Reopen the current version and try again.");
   return {
@@ -119,7 +131,8 @@ export async function prepareSavedApprovalPdf(versionId: string) {
        JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id AND v.status = 'draft'
        JOIN application_ai_workflows w ON w.id = a.ai_workflow_id AND w.id = v.workflow_id
       WHERE v.id = $1 AND v.updated_by_user_id IS NOT NULL
-        AND a.ae_stage = 'ready_for_review' AND a.applied_at IS NULL
+        AND COALESCE(a.application_stage, a.ae_stage) IN ('ready_for_review', 'ready_for_application')
+        AND a.applied_at IS NULL
         AND a.review_status IS DISTINCT FROM 'changes_requested'
         AND w.status = 'completed' AND w.config_snapshot->>'pipelineVariant' = $2`,
     [versionId, RESUME_EVIDENCE_VARIANT],

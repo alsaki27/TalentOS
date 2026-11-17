@@ -45,6 +45,19 @@ describe("application queue query", () => {
     }
   });
 
+  it("checks the current approval receipt on ready evidence tickets without changing queue counts", async () => {
+    await listApplicationQueue({ page: 1, pageSize: 25 });
+    const [dataSql] = vi.mocked(query).mock.calls[0];
+    const [statsSql] = vi.mocked(queryOne).mock.calls[0];
+    expect(dataSql).toContain("= 'ready_for_application' AND a.applied_at IS NULL THEN");
+    expect(dataSql).toContain("release_workflow.id = a.ai_workflow_id");
+    expect(dataSql).toContain("release_workflow.config_snapshot->>'pipelineVariant' = 'resume_evidence_v2'");
+    expect(dataSql).toContain("x.application_id = a.id AND x.resume_version_id = rv.id");
+    expect(dataSql).toContain("x.content_sha256 = to_jsonb(rv)->'release_receipt'->>'pdfHash'");
+    expect(dataSql).toContain("ELSE FALSE END AS resume_approval_required");
+    expect(statsSql).not.toContain("resume_approval_required");
+  });
+
   it("applies the selected fit score band to rows, total, and queue counts", async () => {
     await listApplicationQueue({ page: 1, pageSize: 25, fitScoreBand: "8_10" });
 

@@ -52,6 +52,7 @@ interface QueueItem {
   ae_reviewed_at: string | null;
   ae_applied_by_name: string | null;
   ae_applied_at: string | null;
+  resume_approval_required?: boolean;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null; eligibility_restricted?: boolean | null; requires_citizenship?: boolean | null; citizenship_countries?: string[] | null; export_control_restricted?: boolean | null; eligibility_restriction_evidence?: string | null } | null;
   workflow_status?: string | null;
@@ -326,6 +327,7 @@ export default function ApplicationQueuePage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [pendingStages, setPendingStages] = useState<Record<string, string>>({});
+  const [resumeStageErrors, setResumeStageErrors] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
@@ -791,28 +793,47 @@ export default function ApplicationQueuePage() {
     setSelected(p => p.size === items.length ? new Set() : new Set(items.map(i => i.id)));
   }
 
-  async function setStatus(id: string, s: string) {
-    setActionLoading(`${id}:${s}`);
+  async function startApplication(id: string) {
+    setActionLoading(`${id}:in_progress`);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "in_progress", completed_at: null }) });
       setActionLoading(null);
       if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
-      setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
+      setFeedback({ kind: "success", text: "Application started." });
       load(page, false);
     } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
   }
 
-  async function changeAeStage(id: string, stage: string) {
+  async function changeAeStage(id: string, stage: string, approveResume = false) {
     setPendingStages(prev => ({ ...prev, [id]: stage }));
     setFeedback(null);
     try {
-      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ae_stage: stage }) });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      const res = await fetch(`/api/applications/${id}`, {
+        method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ae_stage: stage, ...(approveResume && { approve_resume: true }) }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const error = data.error || "Update failed.";
+        if (approveResume || data.code === "resume_release_required") {
+          setResumeStageErrors(prev => ({ ...prev, [id]: error }));
+        } else {
+          setFeedback({ kind: "error", text: error });
+        }
+        return;
+      }
       const updated = await res.json().catch(() => null);
+      setResumeStageErrors(prev => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       setItems((prev) => prev.map((item) => item.id === id ? {
         ...item,
         ae_stage: updated?.ae_stage ?? stage,
+        resume_approval_required: false,
         status: updated?.status ?? item.status,
         applied_at: updated && Object.prototype.hasOwnProperty.call(updated, "applied_at") ? updated.applied_at : item.applied_at,
         completed_at: updated && Object.prototype.hasOwnProperty.call(updated, "completed_at") ? updated.completed_at : item.completed_at,
@@ -823,7 +844,9 @@ export default function ApplicationQueuePage() {
       } : item));
       const pageCount = updated?.resume_release?.pageCount;
       const pageNotice = pageCount > 1 ? ` The approved PDF has ${pageCount} pages.` : "";
-      setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".${pageNotice}` });
+      setFeedback({ kind: "success", text: approveResume
+        ? `Résumé approved. You can now select AE Applied after submitting the application.${pageNotice}`
+        : `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".${pageNotice}` });
       load(page, false);
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error." }); }
     finally {
@@ -934,7 +957,7 @@ export default function ApplicationQueuePage() {
     input.click();
   }
 
-  async function bulkStatus(s: string) {
+  async function bulkStatus(status: "in_progress" | "applied") {
     setFeedback(null);
     try {
       const res = await fetch("/api/bulk", {
@@ -944,16 +967,31 @@ export default function ApplicationQueuePage() {
           action: "PATCH",
           table: "applications",
           ids: Array.from(selectedItems).map(i => i.id),
-            updateData: { application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null }
+          updateData: status === "applied" ? { ae_stage: "applied" } : { status, completed_at: null },
         })
       });
       const data = await res.json().catch(() => ({}));
+      const failures: { id: string; error: string; code?: string }[] = Array.isArray(data.failures) ? data.failures : [];
+      const approvalFailures = failures.filter(row => row.code === "resume_release_required");
+      if (approvalFailures.length) {
+        setResumeStageErrors(prev => ({ ...prev, ...Object.fromEntries(approvalFailures.map(row => [row.id, row.error])) }));
+      }
+      const failure = approvalFailures[0] ?? failures[0];
       if (!res.ok && res.status !== 207) {
-        setFeedback({ kind: "error", text: data.error || "Bulk update failed." });
+        setFeedback({ kind: "error", text: failure?.error || data.error || "Bulk update failed." });
         return;
       }
-      setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} updated; ${data.failed} failed.` : `${data.updated} applications updated.` });
-      setSelected(new Set());
+      if (data.failed) {
+        setFeedback({ kind: "error", text: `${data.updated} updated. ${data.failed} failed. ${failure?.error ?? ""}`.trim() });
+      } else {
+        setFeedback({ kind: "success", text: `${data.updated} applications updated.` });
+      }
+      const updatedIds: string[] = Array.isArray(data.updatedIds) ? data.updatedIds : [];
+      setSelected(previous => {
+        const next = new Set(previous);
+        for (const id of updatedIds) next.delete(id);
+        return next;
+      });
       load(page, false);
     } catch (err: any) {
       setFeedback({ kind: "error", text: err.message || "Network error." });
@@ -1619,14 +1657,27 @@ export default function ApplicationQueuePage() {
                           text on near-black. The global `select option` rule (solid
                           surface background + solid ink text) is reliably readable. */}
                       {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
+                        <option key={value} value={value} disabled={value === "applied" && item.resume_approval_required}>{label}</option>
                       ))}
                     </select>
                     {pendingStages[item.id] && (
                       <div className="queue-stage-meta" role="status">
-                        {item.ae_stage === "ready_for_review" && pendingStages[item.id] === "ready_for_application"
+                        {pendingStages[item.id] === "ready_for_application"
                           ? "Checking and archiving the Studio PDF…"
                           : "Saving stage…"}
+                      </div>
+                    )}
+                    {(item.resume_approval_required || resumeStageErrors[item.id]) && (
+                      <div className="queue-stage-meta">
+                        {resumeStageErrors[item.id]
+                          ? <div role="alert">{resumeStageErrors[item.id]}</div>
+                          : <div>Review the current résumé in Studio before approving its PDF.</div>}
+                        {item.ae_stage === "ready_for_application" && (
+                          <button type="button" className="btn-compact btn-sm" disabled={Boolean(pendingStages[item.id])}
+                            onClick={() => changeAeStage(item.id, "ready_for_application", true)}>
+                            Approve saved résumé
+                          </button>
+                        )}
                       </div>
                     )}
                     {item.ae_stage === "ready_for_review" && item.ae_review_pending_since && (
@@ -1698,7 +1749,7 @@ export default function ApplicationQueuePage() {
                               ))
                             )}
                             <div className="dropdown-divider" />
-                            <button className="dropdown-item muted" onClick={() => { setStatus(item.id, "in_progress"); setFaloodOpen(null); }} disabled={!item.assigned_to_user_id}>
+                            <button className="dropdown-item muted" onClick={() => { startApplication(item.id); setFaloodOpen(null); }} disabled={!item.assigned_to_user_id}>
                               {item.assigned_to_user_id ? "Mark in progress only" : "Assign owner first"}
                             </button>
                           </div>
