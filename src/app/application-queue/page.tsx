@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import { LEGACY_PAGE_FIT_BATCH_SIZE, STUDIO_PAGE_FIT_CHANNEL } from "@/lib/falood/studioPageFit";
-import { formatScoreOutOfTen } from "@/lib/scoreScale";
+import { formatPageFitSummary, formatScoreOutOfTen } from "@/lib/scoreScale";
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 import { hiringPanelScoreText, missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
@@ -449,8 +449,7 @@ export default function ApplicationQueuePage() {
       } else {
         setSelected(new Set());
         setFaloodOpen(null);
-        setExpandedWorkflow(null);
-        setWorkflowDetails({});
+        setFindingsItem(null);
         setFaloodResumes({});
       }
       setPage(pn);
