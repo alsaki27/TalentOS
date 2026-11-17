@@ -255,7 +255,8 @@ jobs:
             + (if $candidate_ssn_encryption_key != "" then {CANDIDATE_SSN_ENCRYPTION_KEY: $candidate_ssn_encryption_key} else {} end)
             + (if $candidate_contracts_bucket != "" then {R2_CANDIDATE_CONTRACTS_BUCKET_NAME: $candidate_contracts_bucket} else {} end)
             ' > "$SECRETS_FILE"
-          npx wrangler deploy --secrets-file "$SECRETS_FILE" --message "TalentOS ${GITHUB_SHA}" --tag "$GITHUB_SHA"
+          DEPLOYED_COMMIT="$(git rev-parse HEAD)"
+          npx wrangler deploy --secrets-file "$SECRETS_FILE" --message "TalentOS ${DEPLOYED_COMMIT}" --tag "$DEPLOYED_COMMIT"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -277,9 +278,8 @@ jobs:
           R2_CANDIDATE_CONTRACTS_BUCKET_NAME: ${{ vars.R2_CANDIDATE_CONTRACTS_BUCKET_NAME }}
 
       - name: Verify active Worker version and Hyperdrive binding
-        run: npm run cf:verify-live
+        run: GITHUB_SHA="$(git rev-parse HEAD)" npm run cf:verify-live
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GITHUB_SHA: ${{ github.sha }}
 

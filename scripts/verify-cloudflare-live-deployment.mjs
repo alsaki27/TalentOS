@@ -28,13 +28,13 @@ async function cloudflare(path, query) {
 
 const basePath = `/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}`;
 const deployments = await cloudflare(`${basePath}/deployments`, { per_page: 20 });
-const activeDeployments = (deployments.deployments || []).filter((deployment) =>
-  deployment.versions?.some((version) => version.percentage === 100),
-);
-const latest = activeDeployments[0];
-if (!latest) throw new Error("No active 100% Worker deployment was returned");
+const latest = (deployments.deployments || []).sort((a, b) =>
+  Date.parse(b.created_on) - Date.parse(a.created_on),
+)[0];
+if (!latest) throw new Error("No active Worker deployment was returned");
 
 const activeVersion = latest.versions.find((version) => version.percentage === 100);
+if (!activeVersion) throw new Error("The latest Worker deployment does not have a single version at 100%");
 const version = await cloudflare(`${basePath}/versions/${activeVersion.version_id}`);
 const message = latest.annotations?.["workers/message"] || version.annotations?.["workers/message"] || "";
 if (!message.includes(EXPECTED_SHA)) {
@@ -44,6 +44,12 @@ if (!message.includes(EXPECTED_SHA)) {
 const hyperdriveBindings = (version.resources?.bindings || []).filter(
   (binding) => binding.name === "HYPERDRIVE" && binding.type === "hyperdrive",
 );
+const approvedPdfBinding = version.resources?.bindings?.find(binding =>
+  binding.name === "RESUME_PDF_STAGING" && binding.type === "r2_bucket"
+);
+if (!approvedPdfBinding || approvedPdfBinding.bucket_name !== "talentos-approved-resume-pdfs") {
+  throw new Error(`Active version ${version.id} does not contain the private approved PDF binding`);
+}
 if (hyperdriveBindings.length !== 1 || hyperdriveBindings[0].id !== EXPECTED_HYPERDRIVE_ID) {
   throw new Error(
     `Active version ${version.id} does not contain exactly the approved HYPERDRIVE binding`,
