@@ -52,6 +52,36 @@ function encodeGraphPath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
+class SharePointRequestError extends Error {
+  readonly status: number;
+  readonly retryAfterSeconds: number;
+
+  constructor(response: Response, message: string) {
+    super(message);
+    this.status = response.status;
+    const retry = response.headers.get("retry-after");
+    const seconds = retry && (/^\d+$/.test(retry) ? Number(retry) : Math.ceil((Date.parse(retry) - Date.now()) / 1000));
+    this.retryAfterSeconds = seconds && Number.isFinite(seconds) && seconds > 0 ? seconds : 0;
+  }
+}
+
+let archiveRoot: { drive: string; path: string } | undefined;
+
+export async function sharePointResumeArchiveRoot(): Promise<string> {
+  const siteId = requireEnv("SHAREPOINT_SITE_ID");
+  const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
+  if (archiveRoot?.drive === siteId) return `${archiveRoot.path}/${folder}`;
+  const token = await getGraphToken();
+  const response = await fetch(`https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root?$select=webUrl`, {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new SharePointRequestError(response, `SharePoint library lookup failed (${response.status}).`);
+  const data = await response.json();
+  const path = decodeURIComponent(new URL(data.webUrl).pathname).replace(/\/+$/, "");
+  archiveRoot = { drive: siteId, path };
+  return `${path}/${folder}`;
+}
+
 // Ensure every folder in the chain exists. SharePoint PUT /content fails with 404
 // if the parent folder does not already exist, so we create them first.
 async function ensureFolderPath(token: string, siteId: string, folderPath: string): Promise<void> {
@@ -81,7 +111,7 @@ async function ensureFolderPath(token: string, siteId: string, folderPath: strin
     // 201 = created, 409 = already exists (conflict). Anything else is a real error.
     if (!res.ok && res.status !== 409) {
       const text = await res.text().catch(() => "");
-      throw new Error(
+      throw new SharePointRequestError(res,
         `SharePoint folder creation failed (${res.status}) for '${folderName}' under '${parentPath || "root"}': ${text}`.trim()
       );
     }
@@ -127,7 +157,7 @@ export async function uploadToSharePoint(path: string, content: Uint8Array | Blo
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed (${res.status}) ${text}`.trim());
+    throw new SharePointRequestError(res, `SharePoint upload failed (${res.status}) ${text}`.trim());
   }
   const item = await res.json();
   return { url: item.webUrl as string, itemId: item.id as string, name: item.name as string };
@@ -151,7 +181,7 @@ export async function openSharePointItem(itemId: string, options: { range?: stri
     ? await fetch(redirect, options.range ? { headers: { Range: options.range } } : undefined)
     : response;
   if (download.status !== 416 && (!download.ok || !download.body)) {
-    throw new Error(`SharePoint file download failed (${download.status})`);
+    throw new SharePointRequestError(download, `SharePoint file download failed (${download.status})`);
   }
   return download;
 }

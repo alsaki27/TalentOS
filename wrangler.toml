@@ -14,6 +14,10 @@ assets = { directory = ".open-next/assets", binding = "ASSETS" }
 [browser]
 binding = "RESUME_BROWSER"
 
+[[r2_buckets]]
+binding = "RESUME_PDF_STAGING"
+bucket_name = "talentos-approved-resume-pdfs"
+
 [vars]
 TALENTOS_BASE_URL = "https://talent.skarion.com"
 TEAM_ACTIVITY_REPORT_RECIPIENTS = "info@skarion.com,shohanhyder@gmail.com,akash@skarion.com"

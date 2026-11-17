@@ -32,6 +32,8 @@ export interface ResumeSharePointNameInput {
   resumeVersionId: string;
   /** Appended before the extension for a non-default archive slot (e.g. a version label). Normal exports omit this and overwrite the same SharePoint file. */
   variantLabel?: string | null;
+  /** Decoded SharePoint library and configured archive folder path. */
+  archiveRoot?: string;
 }
 
 export function buildResumeSharePointPath(input: ResumeSharePointNameInput): { path: string; fileName: string; folderPath: string } {
@@ -45,7 +47,27 @@ export function buildResumeSharePointPath(input: ResumeSharePointNameInput): { p
   // job row, hence this fallback.
   const jobFolder = input.jobId ? input.jobId : "unlinked";
   const variantSuffix = input.variantLabel ? ` - ${safeSegment(input.variantLabel, "version")}` : "";
-  const fileName = `${candidateName} - ${companyName} - ${jobTitle} - candidate-${input.candidateId} - resume-${input.resumeVersionId}${variantSuffix}.pdf`;
-  const folderPath = `${candidateName}/${jobFolder}`;
+  let folderPath = `${candidateName}/${jobFolder}`;
+  const suffix = ` - candidate-${input.candidateId} - resume-${input.resumeVersionId}${variantSuffix}.pdf`;
+  const readable = `${candidateName} - ${companyName} - ${jobTitle}`;
+  let stem = readable;
+  if (input.archiveRoot !== undefined) {
+    const root = input.archiveRoot.replace(/\/+$/, "");
+    const encodedLength = (path: string) => path.split("/").map(encodeURIComponent).join("/").length;
+    const fit = (folder: string) => {
+      const parent = `${root}/${folder}`;
+      const available = Math.min(255, 400 - parent.length - 1);
+      let label = readable.slice(0, Math.max(0, available - suffix.length));
+      while (label && encodedLength(`${parent}/${label}${suffix}`) > 400) label = label.slice(0, -1);
+      return label;
+    };
+    stem = fit(folderPath);
+    if (!stem) {
+      folderPath = `${input.candidateId}/${jobFolder}`;
+      stem = fit(folderPath);
+    }
+    if (!stem) throw new Error("SharePoint archive folders leave insufficient room for the résumé filename.");
+  }
+  const fileName = stem.replace(/[. -]+$/, "") + suffix;
   return { path: `${folderPath}/${fileName}`, fileName, folderPath };
 }

@@ -15,11 +15,35 @@ import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
 import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
 import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
+import { findExportById } from "@/server/repositories/applicationResumeExportsRepository";
+import { readApprovedResumePdf } from "@/server/services/approvedResumePdfDownload";
+import { signApprovedResumePdfLink, verifyApprovedResumePdfLink } from "@/server/services/approvedResumePdfLink";
+import { TEMPORARY_RESUME_PDF_PROVIDER } from "@/server/storage/approvedResumePdfStorage";
 
 const EXPORT_TYPES = new Set(["pdf", "docx"]);
 
 export async function GET(request: NextRequest) {
   return withExtensionCors(async (req) => {
+    const applicationId = req.nextUrl.searchParams.get("applicationId");
+    const exportId = req.nextUrl.searchParams.get("exportId");
+    const token = req.nextUrl.searchParams.get("download");
+    if (token !== null) {
+      if (!applicationId || !exportId || !await verifyApprovedResumePdfLink(applicationId, exportId, token).catch(() => false)) {
+        return extensionError("validation_error", "This résumé download link is invalid or expired.", 403);
+      }
+      try {
+        const record = await findExportById(exportId);
+        if (!record || record.application_id !== applicationId
+          || !await evidenceResumeExportIsAllowed(applicationId, record.resume_version_id, exportId)) {
+          return extensionError("validation_error", "This is not the current approved resume PDF.", 409);
+        }
+        return new NextResponse(new Blob([new Uint8Array(await readApprovedResumePdf(record))]), {
+          headers: { "Content-Type": "application/pdf", "Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer" },
+        });
+      } catch {
+        return extensionError("internal_error", "The approved PDF could not be downloaded. Please retry.", 502);
+      }
+    }
     const headerError = checkRequiredHeaders(req);
     if (headerError) return headerError;
 
@@ -27,7 +51,6 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     try {
-      const applicationId = req.nextUrl.searchParams.get("applicationId");
       if (!applicationId) {
         return extensionError("validation_error", "applicationId is required.", 400);
       }
@@ -39,13 +62,14 @@ export async function GET(request: NextRequest) {
       // (CandidateName/JobId/filename.pdf), and running that through R2's
       // getPublicUrl() previously produced a URL pointing at a bucket that
       // never had the file - a broken link the extension had no way to detect.
-      const row = await queryOne<{ file_name: string; storage_url: string | null; export_type: string; created_at: string }>(
-        `SELECT x.file_name, x.storage_url, x.export_type, x.created_at
+      const row = await queryOne<{ id: string; candidate_id: string; file_name: string; storage_url: string | null; created_at: string }>(
+        `SELECT x.id, a.candidate_id, x.file_name, x.storage_url, x.created_at
          FROM application_resume_exports x
          JOIN applications a ON a.id = x.application_id
          LEFT JOIN application_ai_workflows w ON w.id = a.ai_workflow_id
          LEFT JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
-         WHERE x.application_id = $1 AND x.status = 'created' AND x.export_type = 'pdf' AND x.storage_url IS NOT NULL
+         WHERE x.application_id = $1 AND x.status = 'created' AND x.export_type = 'pdf'
+           AND (x.storage_url IS NOT NULL OR x.storage_provider = $3)
            AND (w.config_snapshot->>'pipelineVariant' IS DISTINCT FROM $2 OR (
              v.id = x.resume_version_id AND v.workflow_id = w.id AND v.status = 'approved'
              AND x.id::text = to_jsonb(v)->'release_receipt'->>'exportId'
@@ -53,7 +77,7 @@ export async function GET(request: NextRequest) {
            ))
          ORDER BY x.created_at DESC
          LIMIT 1`,
-        [applicationId, RESUME_EVIDENCE_VARIANT]
+        [applicationId, RESUME_EVIDENCE_VARIANT, TEMPORARY_RESUME_PDF_PROVIDER]
       );
 
       if (!row) {
@@ -77,12 +101,23 @@ export async function GET(request: NextRequest) {
           : NextResponse.json({ found: false, archived: false, requiresArchive: true, applicationId });
       }
 
+      let url = row.storage_url;
+      if (!url) {
+        if (auth.key.candidate_id && auth.key.candidate_id !== row.candidate_id) {
+          return extensionError("forbidden", "This key cannot access this candidate's résumé.", 403);
+        }
+        const download = new URL(req.nextUrl.pathname, req.nextUrl.origin);
+        download.search = new URLSearchParams({
+          applicationId, exportId: row.id, download: await signApprovedResumePdfLink(applicationId, row.id),
+        }).toString();
+        url = download.href;
+      }
       return NextResponse.json({
         found: true,
-        url: row.storage_url,
+        url,
         fileName: row.file_name,
         createdAt: row.created_at,
-      });
+      }, { headers: { "Cache-Control": "private, no-store" } });
     } catch (err) {
       console.error("[Copilot Resume Export Lookup Error]", err);
       return extensionError("internal_error", String(err), 500);

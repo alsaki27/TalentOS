@@ -2,18 +2,20 @@
 // GET -> download a previously created export
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth";
+import { APPLICATION_WORKER_ROLES, hasRole, requireCurrentUser } from "@/lib/auth";
 import { findExportById } from "@/server/repositories/applicationResumeExportsRepository";
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { exportResumeAsDocx, exportResumeAsPdf, exportResumeAsMarkdown } from "@/server/services/resumeExportService";
 import { evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
 import { sha256Hex } from "@/lib/sha256";
+import { readApprovedResumePdf } from "@/server/services/approvedResumePdfDownload";
+import { TEMPORARY_RESUME_PDF_PROVIDER } from "@/server/storage/approvedResumePdfStorage";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string; exportId: string } }) {
-  const { response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   const exportRecord = await findExportById(params.exportId);
@@ -26,6 +28,24 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
 
   if (exportRecord.status === "failed") {
     return NextResponse.json({ error: "This export failed previously. Please generate a new export." }, { status: 400 });
+  }
+
+  if (exportRecord.storage_provider === TEMPORARY_RESUME_PDF_PROVIDER) {
+    if (!context || !hasRole(context.profile, APPLICATION_WORKER_ROLES)) {
+      return NextResponse.json({ error: "Permission denied." }, { status: 403 });
+    }
+    try {
+      const bytes = await readApprovedResumePdf(exportRecord);
+      return new NextResponse(new Blob([new Uint8Array(bytes)]), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": "attachment; filename=\"Approved resume.pdf\"",
+          "Cache-Control": "private, no-store",
+        },
+      });
+    } catch {
+      return NextResponse.json({ error: "The approved PDF could not be retrieved. Please retry the download." }, { status: 502 });
+    }
   }
 
   // Prefer the exact archived bytes. Re-generating here would not only be
@@ -47,6 +67,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
         status: 200,
         headers: {
           "Content-Type": contentType,
+          "Cache-Control": "private, no-store",
           "Content-Disposition": `attachment; filename="${exportRecord.file_name || stored.fileName}"`,
         },
       });

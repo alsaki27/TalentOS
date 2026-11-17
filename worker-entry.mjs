@@ -102,6 +102,16 @@ export default {
       console.log(`[scheduled candidate logging] ${body.slice(0,500)}`);
     })());
     if (isMinuteTick) {
+      tasks.push((async () => {
+        const response = await fetch(`${baseUrl}/api/cron/approved-resume-pdfs`, {
+            method: "POST", signal: AbortSignal.timeout(75_000),
+            headers: {
+              Authorization: `Bearer ${secret}`,
+              "X-Sweep-Unpublished": new Date(controller.scheduledTime).getUTCMinutes() === 10 ? "1" : "0",
+            },
+        });
+        if (!response.ok) throw new Error(`Approved résumé processing failed with HTTP ${response.status}`);
+      })());
       // Independent of scheduled matching: these reviews are already saved
       // with ATS; this task only fills their advisory AI assessment.
       tasks.push((async () => {

@@ -19,8 +19,8 @@ import {
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
 import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 import {
-  approveEvidenceResumeForApplication, findResumeApprovalRevision, isResumeReleaseGateError,
-  RESUME_RELEASE_REQUIRED_MESSAGE, ResumeReleaseChangedError, ResumeReleaseError,
+  approveEvidenceResumeForApplication, findResumeApprovalDetails, isResumeReleaseGateError, resumePdfRefreshError,
+  RESUME_RELEASE_REQUIRED_MESSAGE, ResumeReleaseChangedError, ResumeReleaseError, ResumeReleaseUpdatingError,
 } from "@/server/services/resumeEvidenceReleaseService";
 import { buildAppliedApplicationUpdates } from "@/server/services/applicationAppliedStage";
 
@@ -292,10 +292,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       try {
         resumeRelease = await approveEvidenceResumeForApplication(
           params.id, currentUser.profile.user_id, effectiveStage, approveAndApply ? approvalRevision : undefined,
+          entersReadyStage || approveAndApply ? { advance: { updates, previousReviewStatus } } : undefined,
         );
       } catch (error) {
         if (error instanceof ResumeReleaseChangedError) {
           return NextResponse.json({ error: error.message, code: "resume_release_changed" }, { status: 409 });
+        }
+        if (error instanceof ResumeReleaseUpdatingError) {
+          return NextResponse.json({ error: error.message, code: "resume_pdf_updating" }, { status: 409 });
         }
         if (error instanceof ResumeReleaseError) return NextResponse.json({ error: error.message }, { status: 409 });
         throw error;
@@ -308,7 +312,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       });
     }
     const stageWriteStarted = performance.now();
-    const data = await updateApplication(params.id, updates, marksAeApplied && effectiveStage === "ready_for_application"
+    const data = resumeRelease?.application ?? await updateApplication(params.id, updates, marksAeApplied && effectiveStage === "ready_for_application"
       ? { stage: effectiveStage, reviewStatus: previousReviewStatus }
       : undefined);
     const stageWriteMs = Math.round(performance.now() - stageWriteStarted);
@@ -450,8 +454,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }, { headers });
   } catch (error: any) {
     if (isResumeReleaseGateError(error)) {
-      const revision = marksAeApplied && effectiveStage === "ready_for_application"
-        ? await findResumeApprovalRevision(params.id).catch(() => null) : null;
+      const details = marksAeApplied && effectiveStage === "ready_for_application"
+        ? await findResumeApprovalDetails(params.id).catch(() => null) : null;
+      const pending = resumePdfRefreshError(details);
+      if (pending) return NextResponse.json({ error: pending, code: "resume_pdf_updating" }, { status: 409 });
+      const revision = details?.revision;
       return NextResponse.json({
         error: revision ? RESUME_RELEASE_REQUIRED_MESSAGE : "Review and approve the current résumé PDF before moving this application forward.",
         code: "resume_release_required",

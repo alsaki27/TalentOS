@@ -66,6 +66,10 @@ export interface ApplicationRow {
   resume_qc_eligible?: boolean;
   resume_qc_has_notes?: boolean;
   resume_approval_required?: boolean;
+  approved_resume_export_id?: string | null;
+  approved_resume_archive_pending?: boolean;
+  pdf_refresh_state?: string | null;
+  pdf_refresh_error?: string | null;
 }
 
 export interface ApplicationEventRow {
@@ -311,12 +315,31 @@ export async function createApplications(
 
 export class ApplicationStageChangedError extends Error {}
 
-/** Update an application by ID, optionally requiring an unchanged handoff. */
-export async function updateApplication(
+type ApplicationUpdateGuard = {
+  stage: string | null;
+  reviewStatus: string | null;
+  approvedPdf?: { versionId: string; revision: string; hash: string };
+};
+
+export const APPROVED_RESUME_PDF_JOIN = `LEFT JOIN application_resume_exports approved_pdf
+  ON approved_pdf.id::text = to_jsonb(rv)->'release_receipt'->>'exportId'
+  AND approved_pdf.content_sha256 = to_jsonb(rv)->'release_receipt'->>'pdfHash'
+  AND approved_pdf.application_id = a.id AND approved_pdf.resume_version_id = rv.id
+  AND approved_pdf.status = 'created' AND approved_pdf.export_type = 'pdf'
+  AND rv.status = 'approved' AND rv.workflow_id = a.ai_workflow_id`;
+
+export const APPROVED_RESUME_PDF_COLUMNS = `
+  to_jsonb(rv)->>'pdf_refresh_state' AS pdf_refresh_state,
+  to_jsonb(rv)->>'pdf_refresh_error' AS pdf_refresh_error,
+  approved_pdf.id::text AS approved_resume_export_id,
+  to_jsonb(approved_pdf)->>'pdf_archive_state' AS approved_resume_archive_state,
+  (approved_pdf.storage_provider = 'approved_pdf_staging') AS approved_resume_archive_pending`;
+
+export function applicationUpdateStatement(
   id: string,
   input: UpdateApplicationInput,
-  expected?: { stage: string; reviewStatus: string | null },
-): Promise<ApplicationRow> {
+  expected?: ApplicationUpdateGuard,
+) {
   const updates: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) updates[key] = value;
@@ -330,12 +353,25 @@ export async function updateApplication(
   const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
   values.push(id);
   const guard = expected
-    ? ` AND COALESCE(application_stage, ae_stage) = $${keys.length + 2}
+    ? ` AND COALESCE(application_stage, ae_stage) IS NOT DISTINCT FROM $${keys.length + 2}
         AND applied_at IS NULL AND review_status IS NOT DISTINCT FROM $${keys.length + 3}`
     : "";
   if (expected) values.push(expected.stage, expected.reviewStatus);
-  const sql = `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1}${guard} RETURNING *`;
-  const result = await queryOne<ApplicationRow>(sql, values);
+  const pdf = expected?.approvedPdf;
+  const pdfGuard = pdf ? ` AND EXISTS (
+    SELECT 1 FROM application_resume_versions v WHERE v.id = $${keys.length + 4}
+      AND v.id = applications.tailored_resume_version_id AND v.workflow_id = applications.ai_workflow_id
+      AND v.status = 'approved' AND v.release_receipt->>'revision' = $${keys.length + 5}
+      AND v.release_receipt->>'pdfHash' = $${keys.length + 6}
+  )` : "";
+  if (pdf) values.push(pdf.versionId, pdf.revision, pdf.hash);
+  return { statement: `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1}${guard}${pdfGuard} RETURNING *`, values };
+}
+
+/** Update an application by ID, optionally requiring an unchanged handoff. */
+export async function updateApplication(id: string, input: UpdateApplicationInput, expected?: ApplicationUpdateGuard): Promise<ApplicationRow> {
+  const { statement, values } = applicationUpdateStatement(id, input, expected);
+  const result = await queryOne<ApplicationRow>(statement, values);
   if (!result && expected) throw new ApplicationStageChangedError("The application or its review changed. Reload the queue and try again.");
   if (!result) throw new Error("Update failed");
   return result;
@@ -732,6 +768,7 @@ export async function listApplicationQueue(
             AND x.id::text = to_jsonb(rv)->'release_receipt'->>'exportId'
             AND x.content_sha256 = to_jsonb(rv)->'release_receipt'->>'pdfHash')
         ELSE FALSE END AS resume_approval_required,
+      ${APPROVED_RESUME_PDF_COLUMNS},
       review_entry.pending_since as ae_review_pending_since,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
       a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,
@@ -784,6 +821,7 @@ export async function listApplicationQueue(
       WHERE value IS NOT NULL
     ) score ON true
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
+    ${APPROVED_RESUME_PDF_JOIN}
     WHERE ${commonWhere} AND (${viewPredicates[view]})
     ORDER BY ${orderBy}
     OFFSET $${offsetParam} LIMIT $${pageSizeParam}

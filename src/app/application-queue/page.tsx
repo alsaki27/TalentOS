@@ -57,6 +57,11 @@ interface QueueItem {
   ae_applied_by_name: string | null;
   ae_applied_at: string | null;
   resume_approval_required?: boolean;
+  approved_resume_export_id?: string | null;
+  approved_resume_archive_pending?: boolean | null;
+  approved_resume_archive_state?: string | null;
+  pdf_refresh_state?: string | null;
+  pdf_refresh_error?: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null; eligibility_restricted?: boolean | null; requires_citizenship?: boolean | null; citizenship_countries?: string[] | null; export_control_restricted?: boolean | null; eligibility_restriction_evidence?: string | null } | null;
   workflow_status?: string | null;
@@ -674,7 +679,8 @@ export default function ApplicationQueuePage() {
           signal: current.signal,
         });
         if (!res.ok) return;
-        const data: { items: Array<Pick<QueueItem, "id" | "one_page_fit_score" | "page_fit_metrics" | "page_fit_read_at" | "page_fit_resume_updated_at"> & {
+        const data: { items: Array<Pick<QueueItem, "id" | "one_page_fit_score" | "page_fit_metrics" | "page_fit_read_at" | "page_fit_resume_updated_at"
+          | "pdf_refresh_state" | "pdf_refresh_error" | "approved_resume_export_id" | "approved_resume_archive_pending" | "approved_resume_archive_state"> & {
           resume_version_id: string | null;
         }> } = await res.json();
         if (current.signal.aborted || loadId !== loadRequestRef.current) return;
@@ -690,6 +696,12 @@ export default function ApplicationQueuePage() {
               page_fit_metrics: fresh.page_fit_metrics,
               page_fit_read_at: fresh.page_fit_read_at,
               page_fit_resume_updated_at: fresh.page_fit_resume_updated_at,
+              pdf_refresh_state: fresh.pdf_refresh_state,
+              pdf_refresh_error: fresh.pdf_refresh_error,
+              approved_resume_export_id: fresh.approved_resume_export_id,
+              approved_resume_archive_pending: fresh.approved_resume_archive_pending,
+              approved_resume_archive_state: fresh.approved_resume_archive_state,
+              resume_approval_required: fresh.approved_resume_export_id ? false : item.resume_approval_required,
             };
           })
         );
@@ -839,7 +851,7 @@ export default function ApplicationQueuePage() {
         } else {
           setFeedback({ kind: "error", text: error });
         }
-        if (data.code === "application_stage_changed" || data.code === "resume_release_changed") load(page, false);
+        if (data.code === "application_stage_changed" || data.code === "resume_release_changed" || data.code === "resume_pdf_updating") load(page, false);
         return;
       }
       const updated = await res.json().catch(() => null);
@@ -1597,6 +1609,21 @@ export default function ApplicationQueuePage() {
                       onStartWorkflow={startWorkflow}
                       onRegenerate={regenerateWorkflow}
                       onFetchDetails={openWorkflowDetails}
+                      onRetryArchive={isManager ? async (exportId: string) => {
+                        setActionLoading(`${item.id}:retry-archive`);
+                        try {
+                          const response = await fetch(`/api/applications/${item.id}/resume-exports/${exportId}/retry-archive`, { method: "POST" });
+                          if (!response.ok) {
+                            const data = await response.json().catch(() => ({}));
+                            throw new Error(data.error || "Could not retry the SharePoint copy.");
+                          }
+                          patchItemLocally(item.id, { approved_resume_archive_state: "pending" });
+                        } catch (error) {
+                          setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Could not retry the SharePoint copy." });
+                        } finally {
+                          setActionLoading(null);
+                        }
+                      } : undefined}
                       onReview={async (wfId: string, action: string) => {
                         setActionLoading(`${item.id}:${action}`);
                         try {
@@ -1690,7 +1717,8 @@ export default function ApplicationQueuePage() {
                           : "Saving stage…"}
                       </div>
                     )}
-                    {(item.resume_approval_required || resumeStageErrors[item.id]) && (
+                    {!(item.pdf_refresh_state === "pending" || item.pdf_refresh_state === "blocked") &&
+                      (item.resume_approval_required || resumeStageErrors[item.id]) && (
                       <div className="queue-stage-meta">
                         {resumeStageErrors[item.id]
                           ? <div role="alert">{resumeStageErrors[item.id]}</div>
@@ -1997,7 +2025,7 @@ function PageFitBadge({ metrics }: { metrics?: PageFitMetrics | null }) {
 
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
-  item, pageFitMetrics, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
+  item, pageFitMetrics, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onRetryArchive, onReview,
   workflowStageLabel
 }: {
   item: QueueItem;
@@ -2006,6 +2034,7 @@ function PipelineActions({
   onStartWorkflow: (item: QueueItem) => void;
   onRegenerate: (item: QueueItem) => void;
   onFetchDetails: (item: QueueItem) => void;
+  onRetryArchive?: (exportId: string) => Promise<void>;
   onReview: (wfId: string, action: string) => void;
   workflowStageLabel: (stage: number | null | undefined) => string;
 }) {
@@ -2059,6 +2088,24 @@ function PipelineActions({
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
           ✏️ Open in Studio
         </button>
+        {item.approved_resume_export_id && (
+          <a className="btn-compact btn-sm" href={`/api/applications/${item.id}/resume-exports/${item.approved_resume_export_id}/download`}>
+            Download approved PDF
+          </a>
+        )}
+        {item.pdf_refresh_state === "pending" && <small>Updating approved PDF…</small>}
+        {item.pdf_refresh_state === "blocked" && <small role="status">{item.pdf_refresh_error || "Check the saved PDF in Studio."}</small>}
+        {item.approved_resume_archive_pending && (
+          <>
+            <small>{item.approved_resume_archive_state === "blocked" ? "SharePoint copy needs attention" : "SharePoint copy pending"}</small>
+            {item.approved_resume_archive_state === "blocked" && item.approved_resume_export_id && onRetryArchive && (
+              <button className="btn-compact btn-sm" disabled={actionLoading === `${item.id}:retry-archive`}
+                onClick={() => void onRetryArchive(item.approved_resume_export_id!)}>
+                Retry SharePoint copy
+              </button>
+            )}
+          </>
+        )}
         <button className="btn-compact btn-sm"
           onClick={() => onRegenerate(item)}
           disabled={actionLoading === `${item.id}:regenerate`}

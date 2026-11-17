@@ -2,6 +2,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { query, queryOne } from "@/server/db/neon";
 import { downloadResumeFile } from "@/lib/resumeStorage";
 import { RESUME_EVIDENCE_VARIANT } from "@/lib/ai/application-agents/workflowStages";
+import { findExportById } from "@/server/repositories/applicationResumeExportsRepository";
+import { readApprovedResumePdf } from "@/server/services/approvedResumePdfDownload";
+import { TEMPORARY_RESUME_PDF_PROVIDER } from "@/server/storage/approvedResumePdfStorage";
 
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -117,7 +120,7 @@ const READY = `COALESCE(a.application_stage, a.ae_stage) = 'ready_for_applicatio
   ))
   AND x.file_size_bytes BETWEEN 5 AND ${MAX_PDF_BYTES}`;
 const LINKEDIN_ARCHIVE = `((x.storage_provider = 'sharepoint' AND NULLIF(x.storage_url, '') IS NOT NULL)
-    OR (x.storage_provider = 'r2' AND NULLIF(x.file_path, '') IS NOT NULL))
+    OR (x.storage_provider IN ('r2', '${TEMPORARY_RESUME_PDF_PROVIDER}') AND NULLIF(x.file_path, '') IS NOT NULL))
   AND a.status IN ('assigned', 'in_progress', 'stacked') AND a.ae_applied_at IS NULL
   AND COALESCE(a.review_status, '') IN ('approved', 'not_required')`;
 const LATEST_ARCHIVE = `ORDER BY COALESCE(x.updated_at, x.created_at) DESC NULLS LAST, x.id DESC LIMIT 1`;
@@ -210,10 +213,19 @@ async function insertPrepareEnrollment(
   if (posting && source.byte_length >= 2_000_000) {
     throw new BrowserWorkerPrepareError(409, "The current approved PDF must be smaller than 2 MB for LinkedIn");
   }
-  if (!((source.storage_provider === "sharepoint" && source.storage_url) || (source.storage_provider === "r2" && source.file_path))) {
+  const staged = source.storage_provider === TEMPORARY_RESUME_PDF_PROVIDER && Boolean(source.file_path);
+  if (!(staged || (source.storage_provider === "sharepoint" && source.storage_url) || (source.storage_provider === "r2" && source.file_path))) {
     throw new BrowserWorkerPrepareError(409, "An archived SharePoint or R2 PDF is required; regeneration is not allowed");
   }
-  const { buffer } = await downloadResumeFile(source.storage_provider, source.file_path, source.storage_url);
+  let buffer: Uint8Array;
+  if (staged) {
+    const record = await findExportById(exportId);
+    if (!record || record.application_id !== source.application_id || record.resume_version_id !== source.resume_version_id
+      || record.content_sha256 !== source.content_sha256) throw new BrowserWorkerPrepareError(409, "The approved PDF changed during preparation");
+    buffer = await readApprovedResumePdf(record);
+  } else {
+    ({ buffer } = await downloadResumeFile(source.storage_provider, source.file_path, source.storage_url));
+  }
   validatePreparePdf(buffer, source.content_sha256, source.byte_length);
   // Recheck identity/readiness after storage IO, and lock joined source rows
   // until the verified immutable snapshot insert has completed atomically.

@@ -5,6 +5,14 @@ import { recoverResumeWorkflows, manualResumeTransition } from "@/server/reposit
 import { commitStageResult } from "@/server/repositories/applicationAiWorkflowRepository";
 import { withResumeModelCheckpoint } from "@/server/repositories/resumeModelCheckpointRepository";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
+import { approveEvidenceResumeForApplication, evidenceResumeExportIsAllowed } from "@/server/services/resumeEvidenceReleaseService";
+import { runApprovedResumePdfJobs } from "@/server/services/approvedResumePdfJobs";
+import { readApprovedResumePdf } from "@/server/services/approvedResumePdfDownload";
+import { findExportById } from "@/server/repositories/applicationResumeExportsRepository";
+import { TEMPORARY_RESUME_PDF_PROVIDER } from "@/server/storage/approvedResumePdfStorage";
+import { sha256Hex } from "@/lib/sha256";
+import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
+import { signApprovedResumePdfLink, verifyApprovedResumePdfLink } from "@/server/services/approvedResumePdfLink";
 
 const holder = vi.hoisted(() => ({
   db: null as null | {
@@ -12,6 +20,11 @@ const holder = vi.hoisted(() => ({
     exec: (sql: string) => Promise<unknown>;
     close: () => Promise<void>;
   },
+  staged: new Map<string, Uint8Array>(),
+  copy: new Uint8Array(),
+  mismatch: false,
+  failDelete: false,
+  uploads: 0,
 }));
 
 const beforeMigrationSettings = {
@@ -26,10 +39,65 @@ vi.mock("@/server/db/neon", () => ({
   sql: () => Object.assign(
     async (pieces: TemplateStringsArray, ...args: unknown[]) =>
       (await holder.db!.query(pieces.reduce((text, piece, i) => i ? text + "$" + i + piece : piece, ""), args)).rows,
-    { transaction: async (queries: Promise<unknown>[]) => Promise.all(queries) },
+    {
+      query: (statement: string, values: unknown[]) => async () => (await holder.db!.query(statement, values)).rows,
+      transaction: async (queries: (() => Promise<unknown>)[]) => {
+        const db = holder.db!;
+        await db.exec("BEGIN");
+        try {
+          const result = [];
+          for (const query of queries) result.push(await query());
+          await db.exec("COMMIT");
+          return result;
+        } catch (error) {
+          await db.exec("ROLLBACK");
+          throw error;
+        }
+      },
+    },
   ),
 }));
 vi.mock("@/lib/activity", () => ({ logActivity: vi.fn(async () => undefined) }));
+vi.mock("@opennextjs/cloudflare", () => ({
+  getCloudflareContext: () => ({ env: { RESUME_PDF_STAGING: {
+    put: async (key: string, data: Uint8Array) => {
+      if (holder.staged.has(key)) return null;
+      holder.staged.set(key, data);
+      return { size: data.byteLength };
+    },
+    get: async (key: string) => {
+      const data = holder.staged.get(key);
+      return data ? { size: data.byteLength, arrayBuffer: async () => new Uint8Array(data).buffer } : null;
+    },
+    delete: async (key: string) => {
+      const row = (await holder.db!.query(`SELECT x.storage_provider,q.state FROM application_resume_pdf_archive_jobs q
+        JOIN application_resume_exports x ON x.id=q.export_id WHERE q.temporary_key=$1`, [key])).rows[0];
+      expect(row).toEqual({ storage_provider: "sharepoint", state: "cleanup" });
+      if (holder.failDelete) throw new Error("test cleanup interruption");
+      holder.staged.delete(key);
+    },
+  } } }),
+}));
+vi.mock("@/server/services/studioResumePdf", () => ({
+  StudioResumeLayoutError: class extends Error {},
+  getStudioApprovalPdf: async (_id: string, content: unknown) => {
+    const bytes = new TextEncoder().encode("%PDF-" + JSON.stringify(content));
+    return {
+      bytes, pdfHash: await sha256Hex(bytes), contentHash: await sha256Hex(JSON.stringify(content)),
+      metrics: { pageCount: 1, pageUtilizations: [94] }, prepared: true, timings: {},
+    };
+  },
+}));
+vi.mock("@/lib/integrations/sharepoint", () => ({
+  sharePointResumeArchiveRoot: async () => "/sites/TalentOS/Shared Documents/resumes",
+  uploadToSharePoint: async (path: string, bytes: Uint8Array) => {
+    expect(path.split("/").at(-1)!.length).toBeLessThanOrEqual(255);
+    holder.copy = new Uint8Array(bytes);
+    holder.uploads += 1;
+    return { url: "https://example.test/archive", itemId: "item" };
+  },
+  openSharePointItem: async () => new Response(holder.mismatch ? "other content" : new Uint8Array(holder.copy)),
+}));
 
 const fixture = `
   CREATE TABLE ai_runtime_config (singleton boolean primary key);
@@ -38,7 +106,7 @@ const fixture = `
   CREATE TABLE ai_automation_routes (automation_id text, rank int, ai_key_id uuid, provider text, model_override text, is_enabled boolean, primary key (automation_id,rank));
   CREATE TABLE ai_agent_configs (automation_id text primary key,display_name text,prompt_version text,max_output_tokens int,timeout_ms int,max_attempts int);
   CREATE TABLE applications (id uuid primary key,ai_workflow_id uuid, tailored_resume_version_id uuid, applied_at timestamptz,
-    candidate_id uuid, job_id uuid, resume_generation_completed_at timestamptz,
+    candidate_id uuid, job_id uuid, resume_generation_completed_at timestamptz, review_status text,
     ae_stage_updated_at timestamptz,ae_stage_updated_by_name text, application_stage_changed_at timestamptz,
     application_stage_changed_by_name text,resume_generation_status text,resume_generation_error text,application_stage text,ae_stage text);
   CREATE TABLE application_ai_workflows (id uuid primary key,application_id uuid,status text,current_stage int,
@@ -58,10 +126,16 @@ const fixture = `
     updated_source text, created_at timestamptz, updated_at timestamptz);
   CREATE UNIQUE INDEX ai_resume_once ON application_resume_versions(workflow_id) WHERE source_type='ai_agent';
   CREATE TABLE target_jobs (id uuid primary key, candidate_id uuid, job_id uuid, created_at timestamptz default now());
-  CREATE TABLE jobs (id uuid primary key,title text);
+  CREATE TABLE jobs (id uuid primary key,title text,company text);
+  CREATE TABLE candidates (id uuid primary key,name text);
   CREATE TABLE application_stage_history (application_id uuid, from_stage text,to_stage text,changed_by_name text,reason text,source text);
   CREATE TABLE application_packets (application_id uuid primary key,base_resume_id uuid,target_job_id uuid,final_resume_version_id uuid,created_by uuid);
-  CREATE TABLE application_resume_exports (id uuid primary key,application_id uuid,resume_version_id uuid,status text,export_type text,content_sha256 text);
+  CREATE TABLE application_resume_exports (id uuid primary key default gen_random_uuid(),application_id uuid,resume_version_id uuid,
+    status text,export_type text,content_sha256 text, file_name text,file_path text,storage_provider text,storage_url text,
+    storage_item_id text,file_size_bytes integer, error text,created_by uuid,candidate_name_snapshot text,company_name_snapshot text,
+    job_title_snapshot text,created_at timestamptz default now(),updated_at timestamptz default now());
+  CREATE UNIQUE INDEX exact_pdf ON application_resume_exports(application_id,resume_version_id,export_type,content_sha256)
+    WHERE content_sha256 IS NOT NULL AND status <> 'deleted';
 `;
 
 describe.skipIf(!process.env.RESUME_PIPELINE_PGLITE_PATH)("resume recovery SQL in PostgreSQL", () => {
@@ -167,7 +241,7 @@ describe.skipIf(!process.env.RESUME_PIPELINE_PGLITE_PATH)("resume recovery SQL i
     await db.query("INSERT INTO application_resume_versions (id, workflow_id, application_id,status,content) VALUES ($1,$2,$3,'draft','{}')", [version,workflow,app]);
     const handoff = () => db.query("UPDATE applications SET application_stage='ready_for_application' WHERE id=$1", [app]);
     await expect(handoff()).rejects.toThrow("Approve and validate");
-    await db.query("INSERT INTO application_resume_exports VALUES ($1,$2,$3,'created','pdf','tested-sha')", [exportId,app,version]);
+    await db.query("INSERT INTO application_resume_exports(id,application_id,resume_version_id,status,export_type,content_sha256) VALUES ($1,$2,$3,'created','pdf','tested-sha')", [exportId,app,version]);
     await db.query("UPDATE application_resume_versions SET status='approved',release_receipt=$2::jsonb WHERE id=$1", [version,JSON.stringify({exportId,pdfHash:"tested-sha"})]);
     await expect(handoff()).resolves.toBeTruthy();
     await db.query("UPDATE application_resume_versions SET content='{\"edited\":true}' WHERE id=$1", [version]);
@@ -199,4 +273,117 @@ describe.skipIf(!process.env.RESUME_PIPELINE_PGLITE_PATH)("resume recovery SQL i
       .toEqual({ tailored_resume_version_id:version,application_stage:"ready_for_review" });
     expect((await db.query("SELECT status FROM application_resume_versions WHERE id=$1",[version])).rows[0]).toEqual({status:"draft"});
   });
+
+  it("refreshes the newest Studio save and deletes staged bytes only after a verified SharePoint switch", async () => {
+    const db = holder.db!;
+    const migration = readFileSync("sql/neon_fixes/144_approved_resume_pdf_archive_jobs.sql", "utf8");
+    await db.exec(migration);
+    await db.exec(migration);
+    const app = crypto.randomUUID(), wf = crypto.randomUUID(), version = crypto.randomUUID();
+    const candidate = crypto.randomUUID(), job = crypto.randomUUID(), actor = crypto.randomUUID();
+    await db.query("INSERT INTO candidates VALUES ($1,$2)", [candidate, "Example reviewer fixture"]);
+    await db.query("INSERT INTO jobs VALUES ($1,$2,$3)", [job, "Long publishing operations title ".repeat(6), "Publisher"]);
+    await db.query(`INSERT INTO applications (id,ai_workflow_id,tailored_resume_version_id,candidate_id,job_id,ae_stage,review_status)
+      VALUES ($1,$2,$3,$4,$5,'ready_for_review','approved')`, [app, wf, version, candidate, job]);
+    await db.query(`INSERT INTO application_ai_workflows (id,application_id,status,current_stage,config_snapshot)
+      VALUES ($1,$2,'completed',4,'{"pipelineVariant":"resume_evidence_v2"}')`, [wf, app]);
+    await db.query(`INSERT INTO application_resume_versions(id,workflow_id,application_id,status,content,updated_at,updated_by_user_id)
+      VALUES ($1,$2,$3,'draft','{"theme":"studio-1"}',NOW(),$4)`, [version, wf, app, actor]);
+    const result = await approveEvidenceResumeForApplication(app, actor, "ready_for_review", undefined, {
+      advance: { updates: { ae_stage: "ready_for_application" }, previousReviewStatus: "approved" },
+    });
+    expect(result?.application?.ae_stage).toBe("ready_for_application");
+    const getCurrent = async () => (await db.query(`SELECT status,release_receipt,pdf_refresh_state
+      FROM application_resume_versions WHERE id=$1`, [version])).rows[0];
+    const firstExportId = (await getCurrent()).release_receipt.exportId;
+    const staged = (await findExportById(firstExportId))!;
+    expect(staged.storage_provider).toBe(TEMPORARY_RESUME_PDF_PROVIDER);
+    const firstBytes = await readApprovedResumePdf(staged);
+    expect(await sha256Hex(firstBytes)).toBe(staged.content_sha256);
+    expect(await evidenceResumeExportIsAllowed(app, version, firstExportId)).toBe(true);
+    holder.mismatch = true;
+    await runApprovedResumePdfJobs();
+    expect((await findExportById(firstExportId))?.storage_provider).toBe(TEMPORARY_RESUME_PDF_PROVIDER);
+    expect(holder.staged.has(staged.file_path!)).toBe(true);
+    holder.mismatch = false;
+    await db.query("UPDATE application_resume_pdf_archive_jobs SET state='pending',next_attempt_at=NOW() WHERE export_id=$1", [firstExportId]);
+    holder.failDelete = true;
+    await runApprovedResumePdfJobs();
+    expect((await findExportById(firstExportId))?.storage_provider).toBe("sharepoint");
+    expect(holder.staged.has(staged.file_path!)).toBe(true);
+    const copies = holder.uploads;
+    holder.failDelete = false;
+    await db.query("UPDATE application_resume_pdf_archive_jobs SET next_attempt_at=NOW() WHERE export_id=$1", [firstExportId]);
+    await runApprovedResumePdfJobs();
+    expect(holder.uploads).toBe(copies);
+    expect(holder.staged.has(staged.file_path!)).toBe(false);
+    expect(await readApprovedResumePdf(staged)).toEqual(firstBytes);
+
+    const save = (theme: string) => db.query(`UPDATE application_resume_versions SET content=jsonb_build_object('theme',$2::text),
+      updated_source='human_falood_studio_save',updated_by_user_id=$3,updated_at=NOW() WHERE id=$1`, [version, theme, actor]);
+    await save("studio-2");
+    await save("studio-3");
+    expect((await getCurrent()).pdf_refresh_state).toBe("pending");
+    expect(await evidenceResumeExportIsAllowed(app, version, firstExportId)).toBe(false);
+    await expect(db.query("UPDATE applications SET ae_stage='applied',applied_at=NOW() WHERE id=$1", [app])).rejects.toThrow("Approve and validate");
+    await runApprovedResumePdfJobs();
+    const second = await getCurrent();
+    expect(second).toMatchObject({ status: "approved", pdf_refresh_state: "complete", release_receipt: { automaticRefresh: true } });
+    const secondExportId = second.release_receipt.exportId;
+    expect(secondExportId).not.toBe(firstExportId);
+    expect(new TextDecoder().decode(await readApprovedResumePdf((await findExportById(secondExportId))!))).toContain("studio-3");
+    await save("studio-3");
+    expect((await getCurrent()).release_receipt.exportId).toBe(secondExportId);
+    await db.query("UPDATE applications SET ae_stage='applied',applied_at=NOW() WHERE id=$1", [app]);
+    await save("studio-4");
+    await runApprovedResumePdfJobs();
+    expect((await getCurrent()).release_receipt.exportId).not.toBe(secondExportId);
+    expect((await db.query("SELECT submitted_resume_export_id,ae_stage FROM applications WHERE id=$1", [app])).rows[0])
+      .toEqual({ submitted_resume_export_id: secondExportId, ae_stage: "applied" });
+  });
+
+  it("keeps older non-evidence tickets on their normal review and applied path", async () => {
+    const db = holder.db!, app = crypto.randomUUID(), version = crypto.randomUUID(), workflow = crypto.randomUUID();
+    await db.query("INSERT INTO applications(id,ai_workflow_id,tailored_resume_version_id,ae_stage) VALUES ($1,$2,$3,'ready_for_review')", [app, workflow, version]);
+    await db.query("INSERT INTO application_ai_workflows(id,application_id,status) VALUES ($1,$2,'completed')", [workflow, app]);
+    await db.query("INSERT INTO application_resume_versions(id,application_id,workflow_id,status,content) VALUES ($1,$2,$3,'approved','{}')", [version, app, workflow]);
+    expect(await approveEvidenceResumeForApplication(app, crypto.randomUUID(), "ready_for_review")).toBeUndefined();
+    await db.query("UPDATE applications SET ae_stage='ready_for_application' WHERE id=$1", [app]);
+    await db.query("UPDATE application_resume_versions SET content='{\"changed\":true}',updated_source='human_falood_studio_save',updated_by_user_id=$2 WHERE id=$1", [version, crypto.randomUUID()]);
+    expect((await db.query("SELECT 1 FROM application_resume_pdf_refresh_jobs WHERE resume_version_id=$1", [version])).rows).toEqual([]);
+    await expect(db.query("UPDATE applications SET ae_stage='applied',applied_at=NOW() WHERE id=$1", [app])).resolves.toBeTruthy();
+  });
+
+  it("reuses the failed long-filename export after the shortened-path retry", async () => {
+    const db = holder.db!;
+    const applicationId = crypto.randomUUID(), resumeVersionId = crypto.randomUUID();
+    const exportId = crypto.randomUUID(), candidateId = crypto.randomUUID(), jobId = crypto.randomUUID();
+    const buffer = new TextEncoder().encode("%PDF-path-length-fixture");
+    const variantLabel = await sha256Hex(buffer);
+    await db.query(`INSERT INTO application_resume_exports (id,application_id,resume_version_id,export_type,file_name,status,content_sha256)
+      VALUES ($1,$2,$3,'pdf',$4,'failed',$5)`, [exportId, applicationId, resumeVersionId, "x".repeat(288) + ".pdf", variantLabel]);
+    const input = { applicationId, resumeVersionId, candidateId, jobId, candidateName: "Example Candidate",
+      companyName: "Publishing Operations Company", jobTitle: "Inventory operations analyst ".repeat(5),
+      exportType: "pdf" as const, buffer, variantLabel, preferExistingFolder: true };
+    expect(await archiveResumeToSharePoint(input)).toMatchObject({ ok: true, id: exportId });
+    expect(await archiveResumeToSharePoint(input)).toMatchObject({ ok: true, id: exportId, duplicate: true });
+    const { rows } = await db.query(`SELECT status,length(file_name) AS chars FROM application_resume_exports
+      WHERE application_id=$1`, [applicationId]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("created");
+    expect(rows[0].chars).toBeLessThanOrEqual(255);
+  });
+});
+
+it("binds a temporary extension download to an exact export and application", async () => {
+  vi.stubEnv("JWT_SECRET", "test-only-approval-link");
+  try {
+    const token = await signApprovedResumePdfLink("application", "export");
+    await expect(verifyApprovedResumePdfLink("application", "export", token)).resolves.toBe(true);
+    await expect(verifyApprovedResumePdfLink("different", "export", token)).resolves.toBe(false);
+    await expect(verifyApprovedResumePdfLink("application", "different", token)).resolves.toBe(false);
+    await expect(verifyApprovedResumePdfLink("application", "export", token.replace(/^\d+/, "1"))).resolves.toBe(false);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

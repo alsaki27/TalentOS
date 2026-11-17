@@ -10,6 +10,7 @@ import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
 import { LEGACY_PAGE_FIT_BATCH_SIZE } from "@/lib/falood/studioPageFit";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 import { query } from "@/server/db/neon";
+import { APPROVED_RESUME_PDF_COLUMNS, APPROVED_RESUME_PDF_JOIN } from "@/server/repositories/applicationsRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -69,9 +70,11 @@ export async function GET(req: NextRequest) {
 
   const items = await query<{ id: string; resume_version_id: string | null; one_page_fit_score: number | null; page_fit_metrics: Record<string, unknown> | null; page_fit_read_at: string; page_fit_resume_updated_at: string | null }>(
     `SELECT a.id, a.tailored_resume_version_id AS resume_version_id, rv.one_page_fit_score, rv.page_fit_metrics,
-            NOW() AS page_fit_read_at, rv.updated_at AS page_fit_resume_updated_at
+            NOW() AS page_fit_read_at, rv.updated_at AS page_fit_resume_updated_at,
+            ${APPROVED_RESUME_PDF_COLUMNS}
      FROM applications a
      LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
+     ${APPROVED_RESUME_PDF_JOIN}
      WHERE a.id = ANY($1::uuid[])`,
     [ids]
   );
