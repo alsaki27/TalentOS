@@ -48,3 +48,31 @@ export const STATUS_EXPR = "(CASE WHEN a.ae_stage = 'applied' AND a.status IN ('
 export function emptyStatusCounts(): Record<string, number> {
   return { Applied: 0, "In Progress": 0, Screening: 0, Interview: 0, Offer: 0, Rejected: 0 };
 }
+
+export interface ApplicationStatusCountRow {
+  status: string;
+  application_stage: string | null;
+  has_active_interview: boolean;
+}
+
+/** Counts each application independently, matching the candidate Applications dashboard. */
+export function countApplicationStatusRows(rows: ApplicationStatusCountRow[]): Record<string, number> {
+  const counts = emptyStatusCounts();
+  for (const row of rows) {
+    const group = applicationDashboardStatusGroup(row.status, row.application_stage, row.has_active_interview);
+    if (Object.prototype.hasOwnProperty.call(counts, group)) counts[group] += 1;
+  }
+  return counts;
+}
+
+/** Shared application-page bucket logic for dashboard counts and candidate cards. */
+export function applicationDashboardStatusGroup(
+  status: string,
+  applicationStage: string | null,
+  hasActiveInterview: boolean,
+): string {
+  const group = DISPLAY_GROUPS[status] || status;
+  if (group === "Offer" || group === "Rejected" || applicationStage === "closed") return group;
+  if (applicationStage === "interview" || hasActiveInterview) return "Interview";
+  return group;
+}

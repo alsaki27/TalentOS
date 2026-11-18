@@ -10,6 +10,7 @@ import { query, queryOne } from "@/server/db/neon";
 import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
+import { countApplicationStatusRows, emptyStatusCounts, type ApplicationStatusCountRow } from "@/lib/applicationDisplayStatus";
 
 interface StudentAuditEnrichmentRow {
   candidate_id: string;
@@ -21,6 +22,14 @@ interface StudentAuditEnrichmentRow {
 interface OptApprovalEnrichmentRow {
   candidate_id: string;
   approval_date: string | null;
+}
+
+interface CandidateApplicationStatusRow {
+  candidate_id: string;
+  application_id: string;
+  status: ApplicationStatusCountRow["status"];
+  application_stage: ApplicationStatusCountRow["application_stage"];
+  has_active_interview: ApplicationStatusCountRow["has_active_interview"];
 }
 
 /**
@@ -73,10 +82,49 @@ async function enrichWithOptApproval(rows: Record<string, any>[]): Promise<Recor
   }
 }
 
+/** Adds the same application-status buckets shown on each candidate's Applications tab. */
+async function enrichWithApplicationStatusCounts(rows: Record<string, any>[]): Promise<Record<string, any>[]> {
+  if (rows.length === 0) return rows;
+  try {
+    // Keep one row per application. Grouping only by candidate/status/stage and
+    // BOOL_OR'ing interview state can incorrectly move every same-status
+    // application into Interview when just one has an active interview.
+    const applicationRows = await query<CandidateApplicationStatusRow>(
+      `SELECT a.candidate_id,
+              a.id AS application_id,
+              a.status,
+              a.application_stage,
+              EXISTS (
+                SELECT 1
+                  FROM interview_schedules s
+                 WHERE s.application_id = a.id
+                   AND COALESCE(s.status, 'scheduled') IN ('planned', 'scheduled', 'in_progress')
+              ) AS has_active_interview
+         FROM applications a
+        WHERE a.candidate_id = ANY($1::uuid[])`,
+      [rows.map((row) => row.id)],
+    );
+
+    const applicationsByCandidate = new Map<string, ApplicationStatusCountRow[]>(rows.map((row) => [row.id, []]));
+    for (const row of applicationRows) {
+      applicationsByCandidate.get(row.candidate_id)?.push(row);
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      application_status_counts: countApplicationStatusRows(applicationsByCandidate.get(row.id) ?? []),
+    }));
+  } catch (err) {
+    console.error("[Candidates list] application status enrichment failed:", err);
+    return rows.map((row) => ({ ...row, application_status_counts: null }));
+  }
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const compact = url.searchParams.get("compact") === "1";
   const includeOptDays = url.searchParams.get("includeOptDays") === "1";
+  const includeApplicationCounts = url.searchParams.get("includeApplicationCounts") === "1";
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
@@ -166,7 +214,10 @@ export async function GET(req: NextRequest) {
 
     const { data, countRow } = result;
     const auditItems = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
-    const items = !compact && includeOptDays ? await enrichWithOptApproval(auditItems) : auditItems;
+    const applicationItems = !compact && includeApplicationCounts
+      ? await enrichWithApplicationStatusCounts(auditItems)
+      : auditItems;
+    const items = !compact && includeOptDays ? await enrichWithOptApproval(applicationItems) : applicationItems;
     return NextResponse.json({ items, total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

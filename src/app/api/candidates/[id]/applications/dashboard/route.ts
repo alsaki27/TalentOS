@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, ALL_USER_ROLES } from "@/lib/auth";
 import { query } from "@/server/db/neon";
-import { DISPLAY_GROUPS, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
+import { applicationDashboardStatusGroup, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -243,12 +243,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 }
 
 function dashboardStatusGroup(row: DashboardRow) {
-  const group = DISPLAY_GROUPS[row.status] || row.status;
-  if (group === "Offer" || group === "Rejected" || row.application_stage === "closed") return group;
-  if (row.application_stage === "interview" || row.interview_stages?.some((stage) =>
-    ["planned", "scheduled", "in_progress"].includes(stage.status)
-  )) return "Interview";
-  return group;
+  return applicationDashboardStatusGroup(
+    row.status,
+    row.application_stage,
+    Boolean(row.interview_stages?.some((stage) => ["planned", "scheduled", "in_progress"].includes(stage.status))),
+  );
 }
 
 function dashboardSource(row: DashboardRow) {

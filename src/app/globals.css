@@ -3575,6 +3575,46 @@ label {
 
 .candidate-profile-tags:empty { display: none; }
 
+.candidate-application-counts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+
+.candidate-application-count {
+  --candidate-count-rgb: var(--accent-rgb);
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 43px;
+  padding: 5px 2px;
+  border: 1px solid rgba(var(--candidate-count-rgb), 0.2);
+  border-radius: 9px;
+  background: rgba(var(--candidate-count-rgb), 0.055);
+}
+
+.candidate-application-count-applied { --candidate-count-rgb: 16, 185, 129; }
+.candidate-application-count-progress { --candidate-count-rgb: 6, 182, 212; }
+.candidate-application-count-screening { --candidate-count-rgb: 236, 72, 153; }
+.candidate-application-count-interview { --candidate-count-rgb: 99, 102, 241; }
+.candidate-application-count-offer { --candidate-count-rgb: 245, 158, 11; }
+.candidate-application-count-rejected { --candidate-count-rgb: 244, 63, 94; }
+
+.candidate-application-count-value {
+  display: block;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  color: rgb(var(--candidate-count-rgb));
+  line-height: 1;
+}
+
+.candidate-application-count-value strong { overflow: hidden; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; text-overflow: ellipsis; }
+.candidate-application-count-label { max-width: 100%; color: var(--ink-soft); font-size: 9px; font-weight: 750; line-height: 1.1; text-align: center; }
+
 .candidate-info-tag {
   padding: 4px 8px;
   border: 1px solid rgba(var(--info-rgb, 59, 130, 246), 0.3);

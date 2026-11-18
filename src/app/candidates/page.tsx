@@ -1,7 +1,7 @@
 // src/app/candidates/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import Pagination from "@/components/Pagination";
@@ -24,7 +24,19 @@ interface Candidate {
   audit_progress?: number | null;
   audit_mock_interviews?: number | null;
   opt_approval_date?: string | null;
+  application_status_counts?: CandidateApplicationStatusCounts | null;
 }
+
+type CandidateApplicationStatusCounts = Record<"Applied" | "In Progress" | "Screening" | "Interview" | "Offer" | "Rejected", number>;
+
+const APPLICATION_STATUS_METRICS: { key: keyof CandidateApplicationStatusCounts; tone: string }[] = [
+  { key: "Applied", tone: "applied" },
+  { key: "In Progress", tone: "progress" },
+  { key: "Screening", tone: "screening" },
+  { key: "Interview", tone: "interview" },
+  { key: "Offer", tone: "offer" },
+  { key: "Rejected", tone: "rejected" },
+];
 
 const AUDIT_STATUS_LABELS: Record<string, string> = {
   placed: "Placed",
@@ -128,6 +140,21 @@ function CandidateProfileCard({
         {candidate.email?.includes("example.com") && <span className="badge badge-warning">Test record</span>}
       </div>
 
+      <section className="candidate-application-counts" aria-label={`${candidate.name} applications by status`}>
+        {APPLICATION_STATUS_METRICS.map(({ key, tone }) => {
+          const count = candidate.application_status_counts?.[key];
+          const title = count == null ? `${key} application count unavailable` : `${count} ${key.toLowerCase()} ${count === 1 ? "application" : "applications"}`;
+          return (
+            <div key={key} className={`candidate-application-count candidate-application-count-${tone}`} title={title}>
+              <span className="candidate-application-count-value">
+                <strong>{count == null ? "—" : new Intl.NumberFormat("en-US").format(count)}</strong>
+              </span>
+              <span className="candidate-application-count-label">{key}</span>
+            </div>
+          );
+        })}
+      </section>
+
       <div className="candidate-profile-controls">
         <div className="candidate-profile-field">
           <span className="candidate-profile-label">Pipeline stage</span>
@@ -214,6 +241,9 @@ export default function CandidatesPage() {
   const [showDropped, setShowDropped] = useState(false);
   const [stageUpdating, setStageUpdating] = useState<string>("");
   const [today, setToday] = useState(() => localCalendarDateIso());
+  const currentPageRefresh = useRef<() => Promise<void>>(async () => undefined);
+  const isLoadingRef = useRef(true);
+  const latestLoadRequest = useRef(0);
 
   useEffect(() => {
     const interval = window.setInterval(() => setToday(localCalendarDateIso()), 60_000);
@@ -225,6 +255,7 @@ export default function CandidatesPage() {
     params.set("page", String(pageNum));
     params.set("pageSize", String(size));
     params.set("includeOptDays", "1");
+    params.set("includeApplicationCounts", "1");
     if (search) params.set("search", search);
     if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
@@ -234,22 +265,55 @@ export default function CandidatesPage() {
     return params;
   }
 
-  async function load(pageNum: number, size: number = pageSize) {
-    setLoading(true);
-    const res = await fetch(`/api/candidates?${buildParams(pageNum, size)}`, { cache: "no-store" });
-    const data = await res.json();
-    const newTotal = data.total ?? 0;
-    const totalPages = Math.max(1, Math.ceil(newTotal / size));
-    if (pageNum > totalPages && pageNum > 1) {
-      setLoading(false);
-      return load(totalPages, size);
+  async function load(pageNum: number, size: number = pageSize, options: { silent?: boolean } = {}) {
+    const silent = Boolean(options.silent);
+    const requestId = ++latestLoadRequest.current;
+    if (!silent) {
+      isLoadingRef.current = true;
+      setLoading(true);
     }
-    setItems(data.items ?? []);
-    setTotal(newTotal);
-    setSelected(new Set());
-    setPage(pageNum);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/candidates?${buildParams(pageNum, size)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Could not load candidates (${res.status})`);
+      const data = await res.json();
+      if (requestId !== latestLoadRequest.current) return;
+      const newTotal = data.total ?? 0;
+      const totalPages = Math.max(1, Math.ceil(newTotal / size));
+      if (pageNum > totalPages && pageNum > 1) return load(totalPages, size, options);
+      setItems(data.items ?? []);
+      setTotal(newTotal);
+      if (!silent) setSelected(new Set());
+      setPage(pageNum);
+    } catch (error) {
+      if (requestId === latestLoadRequest.current) console.error("[Candidates page] refresh failed:", error);
+    } finally {
+      if (!silent && requestId === latestLoadRequest.current) {
+        isLoadingRef.current = false;
+        setLoading(false);
+      }
+    }
   }
+
+  useEffect(() => {
+    currentPageRefresh.current = () => load(page, pageSize, { silent: true });
+  }, [page, pageSize, search, stageFilter, tierFilter, contractFilter, showPlaced, showDropped]);
+
+  useEffect(() => {
+    let active = true;
+    let refreshing = false;
+    const refresh = async () => {
+      if (!active || refreshing || isLoadingRef.current || document.visibilityState !== "visible") return;
+      refreshing = true;
+      try { await currentPageRefresh.current(); } finally { refreshing = false; }
+    };
+    const interval = window.setInterval(() => { void refresh(); }, 30_000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
 
   // Any filter/search change re-queries from page 1.
   useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, contractFilter, showPlaced, showDropped, pageSize]);
