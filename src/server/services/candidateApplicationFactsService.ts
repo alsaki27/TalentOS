@@ -1,7 +1,8 @@
 import {
   APPLICATION_FACT_PROFILE_FIELDS,
   APPLICATION_PROFILE_NOTES_SECTION,
-  normalizeApplicationQuestion,
+  applicationQuestionAliases,
+  applicationQuestionKey,
   profileMatchesApplicationFact,
   resolveApplicationFacts,
   type ApplicationFactDraft,
@@ -42,9 +43,6 @@ interface MissingApplicationQuestion {
 const writeColumns = `candidate_id, job_id, section, question, question_key, value_kind, disposition,
   answer_value, source_kind, source_ref, expires_at, created_by_user_id`;
 const writeValues = "$1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11::timestamptz,$12::uuid";
-const permittedJob = `($2::uuid IS NULL OR EXISTS (
-  SELECT 1 FROM applications WHERE candidate_id = $1 AND job_id = $2
-))`;
 
 function asFact(row: FactRow): CandidateApplicationFact {
   return {
@@ -54,9 +52,9 @@ function asFact(row: FactRow): CandidateApplicationFact {
   };
 }
 
-function draftValues(candidateId: string, draft: ApplicationFactDraft, userId: string) {
+function draftValues(candidateId: string, draft: ApplicationFactDraft, userId: string): unknown[] {
   return [
-    candidateId, draft.jobId, draft.section, draft.question, normalizeApplicationQuestion(draft.question),
+    candidateId, null, draft.section, draft.question, applicationQuestionKey(draft.question),
     draft.valueKind, draft.disposition, draft.value === null ? null : JSON.stringify(draft.value),
     draft.sourceKind, draft.sourceRef, draft.expiresAt, userId,
   ];
@@ -71,7 +69,7 @@ export async function loadApplicationFactProfile(candidateId: string): Promise<A
 
 export async function listCandidateApplicationFacts(
   candidateId: string,
-  jobId?: string,
+  _jobId?: string,
 ): Promise<CandidateApplicationFact[]> {
   const facts = await query<FactRow>(
     `SELECT * FROM (
@@ -79,9 +77,8 @@ export async function listCandidateApplicationFacts(
       FROM candidate_application_facts WHERE candidate_id = $1
       ORDER BY id, revision DESC
     ) current_facts
-    ${jobId ? 'WHERE "jobId" IS NULL OR "jobId" = $2::uuid' : ""}
     ORDER BY section, question, id LIMIT ${maxFacts + 1}`,
-    jobId ? [candidateId, jobId] : [candidateId],
+    [candidateId],
   );
   if (facts.length > maxFacts) throw new Error("Application answer bank exceeds its fact limit.");
   return facts.map(asFact);
@@ -94,7 +91,7 @@ export async function getApprovedApplicationAnswers(
 ): Promise<ApprovedApplicationAnswers> {
   const [profile, facts] = await Promise.all([
     loadApplicationFactProfile(candidateId),
-    listCandidateApplicationFacts(candidateId, jobId),
+    listCandidateApplicationFacts(candidateId),
   ]);
   if (!profile) throw new Error("Candidate no longer exists.");
   return resolveApplicationFacts(facts, candidateId, jobId, profile, questions);
@@ -155,20 +152,18 @@ export async function listMissingApplicationQuestions(
     }
   }
 
-  const byJob = new Map<string, Map<string, MissingApplicationQuestion>>();
+  const questions = new Map<string, MissingApplicationQuestion>();
   const seenApplications = new Set<string>();
   runs.sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
   for (const run of runs) {
     if (seenApplications.has(run.applicationId)) continue;
     seenApplications.add(run.applicationId);
     if (run.status !== "needs_human" || !Array.isArray(run.questions)) continue;
-    const questions = byJob.get(run.jobId) ?? new Map<string, MissingApplicationQuestion>();
-    byJob.set(run.jobId, questions);
     for (const raw of run.questions) {
       if (typeof raw !== "string") continue;
       const question = raw.trim().replace(/\s+/g, " ");
       if (!question || question.length > 400) continue;
-      const key = normalizeApplicationQuestion(question);
+      const key = applicationQuestionKey(question);
       if (!questions.has(key)) {
         questions.set(key, {
           jobId: run.jobId,
@@ -180,12 +175,10 @@ export async function listMissingApplicationQuestions(
     }
   }
 
-  return [...byJob.entries()].flatMap(([jobId, questions]) => {
-    const entries = [...questions.values()];
-    const { blocked } = resolveApplicationFacts(facts, candidateId, jobId, profile, entries.map(entry => entry.question));
-    const unresolved = new Set(blocked.map(block => block.question));
-    return entries.filter(entry => unresolved.has(entry.question));
-  });
+  const entries = [...questions.values()];
+  const { blocked } = resolveApplicationFacts(facts, candidateId, "", profile, entries.map(entry => entry.question));
+  const unresolved = new Set(blocked.map(block => applicationQuestionKey(block.question)));
+  return entries.filter(entry => unresolved.has(applicationQuestionKey(entry.question)));
 }
 
 export async function createApplicationFactDraft(
@@ -193,19 +186,20 @@ export async function createApplicationFactDraft(
 ): Promise<CandidateApplicationFact | null> {
   if (approve && draft.section === APPLICATION_PROFILE_NOTES_SECTION) return null;
   const statement = `INSERT INTO candidate_application_facts (${writeColumns}${approve ? ", review_state, reviewed_by_user_id, reviewed_at" : ""})
-     SELECT ${writeValues}${approve ? ", 'approved', $12::uuid, now()" : ""} FROM candidates WHERE id = $1 AND ${permittedJob}
+     SELECT ${writeValues}${approve ? ", 'approved', $12::uuid, now()" : ""} FROM candidates WHERE id = $1
        AND (SELECT COUNT(DISTINCT id) FROM candidate_application_facts WHERE candidate_id = $1) < ${maxFacts}
        ${approve ? `AND ($11::timestamptz IS NULL OR $11::timestamptz > now())
          AND ($9 <> 'profile' OR btrim(to_jsonb(candidates)->>$10) = ($8::jsonb #>> '{}'))
          AND NOT EXISTS (
            SELECT 1 FROM candidate_application_facts f
-           WHERE f.candidate_id = $1 AND f.job_id IS NOT DISTINCT FROM $2::uuid
-             AND f.question_key = $5 AND f.review_state <> 'revoked'
+           WHERE f.candidate_id = $1 AND f.section <> '${APPLICATION_PROFILE_NOTES_SECTION}'
+             AND f.question_key = ANY($13::text[]) AND f.review_state <> 'revoked'
              AND NOT EXISTS (SELECT 1 FROM candidate_application_facts newer
                WHERE newer.id = f.id AND newer.revision > f.revision)
          )` : ""}
      RETURNING ${columns}`;
   const values = draftValues(candidateId, draft, userId);
+  if (approve) values.push(applicationQuestionAliases(draft.question));
   const [, rows] = await sql().transaction<FactRow[]>(tx => [
     tx.query("SELECT id FROM candidates WHERE id = $1 FOR UPDATE", [candidateId]),
     tx.query<FactRow[]>(statement, values),
@@ -221,8 +215,7 @@ export async function reviseApplicationFact(
      SELECT current_fact.id, current_fact.revision + 1, ${writeValues}
      FROM candidate_application_facts current_fact
      WHERE current_fact.candidate_id = $1 AND current_fact.id = $13 AND current_fact.revision = $14
-       AND current_fact.question = $4 AND current_fact.job_id IS NOT DISTINCT FROM $2::uuid
-       AND ${permittedJob}
+       AND current_fact.question = $4
        AND NOT EXISTS (
          SELECT 1 FROM candidate_application_facts newer
          WHERE newer.id = current_fact.id AND newer.revision > current_fact.revision
@@ -237,6 +230,7 @@ export async function reviseApplicationFact(
 export async function reviewApplicationFact(
   candidateId: string, factId: string, expectedRevision: number, action: "approve" | "revoke", userId: string,
 ): Promise<CandidateApplicationFact | null> {
+  let questionAliases: string[] = [];
   if (action === "approve") {
     const [profile, current] = await Promise.all([
       loadApplicationFactProfile(candidateId),
@@ -247,6 +241,7 @@ export async function reviewApplicationFact(
       ),
     ]);
     if (!profile || !current || current.section === APPLICATION_PROFILE_NOTES_SECTION || !profileMatchesApplicationFact(current, profile)) return null;
+    questionAliases = applicationQuestionAliases(current.question);
   }
   const row = await queryOne<FactRow>(
     `UPDATE candidate_application_facts f SET
@@ -256,14 +251,11 @@ export async function reviewApplicationFact(
      WHERE f.candidate_id = $1 AND f.id = $2 AND f.revision = $3
        AND ${action === "approve"
          ? `f.review_state = 'draft' AND (f.expires_at IS NULL OR f.expires_at > now())
-            AND (f.job_id IS NULL OR EXISTS (
-              SELECT 1 FROM applications a WHERE a.candidate_id = f.candidate_id AND a.job_id = f.job_id
-            ))
             AND NOT EXISTS (
               SELECT 1 FROM candidate_application_facts duplicate
               WHERE duplicate.candidate_id = f.candidate_id AND duplicate.id <> f.id
-                AND duplicate.job_id IS NOT DISTINCT FROM f.job_id
-                AND duplicate.question_key = f.question_key AND duplicate.review_state <> 'revoked'
+                AND duplicate.section <> '${APPLICATION_PROFILE_NOTES_SECTION}'
+                AND duplicate.question_key = ANY($5::text[]) AND duplicate.review_state <> 'revoked'
                 AND NOT EXISTS (
                   SELECT 1 FROM candidate_application_facts replacement
                   WHERE replacement.id = duplicate.id AND replacement.revision > duplicate.revision
@@ -274,7 +266,9 @@ export async function reviewApplicationFact(
          SELECT 1 FROM candidate_application_facts newer WHERE newer.id = f.id AND newer.revision > f.revision
        )
      RETURNING ${columns}`,
-    [candidateId, factId, expectedRevision, userId],
+    action === "approve"
+      ? [candidateId, factId, expectedRevision, userId, questionAliases]
+      : [candidateId, factId, expectedRevision, userId],
   );
   return row && asFact(row);
 }

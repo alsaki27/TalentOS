@@ -59,7 +59,7 @@ describe("Candidate application facts API", () => {
     expect(services.reviewApplicationFact).not.toHaveBeenCalled();
   });
 
-  it("returns job-scoped missing questions alongside the authenticated candidate's facts", async () => {
+  it("returns candidate-wide missing questions with the observed job metadata", async () => {
     const facts = [{ id: factId, reviewState: "draft" }];
     const missingQuestions = [{ jobId: factId, question: "Can you commute?", detectedAt: "2026-11-09T10:00:00Z" }];
     services.listCandidateApplicationFacts.mockResolvedValue(facts);
@@ -68,6 +68,40 @@ describe("Candidate application facts API", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.json()).toEqual({ facts, missingQuestions });
     expect(services.listMissingApplicationQuestions).toHaveBeenCalledWith(candidateId, { name: "Sample Applicant" }, facts);
+  });
+
+  it("records a simple staff answer with server-owned provenance and candidate scope", async () => {
+    services.createApplicationFactDraft.mockResolvedValue({ id: factId, reviewState: "draft" });
+    const response = await POST(request("POST", {
+      section: "Screening", question: "Can you commute?", valueKind: "boolean", disposition: "known", value: true,
+      jobId: factId, reviewedBy: "ignored",
+    }), params);
+    expect(response.status).toBe(201);
+    expect(services.createApplicationFactDraft).toHaveBeenCalledWith(candidateId, expect.objectContaining({
+      jobId: null, sourceKind: "document", sourceRef: `staff-entry:${actor}`, value: true,
+    }), actor);
+    expect(services.reviewApplicationFact).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit document reference and validates explicit profile sources", async () => {
+    services.createApplicationFactDraft.mockResolvedValue({ id: factId });
+    const response = await POST(request("POST", { ...validDraft, sourceKind: "document", sourceRef: "candidate-details.docx:4" }), params);
+    expect(response.status).toBe(201);
+    expect(services.createApplicationFactDraft).toHaveBeenCalledWith(candidateId,
+      expect.objectContaining({ sourceKind: "document", sourceRef: "candidate-details.docx:4" }), actor);
+    expect((await POST(request("POST", { ...validDraft, sourceKind: "profile", sourceRef: "" }), params)).status).toBe(400);
+  });
+
+  it("globalizes a legacy answer revision and records the current staff editor when no source was provided", async () => {
+    services.reviseApplicationFact.mockResolvedValue({ id: factId, revision: 2, jobId: null });
+    const response = await PATCH(request("PATCH", {
+      factId, operation: "revise", expectedRevision: 1,
+      draft: { ...validDraft, sourceKind: "document", sourceRef: "", jobId: factId },
+    }), params);
+    expect(response.status).toBe(200);
+    expect(services.reviseApplicationFact).toHaveBeenCalledWith(candidateId, factId, 1, expect.objectContaining({
+      jobId: null, sourceKind: "document", sourceRef: `staff-entry:${actor}`,
+    }), actor);
   });
 
   it("writes drafts for the URL candidate and requires a separate review operation", async () => {
