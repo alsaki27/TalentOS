@@ -30,6 +30,18 @@ function serviceError(cause: unknown) {
   return error("Could not access application answers.", 500);
 }
 
+function staffDraftInput(input: unknown, actorId: string): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const body = input as Record<string, unknown>;
+  if (body.sourceKind === "profile") return body;
+  if (body.sourceKind !== undefined && body.sourceKind !== "document" && body.sourceKind !== "candidate_attested") return body;
+  if (typeof body.sourceRef === "string" && body.sourceRef.trim()) {
+    return { ...body, sourceKind: body.sourceKind ?? "document" };
+  }
+  if (body.sourceRef !== undefined && typeof body.sourceRef !== "string") return body;
+  return { ...body, sourceKind: "document", sourceRef: `staff-entry:${actorId}` };
+}
+
 export async function GET(_request: Request, { params }: RouteParams) {
   const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
@@ -59,8 +71,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       return error("Same-origin operator request required.", 403);
     }
   }
-  const draft = parseApplicationFactDraft(body);
-  if (!draft) return error("Provide a valid question, typed value or non-answer, and source reference.", 400);
+  const draft = parseApplicationFactDraft(staffDraftInput(body, context.profile.user_id));
+  if (!draft) return error("Provide a valid question and typed answer.", 400);
   try {
     const profile = await loadApplicationFactProfile(params.id);
     if (!profile) return error("Candidate not found.", 404);
@@ -69,8 +81,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       ? await createApplicationFactDraft(params.id, draft, context.profile.user_id, true)
       : await createApplicationFactDraft(params.id, draft, context.profile.user_id);
     if (!fact) return error(approve
-      ? "Check the job scope and expiry. If an answer already exists for this question and scope, edit or review it."
-      : "Select a job linked to this candidate, or check the answer bank limit.", 409);
+      ? "Check the expiry. If this candidate already has an answer for the question, edit or review it."
+      : "Check the candidate and answer bank limit.", 409);
     return NextResponse.json({ fact }, { status: 201, headers });
   } catch (cause) {
     return serviceError(cause);
@@ -93,13 +105,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   try {
     const actor = context.profile.user_id;
     if (operation === "revise") {
-      const draft = parseApplicationFactDraft(body?.draft);
+      const draft = parseApplicationFactDraft(staffDraftInput(body?.draft, actor));
       if (!draft) return error("Provide a valid answer revision.", 400);
       const profile = await loadApplicationFactProfile(params.id);
       if (!profile) return error("Candidate not found.", 404);
       if (!profileMatchesApplicationFact(draft, profile)) return error("The source profile value changed. Reload before saving.", 409);
       const fact = await reviseApplicationFact(params.id, factId, revision, draft, actor);
-      if (!fact) return error("The question, scope, or revision changed. Reload and try again.", 409);
+      if (!fact) return error("The question or revision changed. Reload and try again.", 409);
       return NextResponse.json({ fact }, { headers });
     }
     const fact = await reviewApplicationFact(params.id, factId, revision, operation, actor);

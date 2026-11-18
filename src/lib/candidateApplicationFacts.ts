@@ -41,7 +41,7 @@ export interface CandidateApplicationFact extends ApplicationFactDraft {
 }
 
 export type ApplicationFactBlockReason = "unknown" | "declined" | "expired" | "conflict" | "unreviewed";
-export type ApplicationFactEvidence = { factId: string; revision: number; sourceRef: string };
+export type ApplicationFactEvidence = { factId: string; revision: number; sourceRef: string; expiresAt?: string };
 
 export interface ApprovedApplicationAnswers {
   answers: Record<string, string>;
@@ -52,6 +52,27 @@ export interface ApprovedApplicationAnswers {
 export function normalizeApplicationQuestion(question: string): string {
   return question.normalize("NFKC").replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const contactQuestionAliases = [
+  { label: "Full name", keys: ["full name", "name", "fullname"] },
+  { label: "Email address", keys: ["email address", "email", "e-mail", "e-mail address"] },
+  { label: "Phone number", keys: ["phone number", "mobile phone number"] },
+];
+
+export function applicationQuestionKey(question: string): string {
+  const key = normalizeApplicationQuestion(question);
+  return contactQuestionAliases.find(group => group.keys.includes(key))?.keys[0] ?? key;
+}
+
+export function applicationQuestionAliases(question: string): string[] {
+  const key = applicationQuestionKey(question);
+  return [...(contactQuestionAliases.find(group => group.keys[0] === key)?.keys ?? [key])];
+}
+
+function applicationQuestionLabel(question: string): string {
+  const key = applicationQuestionKey(question);
+  return contactQuestionAliases.find(group => group.keys[0] === key)?.label ?? question;
 }
 
 export function isApplicationFactUuid(value: unknown): value is string {
@@ -94,7 +115,7 @@ export function parseApplicationFactDraft(input: unknown): ApplicationFactDraft 
     !isCalendarDate(expiry.slice(0, 10)) || !Number.isFinite(Date.parse(expiry))
   )) return null;
   if (section === APPLICATION_PROFILE_NOTES_SECTION && (
-    jobId !== null || expiry !== null || valueKind !== "text" || disposition !== "known" || sourceKind === "profile"
+    expiry !== null || valueKind !== "text" || disposition !== "known" || sourceKind === "profile"
   )) return null;
 
   let value: ApplicationFactValue | null = null;
@@ -122,7 +143,7 @@ export function parseApplicationFactDraft(input: unknown): ApplicationFactDraft 
 
   return {
     section, question, sourceRef, valueKind, disposition, sourceKind, value,
-    jobId: jobId?.toLowerCase() ?? null,
+    jobId: null,
     expiresAt: expiry === null ? null : new Date(expiry).toISOString(),
   };
 }
@@ -139,13 +160,13 @@ export function profileMatchesApplicationFact(
 }
 
 /**
- * Current revisions only. A blocked job-specific record takes precedence over
- * candidate-wide answers. Duplicate active records in the same scope conflict.
+ * Current candidate revisions apply across applications, including legacy rows
+ * with a recorded job. Only identical usable approvals can be reused together.
  */
 export function resolveApplicationFacts(
   facts: CandidateApplicationFact[],
   candidateId: string,
-  jobId: string,
+  _jobId: string,
   profile: ApplicationFactProfile,
   questions?: readonly string[],
   now = Date.now(),
@@ -160,43 +181,62 @@ export function resolveApplicationFacts(
   const byQuestion = new Map<string, CandidateApplicationFact[]>();
   for (const fact of current.values()) {
     if (fact.section === APPLICATION_PROFILE_NOTES_SECTION) continue;
-    if (fact.jobId !== null && fact.jobId !== jobId) continue;
-    const key = normalizeApplicationQuestion(fact.question);
+    const key = applicationQuestionKey(fact.question);
     const matches = byQuestion.get(key) ?? [];
     matches.push(fact);
     byQuestion.set(key, matches);
   }
 
   const requested = questions === undefined
-    ? [...byQuestion.values()].map((matches) => matches.find((fact) => fact.jobId === jobId)?.question ?? matches[0].question)
+    ? [...byQuestion.values()].map(matches => applicationQuestionLabel(matches[0].question))
     : [...new Set(questions)];
   const answers: [string, string][] = [];
   const evidence: [string, ApplicationFactEvidence][] = [];
   const blocked: ApprovedApplicationAnswers["blocked"] = [];
   for (const question of requested) {
-    const matches = byQuestion.get(normalizeApplicationQuestion(question)) ?? [];
-    const specific = matches.filter((fact) => fact.jobId === jobId);
-    const applicable = specific.length ? specific : matches;
-    const active = applicable.filter((fact) => fact.reviewState !== "revoked");
-    if (active.length !== 1) {
-      blocked.push({ question, reason: active.length > 1 ? "conflict" : applicable.length ? "unreviewed" : "unknown" });
+    const matches = byQuestion.get(applicationQuestionKey(question)) ?? [];
+    const active = matches.filter(fact => fact.reviewState !== "revoked")
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (active.length === 0) {
+      blocked.push({ question, reason: matches.length ? "unreviewed" : "unknown" });
+      continue;
+    }
+
+    // Surface contradictory saved values even while one record awaits review.
+    // Approval cannot resolve a duplicate by silently selecting either answer.
+    const known = active.filter(record => record.disposition === "known" && record.value !== null);
+    const [firstKnown] = known;
+    if (firstKnown && known.some(other => other.valueKind !== firstKnown.valueKind || other.value !== firstKnown.value)) {
+      blocked.push({ question, reason: "conflict" });
       continue;
     }
 
     const [fact] = active;
-    let reason: ApplicationFactBlockReason | undefined;
-    if (fact.reviewState !== "approved" || !fact.reviewedBy || !fact.reviewedAt ||
-        !profileMatchesApplicationFact(fact, profile)) reason = "unreviewed";
-    else if (fact.expiresAt && !(Date.parse(fact.expiresAt) > now)) reason = "expired";
-    else if (fact.disposition !== "known") reason = fact.disposition;
-    else if (fact.value === null) reason = "unknown";
+    const reason = active.map(record => applicationFactBlockReason(record, profile, now)).find(Boolean);
     if (reason || fact.value === null) {
       blocked.push({ question, reason: reason ?? "unknown" });
       continue;
     }
-
     answers.push([question, formatApplicationFactValue(fact.value)]);
-    evidence.push([question, { factId: fact.id, revision: fact.revision, sourceRef: `${fact.sourceKind}:${fact.sourceRef}` }]);
+    // Identical approvals are usable only while every active duplicate remains
+    // valid. Preserve the selected provenance, with the earliest expiry bound.
+    const expiresAt = active.reduce<string | undefined>((earliest, record) =>
+      record.expiresAt && (!earliest || Date.parse(record.expiresAt) < Date.parse(earliest))
+        ? record.expiresAt : earliest, undefined);
+    evidence.push([question, {
+      factId: fact.id, revision: fact.revision, sourceRef: `${fact.sourceKind}:${fact.sourceRef}`,
+      ...(expiresAt ? { expiresAt } : {}),
+    }]);
   }
   return { answers: Object.fromEntries(answers), evidence: Object.fromEntries(evidence), blocked };
+}
+
+function applicationFactBlockReason(
+  fact: CandidateApplicationFact, profile: ApplicationFactProfile, now: number,
+): ApplicationFactBlockReason | undefined {
+  if (fact.reviewState !== "approved" || !fact.reviewedBy || !fact.reviewedAt ||
+      !profileMatchesApplicationFact(fact, profile)) return "unreviewed";
+  if (fact.expiresAt && !(Date.parse(fact.expiresAt) > now)) return "expired";
+  if (fact.disposition !== "known") return fact.disposition;
+  if (fact.value === null) return "unknown";
 }

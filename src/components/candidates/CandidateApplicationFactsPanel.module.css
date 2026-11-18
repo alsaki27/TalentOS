@@ -361,9 +361,58 @@
 }
 
 .editorFields,
+.mainFields,
 .noteFields {
   display: grid;
   gap: 12px;
+}
+
+.mainFields {
+  grid-template-columns: minmax(150px, 210px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.questionField {
+  grid-column: 1 / -1;
+}
+
+.reuseNotice,
+.editorHelp {
+  margin: 0 0 14px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.editorHelp {
+  margin-top: 8px;
+}
+
+.answerOptions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.answerOptions > summary {
+  width: fit-content;
+  padding: 4px 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.answerOptions[open] > summary {
+  margin-bottom: 10px;
+}
+
+.nonAnswer {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
 }
 
 .editorFields {
@@ -371,6 +420,7 @@
 }
 
 .editorFields label,
+.mainFields label,
 .noteFields label {
   display: grid;
   align-content: start;
@@ -383,6 +433,9 @@
 .editorFields input,
 .editorFields select,
 .editorFields textarea,
+.mainFields input,
+.mainFields select,
+.mainFields textarea,
 .noteFields input,
 .noteFields textarea {
   width: 100%;
@@ -390,6 +443,7 @@
 }
 
 .editorFields textarea,
+.mainFields textarea,
 .noteFields textarea {
   resize: vertical;
 }
@@ -460,6 +514,10 @@
 
   .searchField {
     max-width: none;
+  }
+
+  .mainFields {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .answerRow,

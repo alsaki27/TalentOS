@@ -6,12 +6,12 @@ import {
   APPLICATION_FACT_DISPOSITIONS,
   APPLICATION_FACT_KINDS,
   APPLICATION_FACT_PROFILE_FIELDS,
-  APPLICATION_FACT_SOURCES,
   APPLICATION_PROFILE_NOTES_SECTION,
+  applicationQuestionKey,
   formatApplicationFactValue,
   normalizeApplicationQuestion,
-  parseApplicationFactDraft,
   profileMatchesApplicationFact,
+  resolveApplicationFacts,
   type ApplicationFactDisposition,
   type ApplicationFactProfile,
   type ApplicationFactProfileField,
@@ -33,7 +33,6 @@ interface Props {
 interface FactForm {
   section: string;
   question: string;
-  jobId: string;
   disposition: ApplicationFactDisposition;
   valueKind: ApplicationFactValueKind;
   value: string;
@@ -52,8 +51,8 @@ interface MissingQuestion {
 type ReadinessTab = "answers" | "notes";
 
 const emptyForm: FactForm = {
-  section: "Screening", question: "", jobId: "", disposition: "known", valueKind: "text",
-  value: "", sourceKind: "candidate_attested", sourceRef: "", expiryDate: "",
+  section: "Screening", question: "", disposition: "known", valueKind: "text",
+  value: "", sourceKind: "document", sourceRef: "", expiryDate: "",
 };
 const sourceNames: Record<ApplicationFactSource, string> = {
   profile: "Candidate profile", candidate_attested: "Candidate attestation", document: "Document",
@@ -102,7 +101,14 @@ export function CandidateApplicationFactsPanel({
         if (!response.ok) throw new Error(body.error || "Could not load application answers.");
         if (controller.signal.aborted) return;
         setFacts(body.facts);
-        setMissingQuestions(body.missingQuestions ?? []);
+        const pending = new Map<string, MissingQuestion>();
+        const observed: MissingQuestion[] = Array.isArray(body.missingQuestions) ? body.missingQuestions : [];
+        for (const question of [...observed].sort((left, right) => Date.parse(right.detectedAt) - Date.parse(left.detectedAt))) {
+          if (typeof question.question !== "string") continue;
+          const key = applicationQuestionKey(question.question);
+          if (key && !pending.has(key)) pending.set(key, question);
+        }
+        setMissingQuestions([...pending.values()]);
       })
       .catch((cause) => {
         if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Could not load application answers.");
@@ -137,21 +143,16 @@ export function CandidateApplicationFactsPanel({
     if (sectionFacts) sectionFacts.push(fact);
     else sections.set(fact.section, [fact]);
   }
-  const groups = new Map<string, number>();
-  function scopeKey(record: Pick<CandidateApplicationFact, "jobId" | "question">) {
-    return JSON.stringify([record.jobId, normalizeApplicationQuestion(record.question)]);
-  }
-  for (const fact of answers) {
-    if (fact.reviewState === "revoked") continue;
-    const key = scopeKey(fact);
-    groups.set(key, (groups.get(key) ?? 0) + 1);
-  }
+  const conflictingQuestions = new Set(resolveApplicationFacts(answers, candidateId, "", profile).blocked
+    .filter((blocked) => blocked.reason === "conflict").map((blocked) => applicationQuestionKey(blocked.question)));
   const conflict = (fact: CandidateApplicationFact) =>
-    fact.reviewState !== "revoked" && (groups.get(scopeKey(fact)) ?? 0) > 1;
+    fact.reviewState !== "revoked" && conflictingQuestions.has(applicationQuestionKey(fact.question));
 
   function openDialog() {
     if (!dialog.current || dialog.current.open) return;
     dialog.current.showModal();
+    setNotice("");
+    setRefreshVersion((current) => current + 1);
     dialogHeading.current?.focus();
   }
 
@@ -182,7 +183,7 @@ export function CandidateApplicationFactsPanel({
     setEditing(fact);
     setAnsweringMissingQuestion(false);
     setForm({
-      section: fact.section, question: fact.question, jobId: fact.jobId ?? "",
+      section: fact.section, question: fact.question,
       disposition: fact.disposition, valueKind: fact.valueKind, value: fact.value === null ? "" : String(fact.value),
       sourceKind: fact.sourceKind, sourceRef: fact.sourceRef, expiryDate: fact.expiresAt?.slice(0, 10) ?? "",
     });
@@ -193,7 +194,7 @@ export function CandidateApplicationFactsPanel({
   function addDraft(question?: MissingQuestion) {
     setEditing(null);
     setAnsweringMissingQuestion(Boolean(question));
-    setForm(question ? { ...emptyForm, question: question.question, jobId: question.jobId } : { ...emptyForm });
+    setForm(question ? { ...emptyForm, question: question.question } : { ...emptyForm });
     setError("");
     setNotice("");
   }
@@ -244,12 +245,17 @@ export function CandidateApplicationFactsPanel({
       if (form.valueKind === "boolean") value = rawValue === "true" ? true : rawValue === "false" ? false : null;
       else if (form.valueKind === "integer" || form.valueKind === "decimal") value = rawValue?.trim() ? Number(rawValue) : null;
     }
-    const draft = parseApplicationFactDraft({
-      ...form, value, jobId: form.jobId || null,
+    const draft = {
+      section: form.section || "Screening", question: form.question.trim(), value, jobId: null,
+      disposition: form.disposition, valueKind: form.valueKind, sourceKind: form.sourceKind,
+      ...(form.sourceRef.trim() ? { sourceRef: form.sourceRef.trim() } : {}),
       expiresAt: form.expiryDate ? `${form.expiryDate}T23:59:59.999Z` : null,
-    });
-    if (!draft) {
-      setError("Enter a valid question, typed answer, source reference, and expiry.");
+    };
+    if (!draft.question || draft.question.length > 400 || (draft.disposition === "known" && (
+      value === null || value === undefined || (typeof value === "string" && !value.trim()) ||
+      (typeof value === "number" && (!Number.isFinite(value) || (draft.valueKind === "integer" && !Number.isInteger(value))))
+    ))) {
+      setError("Enter a question and an answer that matches the selected value type.");
       return;
     }
     if (draft.section === APPLICATION_PROFILE_NOTES_SECTION) {
@@ -331,6 +337,7 @@ export function CandidateApplicationFactsPanel({
           {notice && <p className={styles.feedback} role="status">{notice}</p>}
           <section role="tabpanel" id={`${id}-answers-panel`} aria-labelledby={`${id}-answers-tab`}
             hidden={activeTab !== "answers"} tabIndex={0}>
+            {!form && <p className={styles.reuseNotice}>Answers are used for all job applications for this candidate.</p>}
             {!loading && !form && (
               <>
                 {missingQuestions.length > 0 && (
@@ -339,26 +346,27 @@ export function CandidateApplicationFactsPanel({
                     <p className="muted">Approve these answers before retrying the application.</p>
                     <ul className={styles.attentionList}>
                       {missingQuestions.map((question) => {
-                        const key = scopeKey(question);
-                        const sameScope = answers.filter((fact) => fact.reviewState !== "revoked" && scopeKey(fact) === key);
+                        const key = applicationQuestionKey(question.question);
+                        const existingAnswers = answers.filter((fact) => fact.reviewState !== "revoked" && applicationQuestionKey(fact.question) === key);
                         const job = jobs.find((item) => item.id === question.jobId);
                         return (
                           <li key={key} className={styles.attentionRow}>
                             <div>
                               <strong>{question.question}</strong>
                               <p className={styles.answerMeta}>
-                                {job ? `${job.title}${job.company ? ` at ${job.company}` : ""}` : question.jobTitle || "Specific job"}
+                                {job ? `Detected while preparing ${job.title}${job.company ? ` at ${job.company}` : ""}` :
+                                  question.jobTitle ? `Detected while preparing ${question.jobTitle}` : "Detected during application preparation"}
                               </p>
                             </div>
-                            {sameScope.length > 1 ? (
+                            {existingAnswers.some(conflict) ? (
                               <p className="muted">Resolve the conflicting answers below.</p>
-                            ) : sameScope[0]?.reviewState === "draft" ? (
+                            ) : existingAnswers[0]?.reviewState === "draft" ? (
                               <button type="button" className="btn-outline btn-sm" disabled={busy}
-                                onClick={() => edit(sameScope[0])}>Edit existing draft</button>
+                                onClick={() => edit(existingAnswers[0])}>Edit existing draft</button>
                             ) : (
                               <button type="button" className="btn-outline btn-sm" disabled={busy}
-                                onClick={() => sameScope[0] ? edit(sameScope[0]) : addDraft(question)}>
-                                {sameScope[0] ? "Edit answer" : "Add answer"}
+                                onClick={() => existingAnswers[0] ? edit(existingAnswers[0]) : addDraft(question)}>
+                                {existingAnswers[0] ? "Edit answer" : "Add answer"}
                               </button>
                             )}
                           </li>
@@ -389,7 +397,7 @@ export function CandidateApplicationFactsPanel({
                       {sectionFacts.map((fact) => {
                         const stale = !profileMatchesApplicationFact(fact, profile);
                         const expired = Boolean(fact.expiresAt && Date.parse(fact.expiresAt) <= Date.now());
-                        const job = jobs.find((item) => item.id === fact.jobId);
+                        const warnings = [stale && "Source profile changed", expired && "Expired", conflict(fact) && "Conflicts with another answer"].filter(Boolean);
                         return (
                           <li key={fact.id} className={styles.answerRow}>
                             <div className={styles.answerHeading}>
@@ -401,16 +409,11 @@ export function CandidateApplicationFactsPanel({
                             <p className={styles.answerText}>
                               {fact.value === null ? (fact.disposition === "declined" ? "Declined" : "Unknown") : formatApplicationFactValue(fact.value)}
                             </p>
-                            <p className={styles.answerMeta}>
-                              {job ? `${job.title}${job.company ? ` at ${job.company}` : ""}` : fact.jobId ? "Specific job" : "All candidate applications"}
-                              {stale && " · Source profile changed"}
-                              {expired && " · Expired"}
-                              {conflict(fact) && " · Conflicts with another answer in this scope"}
-                            </p>
+                            {warnings.length > 0 && <p className={styles.answerMeta}>{warnings.join(" · ")}</p>}
                             <details className={styles.answerMeta}>
                               <summary>Source and review</summary>
                               <p style={{ margin: "4px 0" }}>
-                                {sourceNames[fact.sourceKind]}: {fact.sourceRef} · Revision {fact.revision}
+                                {fact.sourceKind === "document" && fact.sourceRef.startsWith("staff-entry:") ? "Staff entry in TalentOS" : sourceNames[fact.sourceKind]}: {fact.sourceRef} · Revision {fact.revision}
                                 {fact.expiresAt && ` · Expires ${fact.expiresAt.slice(0, 10)} UTC`}
                                 {fact.reviewedAt && ` · Reviewed ${fact.reviewedAt.slice(0, 10)}`}
                                 {fact.reviewedBy && ` by ${fact.reviewedBy}`}
@@ -444,50 +447,14 @@ export function CandidateApplicationFactsPanel({
             {!loading && form && (
               <form className={styles.editor} onSubmit={(event) => void save(event)}>
                 <h4 ref={formHeading} tabIndex={-1}>{editing ? "Edit custom answer" : "Add custom answer"}</h4>
-                <div className={styles.editorFields}>
-                  <label>Section
-                    <input required maxLength={80} value={form.section} onChange={(event) => update("section", event.target.value)} />
-                  </label>
-                  <label>Application question or field label
-                    <textarea required maxLength={400} readOnly={!!editing || answeringMissingQuestion}
+                <p className={styles.editorHelp}>Applies to all job applications for this candidate. TalentOS records who saves and approves it.</p>
+                <div className={styles.mainFields}>
+                  <label className={styles.questionField}>Question
+                    <textarea aria-label="Question" required maxLength={400} rows={2} readOnly={!!editing || answeringMissingQuestion}
                       value={form.question} onChange={(event) => update("question", event.target.value)} />
                   </label>
-                  <label>Scope
-                    <select disabled={!!editing || answeringMissingQuestion} value={form.jobId} onChange={(event) => update("jobId", event.target.value)}>
-                      <option value="">All candidate applications</option>
-                      {form.jobId && !jobs.some((job) => job.id === form.jobId) && <option value={form.jobId}>Specific job</option>}
-                      {jobs.map((job) => <option key={job.id} value={job.id}>{job.title}{job.company ? ` at ${job.company}` : ""}</option>)}
-                    </select>
-                  </label>
-                  <label>Source
-                    <select value={form.sourceKind} onChange={(event) => {
-                      const sourceKind = event.target.value as ApplicationFactSource;
-                      setForm({ ...form, sourceKind, sourceRef: sourceKind === "profile" ? "name" : "",
-                        ...(sourceKind === "profile" ? { valueKind: "text" as const, disposition: "known" as const } : {}) });
-                    }}>
-                      {APPLICATION_FACT_SOURCES.map((source) => <option key={source} value={source}>{sourceNames[source]}</option>)}
-                    </select>
-                  </label>
-                  {form.sourceKind === "profile" ? (
-                    <label>Profile field
-                      <select value={form.sourceRef} onChange={(event) => update("sourceRef", event.target.value)}>
-                        {Object.entries(APPLICATION_FACT_PROFILE_FIELDS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
-                      </select>
-                    </label>
-                  ) : (
-                    <label>Source reference
-                      <input required maxLength={300} value={form.sourceRef} placeholder="Attestation or document record ID"
-                        onChange={(event) => update("sourceRef", event.target.value)} />
-                    </label>
-                  )}
-                  <label>Answer status
-                    <select disabled={form.sourceKind === "profile"} value={form.disposition}
-                      onChange={(event) => update("disposition", event.target.value as ApplicationFactDisposition)}>
-                      {APPLICATION_FACT_DISPOSITIONS.map((disposition) => <option key={disposition} value={disposition}>{disposition}</option>)}
-                    </select>
-                  </label>
                   <label>Value type
-                    <select disabled={form.sourceKind === "profile"} value={form.valueKind}
+                    <select aria-label="Value type" disabled={form.sourceKind === "profile"} value={form.valueKind}
                       onChange={(event) => setForm({ ...form, valueKind: event.target.value as ApplicationFactValueKind, value: "" })}>
                       {APPLICATION_FACT_KINDS.map((kind) => <option key={kind} value={kind}>{kindNames[kind]}</option>)}
                     </select>
@@ -495,26 +462,44 @@ export function CandidateApplicationFactsPanel({
                   {form.disposition === "known" && (
                     <label>Answer
                       {form.sourceKind === "profile" ? (
-                        <input readOnly value={profile[form.sourceRef as ApplicationFactProfileField] ?? ""} />
+                        <input aria-label="Answer" readOnly value={profile[form.sourceRef as ApplicationFactProfileField] ?? ""} />
                       ) : form.valueKind === "boolean" ? (
-                        <select required value={form.value} onChange={(event) => update("value", event.target.value)}>
+                        <select aria-label="Answer" required value={form.value} onChange={(event) => update("value", event.target.value)}>
                           <option value="">Choose Yes or No</option>
                           <option value="true">Yes</option>
                           <option value="false">No</option>
                         </select>
                       ) : form.valueKind === "text" || form.valueKind === "option" ? (
-                        <textarea required maxLength={1500} value={form.value} onChange={(event) => update("value", event.target.value)} />
+                        <textarea aria-label="Answer" required maxLength={1500} rows={3} value={form.value} onChange={(event) => update("value", event.target.value)} />
                       ) : (
-                        <input required type={form.valueKind === "date" ? "date" : "number"}
+                        <input aria-label="Answer" required type={form.valueKind === "date" ? "date" : "number"}
                           step={form.valueKind === "decimal" ? "any" : undefined}
                           value={form.value} onChange={(event) => update("value", event.target.value)} />
                       )}
                     </label>
                   )}
-                  <label>Expiry date (UTC, optional)
-                    <input type="date" value={form.expiryDate} onChange={(event) => update("expiryDate", event.target.value)} />
-                  </label>
+                  {form.disposition !== "known" && <p className={styles.nonAnswer} role="status">
+                    {form.disposition === "declined" ? "The candidate has declined to provide this answer." : "This answer is not known yet."}
+                  </p>}
                 </div>
+                {form.sourceKind === "profile" && <p className={styles.editorHelp}>
+                  This answer uses the current {APPLICATION_FACT_PROFILE_FIELDS[form.sourceRef as ApplicationFactProfileField] ?? "candidate profile"} value.
+                  {" "}Update the candidate profile to change it.
+                </p>}
+                <details className={styles.answerOptions}>
+                  <summary>Answer status and expiry (optional)</summary>
+                  <div className={styles.editorFields}>
+                    <label>Answer status
+                      <select aria-label="Answer status" disabled={form.sourceKind === "profile"} value={form.disposition}
+                        onChange={(event) => update("disposition", event.target.value as ApplicationFactDisposition)}>
+                        {APPLICATION_FACT_DISPOSITIONS.map((disposition) => <option key={disposition} value={disposition}>{disposition}</option>)}
+                      </select>
+                    </label>
+                    <label>Expiry date (UTC, optional)
+                      <input aria-label="Expiry date (UTC, optional)" type="date" value={form.expiryDate} onChange={(event) => update("expiryDate", event.target.value)} />
+                    </label>
+                  </div>
+                </details>
                 <div className={styles.editorActions}>
                   <button type="submit" className="btn-outline btn-sm" disabled={busy}>{busy ? "Saving…" : "Save draft"}</button>
                   {!editing && <button type="submit" value="approve" className="btn-primary" disabled={busy}>Save and approve</button>}

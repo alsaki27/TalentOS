@@ -37,7 +37,7 @@ describe("Candidate application questions", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it("deduplicates job-scoped prompts and ignores malformed labels", async () => {
+  it("deduplicates the same candidate question across jobs and ignores malformed labels", async () => {
     query.mockResolvedValue([
       { applicationId, status: "needs_human", jobId, jobTitle: "Sample Role", detectedAt,
         questions: ["Can you commute?", "  can you COMMUTE? ", "Can  you commute?", "", 12, "x".repeat(401)] },
@@ -47,12 +47,11 @@ describe("Candidate application questions", () => {
     const missing = await listMissingApplicationQuestions(candidateId, {}, []);
     expect(missing).toEqual([
       { jobId, jobTitle: "Sample Role", detectedAt, question: "Can you commute?" },
-      { jobId: secondJobId, detectedAt, question: "Can you commute?" },
     ]);
     expect(query).toHaveBeenCalledWith(expect.any(String), [candidateId]);
   });
 
-  it("uses the worker's approved-answer rules and honors a job-specific draft over a reusable approval", async () => {
+  it("uses the same candidate-wide approval rules as the worker and holds an unreviewed revision", async () => {
     query.mockResolvedValue([
       { applicationId, status: "needs_human", jobId, detectedAt, questions: ["Can you commute?", "Do you have a degree?"] },
       { applicationId: secondApplicationId, status: "needs_human", jobId: secondJobId, detectedAt, questions: ["Can you commute?"] },
@@ -63,6 +62,19 @@ describe("Candidate application questions", () => {
     expect(missing.map(({ jobId, question }) => ({ jobId, question }))).toEqual([
       { jobId, question: "Can you commute?" },
       { jobId, question: "Do you have a degree?" },
+    ]);
+  });
+
+  it("clears contact prompts using already approved aliases from another legacy job", async () => {
+    query.mockResolvedValue([
+      { applicationId, status: "needs_human", jobId, detectedAt, questions: ["Full name", "Email address"] },
+      { applicationId: secondApplicationId, status: "needs_human", jobId: secondJobId, detectedAt,
+        questions: ["Name", "E-mail address", "Do you have a degree?"] },
+    ]);
+    const name = { ...reusable, id: "name", jobId: secondJobId, question: "Name", valueKind: "text" as const, value: "Sample Applicant" };
+    const email = { ...reusable, id: "email", jobId: secondJobId, question: "Email", valueKind: "text" as const, value: "sample@example.test" };
+    await expect(listMissingApplicationQuestions(candidateId, {}, [name, email])).resolves.toEqual([
+      { jobId: secondJobId, detectedAt, question: "Do you have a degree?" },
     ]);
   });
 
