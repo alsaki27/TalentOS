@@ -237,8 +237,6 @@ export default function SequencesPage() {
             <tbody>
               {items.map((seq) => {
                 const stepCount = seq.steps?.length ?? 0;
-                const mockOpenRate = seq.is_active ? `${Math.floor(35 + Math.random() * 25)}%` : "—";
-                const mockReplyRate = seq.is_active ? `${Math.floor(5 + Math.random() * 15)}%` : "—";
                 return (
                   <tr key={seq.id}>
                     <td>
@@ -257,8 +255,7 @@ export default function SequencesPage() {
                       </span>
                     </td>
                     <td>
-                      <div style={{ fontSize: 12 }}>Open: <strong>{mockOpenRate}</strong></div>
-                      <div style={{ fontSize: 12 }}>Reply: <strong>{mockReplyRate}</strong></div>
+                      <span className="muted" style={{ fontSize: 12 }}>Not tracked</span>
                     </td>
                     <td>
                       <div className="action-group">

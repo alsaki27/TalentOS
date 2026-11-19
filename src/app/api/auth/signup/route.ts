@@ -4,7 +4,21 @@ import { hashPassword } from "@/server/auth/crypto";
 import { countProfiles, createAuditLog, createProfile, findProfileByEmail } from "@/server/auth/profiles";
 import { createAuthResponse } from "@/server/auth/session";
 
+// Once the workspace has an owner, staff accounts are provisioned by an admin
+// from the Team page. Anonymous self-registration would grant data access.
+export async function GET() {
+  return NextResponse.json(
+    { bootstrap_available: (await countProfiles()) === 0 },
+    { headers: { "Cache-Control": "no-store" } }
+  );
+}
+
 export async function POST(req: NextRequest) {
+  const profileCount = await countProfiles();
+  if (profileCount !== 0) {
+    return NextResponse.json({ error: "Ask a TalentOS administrator to create your staff account." }, { status: 403 });
+  }
+
   const body = await req.json().catch(() => ({}));
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
@@ -22,8 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "An account with this email already exists." }, { status: 409 });
   }
 
-  const profileCount = await countProfiles();
-  const role: UserRole = profileCount === 0 ? "admin" : "application_engineer";
+  const role: UserRole = "admin";
   const passwordHash = await hashPassword(password);
   const profile = await createProfile({
     email,

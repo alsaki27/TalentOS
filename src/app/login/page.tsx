@@ -18,7 +18,8 @@ function AuthForm() {
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => searchParams?.get("next") || "/jobs", [searchParams]);
   const requestedMode = (searchParams?.get("mode") || "").toLowerCase() === "signup" ? "signup" : "signin";
-  const [mode, setMode] = useState<AuthMode>(requestedMode);
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [bootstrapAvailable, setBootstrapAvailable] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -27,7 +28,19 @@ function AuthForm() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setMode(requestedMode);
+    let active = true;
+    fetch("/api/auth/signup", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!active) return;
+        const available = data?.bootstrap_available === true;
+        setBootstrapAvailable(available);
+        setMode(available ? requestedMode : "signin");
+      })
+      .catch(() => {
+        if (active) setMode("signin");
+      });
+    return () => { active = false; };
   }, [requestedMode]);
 
   useEffect(() => {
@@ -108,7 +121,7 @@ function AuthForm() {
           </p>
         </div>
 
-        <div className="action-group" style={{ justifyContent: "stretch", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+        <div className="action-group" style={{ justifyContent: "stretch", display: "grid", gridTemplateColumns: bootstrapAvailable ? "1fr 1fr" : "1fr" }}>
           <button
             type="button"
             className={mode === "signin" ? "btn-primary" : "btn"}
@@ -119,7 +132,7 @@ function AuthForm() {
           >
             Sign in
           </button>
-          <button
+          {bootstrapAvailable && <button
             type="button"
             className={mode === "signup" ? "btn-primary" : "btn"}
             onClick={() => {
@@ -128,7 +141,7 @@ function AuthForm() {
             }}
           >
             Sign up
-          </button>
+          </button>}
         </div>
 
         {mode === "signup" && (
@@ -194,7 +207,9 @@ function AuthForm() {
         </a>
 
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-          The first account created becomes `admin`. Any additional self-signups start as `application engineer` and can be updated by an admin from the Team page.
+          {bootstrapAvailable
+            ? "The first account becomes an administrator."
+            : "Need staff access? Ask a TalentOS administrator to add your account."}
         </p>
       </form>
     </div>

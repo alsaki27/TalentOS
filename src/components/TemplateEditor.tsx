@@ -110,10 +110,9 @@ export default function TemplateEditor({
             Subject: {renderPreview(subject, sampleData)}
           </div>
           <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" }} />
-          <div
-            style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}
-            dangerouslySetInnerHTML={{ __html: renderPreview(value, sampleData).replace(/\n/g, "<br/>") }}
-          />
+          <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+            {renderPreview(value, sampleData)}
+          </div>
         </div>
       </div>
     </div>

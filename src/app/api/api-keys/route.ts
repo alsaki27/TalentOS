@@ -11,7 +11,7 @@ import { query, queryOne } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 
 export async function GET() {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const data = await query(
@@ -23,7 +23,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const body = await req.json();
