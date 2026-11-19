@@ -10,6 +10,7 @@ import { getApprovedApplicationAnswers } from "./candidateApplicationFactsServic
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const CONTROL_CHARACTER = new RegExp("\\p{Cc}", "u");
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 
 export class BrowserWorkerQueueError extends Error {
@@ -63,6 +64,14 @@ interface JobClaim extends QueueJob {
   content_sha256: string;
   byte_length: number;
   profile_version: string;
+}
+
+type ClaimWithResumeNaming = JobClaim & { candidate_name?: string | null; job_title?: string | null };
+
+function resumeNamingLabel(value: string | null | undefined) {
+  if (!value) return undefined;
+  const label = value.trim().replace(/\s+/g, " ");
+  return label && label.length <= 200 && !CONTROL_CHARACTER.test(label) ? label : undefined;
 }
 
 const SELECTED_RESUME_JOIN = `JOIN application_resume_versions v ON v.id = a.tailored_resume_version_id
@@ -251,13 +260,14 @@ export async function claimBrowserQueueJob(request: Request, input: unknown) {
   const missingProfile = expiredResult("registered_profile_unavailable");
   // Lock one worker, retry its expired prepare lease once, and expire a stale
   // pinned snapshot or exhausted lease without moving the recruiting stage.
-  const result = await queryOne<{ authorized: boolean; job: JobClaim | null }>(
+  const result = await queryOne<{ authorized: boolean; job: ClaimWithResumeNaming | null }>(
     `WITH worker AS MATERIALIZED (
        SELECT id FROM browser_worker_queue_workers WHERE credential_hash = $1 AND revoked_at IS NULL FOR UPDATE
      ), profiles AS (
        SELECT * FROM jsonb_to_recordset($2::jsonb) AS p("candidateId" uuid, "profileVersion" text)
      ), eligible AS MATERIALIZED (
-       SELECT q.id, p."profileVersion" FROM browser_worker_queue_jobs q JOIN worker w ON w.id = q.worker_id
+       SELECT q.id, p."profileVersion", c.name AS candidate_name, j.title AS job_title
+       FROM browser_worker_queue_jobs q JOIN worker w ON w.id = q.worker_id
        JOIN profiles p ON p."candidateId" = q.candidate_id ${BOUND_JOINS}
        WHERE q.status IN ('queued','leased') AND (q.profile_version IS NULL OR q.profile_version = p."profileVersion") AND ${BOUND}
      ), candidate AS (
@@ -289,7 +299,8 @@ export async function claimBrowserQueueJob(request: Request, input: unknown) {
            WHEN c."profileVersion" IS NULL THEN $5 ELSE NULL END
        FROM candidate c WHERE q.id = c.id RETURNING q.*
      ) SELECT EXISTS(SELECT 1 FROM worker) AS authorized,
-       (SELECT to_jsonb(changed) FROM changed WHERE status = 'leased') AS job`,
+       (SELECT to_jsonb(changed) || jsonb_build_object('candidate_name', e.candidate_name, 'job_title', e.job_title)
+        FROM changed JOIN eligible e ON e.id = changed.id WHERE changed.status = 'leased') AS job`,
     [credential, JSON.stringify(profiles), sha(leaseToken), JSON.stringify(stale), sha(JSON.stringify(stale)),
       JSON.stringify(exhausted), sha(JSON.stringify(exhausted)), JSON.stringify(missingProfile), sha(JSON.stringify(missingProfile))],
   ).catch((error: unknown) => {
@@ -302,10 +313,13 @@ export async function claimBrowserQueueJob(request: Request, input: unknown) {
   if (!result?.authorized) throw new BrowserWorkerQueueError(401, "Worker credential is invalid or revoked");
   const job = result.job;
   if (!job) return null;
+  const candidateName = resumeNamingLabel(job.candidate_name);
+  const jobTitle = resumeNamingLabel(job.job_title);
   return {
     requestId: job.id, attempt: job.attempt, leaseToken,
     leaseExpiresAt: new Date(job.lease_expires_at).toISOString(), jobUrl: job.job_url,
     expectedDialogHeading: job.expected_dialog_heading,
+    ...(candidateName && jobTitle ? { resumeNaming: { candidateName, jobTitle } } : {}),
     manifest: {
       version: 1, mode: "prepare", applicationId: job.application_id, candidateId: job.candidate_id, jobId: job.job_id,
       profileRef: job.candidate_id, profileVersion: job.profile_version, jobVersion: job.job_version,
