@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import TemplateEditor from "@/components/TemplateEditor";
+import SafeEmailPreview from "@/components/SafeEmailPreview";
 import Pagination from "@/components/Pagination";
 
 const CATEGORIES = ["All", "Outreach", "Rejection", "Offer", "Screening", "Follow-up", "Custom"];
@@ -255,9 +256,10 @@ export default function TemplatesPage() {
             <h2>Preview: {previewTemplate.name}</h2>
             <div className="card" style={{ marginTop: 10 }}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>Subject: {previewTemplate.subject}</div>
-              <div
+              <SafeEmailPreview
+                className="safe-email-preview"
                 style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}
-                dangerouslySetInnerHTML={{ __html: previewTemplate.body.replace(/\n/g, "<br/>") }}
+                html={previewTemplate.body.replace(/\n/g, "<br/>")}
               />
             </div>
             <div className="modal-actions">

@@ -9,7 +9,6 @@ import {
   Eye,
   EyeOff,
   Shield,
-  AlertTriangle,
   Check,
   X,
   Loader2,
@@ -29,20 +28,13 @@ interface ApiKey {
 interface ApiKeyListResponse {
   keys: ApiKey[];
   available_scopes: string[];
-}
-
-interface MeResponse {
-  profile: {
-    display_name: string;
-    email: string | null;
-    role: string;
-  };
+  can_manage_all: boolean;
 }
 
 export default function ApiKeysPage() {
-  const [me, setMe] = useState<MeResponse | null>(null);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [availableScopes, setAvailableScopes] = useState<string[]>([]);
+  const [canManageAll, setCanManageAll] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -55,10 +47,6 @@ export default function ApiKeysPage() {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    fetch("/api/bootstrap")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setMe(data))
-      .catch(() => setMe(null));
     loadKeys();
   }, []);
 
@@ -69,6 +57,7 @@ export default function ApiKeysPage() {
       const data: ApiKeyListResponse = await res.json();
       setKeys(data.keys);
       setAvailableScopes(data.available_scopes);
+      setCanManageAll(data.can_manage_all);
     }
     setLoading(false);
   }
@@ -133,24 +122,6 @@ export default function ApiKeysPage() {
     });
   }
 
-  const isAdmin = me?.profile?.role === "admin";
-
-  if (!isAdmin && me) {
-    return (
-      <div className="page-header">
-        <h1>API Keys</h1>
-        <div className="card" style={{ marginTop: 16 }}>
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-500" />
-            <p className="text-sm text-ink-soft">
-              You need admin privileges to manage API keys.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const activeKeys = keys.filter((k) => !k.revoked_at);
   const revokedKeys = keys.filter((k) => k.revoked_at);
 
@@ -160,7 +131,11 @@ export default function ApiKeysPage() {
       <div className="page-header">
         <div>
           <h1>API Keys</h1>
-          <p className="page-kicker">Manage integration keys for crawlers, webhooks, and external tools</p>
+          <p className="page-kicker">
+            {canManageAll
+              ? "Manage integration keys for crawlers, webhooks, and external tools across the workspace"
+              : "Manage your integration keys for crawlers, webhooks, and external tools"}
+          </p>
         </div>
       </div>
 

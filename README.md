@@ -40,15 +40,12 @@ complete env var reference table and a list of what's configured vs. what isn't.
    ```
    This validates `.env.local`, rejects placeholder Supabase values, checks connectivity,
    and verifies the required core tables exist.
-5. **Create the first admin:** first create an Auth user and password in Supabase
-   **Authentication > Users**. Then run:
-   ```bash
-   npm run seed:admin
-   ```
-   The script defaults to `ADMIN_EMAIL=admin@skarion.local`. Override it by setting
-   `ADMIN_EMAIL=you@example.com` in `.env.local` before running the command.
-   It creates or updates the TalentOS `profiles` row for that existing Auth user. It does
-   not set or print passwords.
+5. **Bootstrap the first admin:** before the first staff sign-in, set
+   `ADMIN_EMAIL` in `.env.local` to the exact Google email that will own the workspace.
+   Sign in with that verified Google account while the profiles table is empty. This
+   one-time bootstrap is serialized so concurrent first sign-ins cannot create multiple
+   admins. Afterward, admins provision staff accounts from the Team page; public signup
+   is disabled.
 
    Everything else (AI assistant keys, `CRON_SECRET` for scheduled jobs, USAJobs import
    credentials, Gmail/Teams/TalentOS integration secrets - see
@@ -515,7 +512,7 @@ owns workflow" principle (see `ROADMAP.md`) without actually adding an AI depend
 
 ## Known gaps (read before relying on this for anything sensitive)
 
-- **First admin bootstrap is explicit.** There is no self-serve signup. Create the first Auth user/password in Supabase Authentication, then run `npm run seed:admin` to create or update the TalentOS admin profile before logging in.
+- **First admin bootstrap is explicit.** There is no self-serve staff signup. Set `ADMIN_EMAIL` to the exact verified Google account that should become the initial admin, sign in with it while no staff profile exists, and provision later staff accounts from the Team page.
 - Candidate self-login is still not implemented. The public candidate portal remains a
   magic-link flow at `/portal/<token>` with expiry/revocation fields available, not a
   candidate account/session dashboard.

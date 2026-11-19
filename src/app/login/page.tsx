@@ -11,24 +11,14 @@ export default function LoginPage() {
   );
 }
 
-type AuthMode = "signin" | "signup";
-
 function AuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => searchParams?.get("next") || "/jobs", [searchParams]);
-  const requestedMode = (searchParams?.get("mode") || "").toLowerCase() === "signup" ? "signup" : "signin";
-  const [mode, setMode] = useState<AuthMode>(requestedMode);
-  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [loadingMode, setLoadingMode] = useState<AuthMode | "">("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    setMode(requestedMode);
-  }, [requestedMode]);
 
   useEffect(() => {
     const authError = searchParams?.get("error");
@@ -40,50 +30,38 @@ function AuthForm() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
-    setLoadingMode(mode);
-
-    if (mode === "signup" && password !== confirmPassword) {
-      setLoadingMode("");
-      setError("Passwords do not match.");
-      return;
-    }
+    setLoading(true);
 
     let res: Response;
     try {
-      res = await fetch(mode === "signin" ? "/api/signin" : "/api/auth/signup", {
+      res = await fetch("/api/signin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          password,
-          display_name: displayName,
-        }),
+        body: JSON.stringify({ email, password }),
       });
     } catch {
-      setLoadingMode("");
+      setLoading(false);
       setError("The sign-in service could not be reached. Please disable browser blocking for this site and try again.");
       return;
     }
 
-    setLoadingMode("");
+    setLoading(false);
     if (!res.ok) {
       // Candidate accounts use their isolated portal session. Trying this only
       // after staff auth fails preserves staff auth and keeps the two cookies
       // completely separate.
-      if (mode === "signin") {
-        try {
-          const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-          if (candidateRes.ok) {
-            router.push("/portal");
-            router.refresh();
-            return;
-          }
-        } catch {
-          // Fall through to the normal staff sign-in error below.
+      try {
+        const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+        if (candidateRes.ok) {
+          router.push("/portal");
+          router.refresh();
+          return;
         }
+      } catch {
+        // Fall through to the normal staff sign-in error below.
       }
       const data = await res.json().catch(() => ({}));
-      setError(data.error || (mode === "signin" ? "Could not sign in." : "Could not sign up."));
+      setError(data.error || "Could not sign in.");
       return;
     }
 
@@ -102,47 +80,9 @@ function AuthForm() {
         <div>
           <h1>TalentOS</h1>
           <p className="muted">
-            {mode === "signin"
-              ? "Sign in to continue into the TalentOS workspace."
-              : "Create your account to start using TalentOS."}
+            Sign in to continue into the TalentOS workspace.
           </p>
         </div>
-
-        <div className="action-group" style={{ justifyContent: "stretch", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
-          <button
-            type="button"
-            className={mode === "signin" ? "btn-primary" : "btn"}
-            onClick={() => {
-              setMode("signin");
-              setError("");
-            }}
-          >
-            Sign in
-          </button>
-          <button
-            type="button"
-            className={mode === "signup" ? "btn-primary" : "btn"}
-            onClick={() => {
-              setMode("signup");
-              setError("");
-            }}
-          >
-            Sign up
-          </button>
-        </div>
-
-        {mode === "signup" && (
-          <div className="field-group">
-            <label>Full Name</label>
-            <input
-              type="text"
-              autoComplete="name"
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              required={mode === "signup"}
-            />
-          </div>
-        )}
 
         <div className="field-group">
           <label>Email</label>
@@ -168,25 +108,10 @@ function AuthForm() {
           />
         </div>
 
-        {mode === "signup" && (
-          <div className="field-group">
-            <label>Confirm Password</label>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              required={mode === "signup"}
-            />
-          </div>
-        )}
-
         {error && <p className="form-error">{error}</p>}
 
-        <button className="btn-primary auth-submit" type="submit" disabled={loadingMode !== ""}>
-          {loadingMode === "signin" && "Signing in..."}
-          {loadingMode === "signup" && "Creating account..."}
-          {loadingMode === "" && (mode === "signin" ? "Sign in" : "Create account")}
+        <button className="btn-primary auth-submit" type="submit" disabled={loading}>
+          {loading ? "Signing in..." : "Sign in"}
         </button>
 
         <a href={googleHref} className="btn auth-submit" style={{ textAlign: "center" }}>
@@ -194,7 +119,7 @@ function AuthForm() {
         </a>
 
         <p className="muted" style={{ margin: 0, fontSize: 12 }}>
-          The first account created becomes `admin`. Any additional self-signups start as `application engineer` and can be updated by an admin from the Team page.
+          Staff accounts are created by a TalentOS administrator. The first administrator signs in with the verified Google account configured for initial setup.
         </p>
       </form>
     </div>

@@ -1,6 +1,6 @@
 import type { UserRole } from "@/lib/auth";
 import { getEffectiveUserRole } from "@/lib/auth";
-import { execute, queryOne } from "@/server/db/neon";
+import { execute, queryOne, sql } from "@/server/db/neon";
 
 export interface AuthProfileRow {
   user_id: string;
@@ -15,6 +15,32 @@ export interface AuthProfileRow {
 export async function countProfiles() {
   const row = await queryOne<{ count: number }>("SELECT COUNT(*)::int AS count FROM profiles");
   return row?.count ?? 0;
+}
+
+/**
+ * Creates the first staff profile only while holding a transaction-scoped
+ * advisory lock. A second concurrent OAuth callback rechecks after the first
+ * transaction commits and cannot create another initial administrator.
+ */
+export async function createFirstAdminProfile(input: {
+  email: string;
+  displayName: string;
+  emailVerified: boolean;
+}) {
+  if (!input.emailVerified) return null;
+
+  const userId = crypto.randomUUID();
+  const [, profileRows] = await sql().transaction((tx) => [
+    tx`SELECT pg_advisory_xact_lock(hashtext('talentos:first-admin-bootstrap'))`,
+    tx`INSERT INTO profiles (user_id, email, display_name, role, is_active, password_hash, email_verified, updated_at)
+       SELECT ${userId}, ${input.email.toLowerCase()}, ${input.displayName}, 'admin', true, NULL, true, NOW()
+        WHERE NOT EXISTS (SELECT 1 FROM profiles)
+       RETURNING user_id, email, display_name, role, NULL::text AS role_variant, is_active, password_hash`,
+  ]);
+
+  const profile = (profileRows as AuthProfileRow[])[0];
+  if (!profile) return null;
+  return { ...profile, role: getEffectiveUserRole(profile.role, profile.role_variant) } satisfies AuthProfileRow;
 }
 
 export async function findProfileByEmail(email: string) {

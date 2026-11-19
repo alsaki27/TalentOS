@@ -6,7 +6,7 @@ import {
   sanitizeInternalPath,
 } from "@/lib/auth";
 import { exchangeGoogleCodeForUser } from "@/server/auth/google";
-import { countProfiles, createAuditLog, createProfile, findProfileByEmail } from "@/server/auth/profiles";
+import { createAuditLog, createFirstAdminProfile, findProfileByEmail } from "@/server/auth/profiles";
 import { createAuthResponse } from "@/server/auth/session";
 import { consumeAuthOAuthState } from "@/server/repositories/authOAuthStateRepository";
 import { canonicalUrl } from "@/server/runtimeConfig";
@@ -42,25 +42,28 @@ export async function GET(req: NextRequest) {
     let profile = await findProfileByEmail(googleUser.email);
 
     if (!profile) {
-      const profileCount = await countProfiles();
-      if (profileCount > 0) {
+      const adminEmail = (process.env.ADMIN_EMAIL ?? "").trim().toLowerCase();
+      if (!adminEmail || googleUser.email !== adminEmail || !googleUser.email_verified) {
         return loginError("This Google account is not authorized for TalentOS. Ask an administrator to add it first.");
       }
-      const role = "admin";
-      profile = await createProfile({
+      profile = await createFirstAdminProfile({
         email: googleUser.email,
         displayName: googleUser.name || googleUser.email.split("@")[0],
-        role,
-        passwordHash: null,
-        emailVerified: googleUser.email_verified ?? true,
+        emailVerified: googleUser.email_verified,
       });
+      // A concurrent callback may have completed first-admin setup for the
+      // same allowlisted account while this callback waited on the lock.
+      profile ??= await findProfileByEmail(googleUser.email);
+      if (!profile) {
+        return loginError("TalentOS already has an initial account. Ask an administrator to add your account.");
+      }
       await createAuditLog({
         actorUserId: profile.user_id,
         actorEmail: profile.email,
-        action: "auth.google_signup",
+        action: "auth.google_first_admin_bootstrap",
         entityType: "profile",
         entityId: profile.user_id,
-        metadata: { role, google_sub: googleUser.sub },
+        metadata: { role: "admin", google_sub: googleUser.sub },
       });
     } else {
       await createAuditLog({

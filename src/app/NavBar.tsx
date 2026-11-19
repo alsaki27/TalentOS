@@ -177,6 +177,7 @@ export default function NavBar() {
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team",                  label: "Team",                  show: isAdmin },
     { href: "/settings/webhooks",     label: "Webhooks",              show: isAdmin || role === "manager" },
+    { href: "/settings/api-keys",     label: "API Keys",              show: true },
     { href: "/settings/billing",      label: "Billing",               show: isAdmin || role === "manager" },
     { href: "/companies",             label: "Companies",             show: canCo },
     { href: "/interviews",            label: "Interviews",            show: true },

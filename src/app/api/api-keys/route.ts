@@ -5,36 +5,56 @@ import {
   hashPublicApiKey,
   isValidScope,
   publicApiKeyPrefix,
-  PUBLIC_API_SCOPES,
+  publicApiScopesForRole,
 } from "@/lib/publicApiAuth";
 import { query, queryOne } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 
 export async function GET() {
-  const { response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
+  if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+
+  const isAdmin = context.profile.role === "admin";
 
   const data = await query(
-    'SELECT id, name, key_prefix, scopes, last_used_at, expires_at, revoked_at, metadata, created_at, updated_at FROM public_api_keys ORDER BY created_at DESC',
-    []
+    `SELECT id, name, key_prefix, scopes, last_used_at, expires_at, revoked_at, metadata, created_at, updated_at
+       FROM public_api_keys
+      WHERE $1::boolean OR created_by_user_id = $2
+      ORDER BY created_at DESC`,
+    [isAdmin, context.profile.user_id]
   );
 
-  return NextResponse.json({ keys: data ?? [], available_scopes: PUBLIC_API_SCOPES });
+  return NextResponse.json({
+    keys: data ?? [],
+    available_scopes: publicApiScopesForRole(context.profile.role),
+    can_manage_all: isAdmin,
+  });
 }
 
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
+  if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
   const body = await req.json();
   const name = String(body.name ?? "").trim();
   if (!name) return NextResponse.json({ error: "name is required" }, { status: 400 });
 
-  const scopes = Array.isArray(body.scopes) ? body.scopes.filter((scope: unknown) => typeof scope === "string") : [];
-  const invalidScopes = scopes.filter((scope: string) => !isValidScope(scope));
+  const requestedScopes: string[] = Array.isArray(body.scopes)
+    ? body.scopes.filter((scope: unknown): scope is string => typeof scope === "string")
+    : [];
+  const scopes = [...new Set(requestedScopes)];
+  const invalidScopes = scopes.filter((scope) => !isValidScope(scope));
   if (invalidScopes.length > 0) {
     return NextResponse.json({ error: `Invalid scope(s): ${invalidScopes.join(", ")}` }, { status: 400 });
   }
+  const availableScopes = new Set<string>(publicApiScopesForRole(context.profile.role));
+  const restrictedScopes = scopes.filter((scope: string) => !availableScopes.has(scope));
+  if (restrictedScopes.length > 0) {
+    return NextResponse.json({ error: `Only admins can grant scope(s): ${restrictedScopes.join(", ")}` }, { status: 403 });
+  }
+  if (scopes.length === 0) return NextResponse.json({ error: "At least one scope is required." }, { status: 400 });
 
   const key = await generatePublicApiKey();
   const data = await queryOne(

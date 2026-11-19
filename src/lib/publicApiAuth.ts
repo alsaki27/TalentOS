@@ -36,6 +36,36 @@ export const PUBLIC_API_SCOPES = [
 
 export type PublicApiScope = typeof PUBLIC_API_SCOPES[number];
 
+// Explicitly reviewed non-destructive scopes for keys created by regular
+// staff. New public scopes stay unavailable to non-admin key creation until
+// they are deliberately added here.
+const NON_ADMIN_PUBLIC_API_SCOPES = [
+  "candidates:read",
+  "candidates:write",
+  "jobs:read",
+  "jobs:write",
+  "jobs:import",
+  "jobs:shortlist",
+  "applications:read",
+  "applications:write",
+  "applications:assign",
+  "applications:status",
+  "applications:comment",
+  "companies:read",
+  "companies:write",
+  "company_people:read",
+  "company_people:write",
+  "events:read",
+  "events:write",
+  "events:acknowledge",
+  "reminders:read",
+  "reminders:write",
+  "analytics:read",
+  "integrations:gmail:read",
+  "integrations:gmail:write",
+  "integrations:teams:write",
+] satisfies readonly PublicApiScope[];
+
 export interface PublicApiContext {
   id: string;
   name: string;
@@ -68,6 +98,13 @@ export function publicApiKeyPrefix(key: string) {
 
 export function isValidScope(scope: string): scope is PublicApiScope {
   return (PUBLIC_API_SCOPES as readonly string[]).includes(scope);
+}
+
+/** Management permissions do not alter runtime authentication of issued keys. */
+export function publicApiScopesForRole(role: string): PublicApiScope[] {
+  if (role === "admin") return [...PUBLIC_API_SCOPES];
+  const allowedScopes = new Set<string>(NON_ADMIN_PUBLIC_API_SCOPES);
+  return PUBLIC_API_SCOPES.filter((scope) => allowedScopes.has(scope));
 }
 
 function keyFromRequest(req: NextRequest) {

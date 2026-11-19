@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import SafeEmailPreview from "@/components/SafeEmailPreview";
 
 const MERGE_TAGS = [
   { label: "Candidate Name", value: "{{candidate_name}}" },
@@ -110,9 +111,10 @@ export default function TemplateEditor({
             Subject: {renderPreview(subject, sampleData)}
           </div>
           <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "8px 0" }} />
-          <div
+          <SafeEmailPreview
+            className="safe-email-preview"
             style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap" }}
-            dangerouslySetInnerHTML={{ __html: renderPreview(value, sampleData).replace(/\n/g, "<br/>") }}
+            html={renderPreview(value, sampleData).replace(/\n/g, "<br/>")}
           />
         </div>
       </div>
