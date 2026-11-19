@@ -1,3 +1,5 @@
+import { getWorkerVersionWithRetry } from "./lib/cloudflare-version-retry.mjs";
+
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
 const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN;
 const WORKER_NAME = process.env.CLOUDFLARE_WORKER_NAME || "skarion-talent-os";
@@ -21,21 +23,32 @@ async function cloudflare(path, query) {
   const body = await response.json();
   if (!response.ok || !body.success) {
     const detail = body.errors?.map((error) => error.message).join("; ") || response.statusText;
-    throw new Error(`Cloudflare API request failed (${response.status}): ${detail}`);
+    const error = new Error(`Cloudflare API request failed (${response.status}): ${detail}`);
+    error.status = response.status;
+    throw error;
   }
   return body.result;
 }
 
 const basePath = `/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}`;
 const deployments = await cloudflare(`${basePath}/deployments`, { per_page: 20 });
-const latest = (deployments.deployments || []).sort((a, b) =>
-  Date.parse(b.created_on) - Date.parse(a.created_on),
-)[0];
+// Cloudflare documents the first item as the latest deployment actively
+// serving traffic. Preserve that authoritative order rather than re-sorting it.
+const latest = (deployments.deployments || [])[0];
 if (!latest) throw new Error("No active Worker deployment was returned");
 
 const activeVersion = latest.versions.find((version) => version.percentage === 100);
 if (!activeVersion) throw new Error("The latest Worker deployment does not have a single version at 100%");
-const version = await cloudflare(`${basePath}/versions/${activeVersion.version_id}`);
+const version = await getWorkerVersionWithRetry({
+  versionId: activeVersion.version_id,
+  deploymentId: latest.id,
+  getVersion: () => cloudflare(`${basePath}/versions/${activeVersion.version_id}`),
+  onRetry: ({ attempt, nextAttempt, delayMs, versionId }) => {
+    console.warn(
+      `Cloudflare has not exposed Worker version ${versionId} yet (404, attempt ${attempt}); retrying in ${delayMs}ms (attempt ${nextAttempt}/8).`,
+    );
+  },
+});
 const message = latest.annotations?.["workers/message"] || version.annotations?.["workers/message"] || "";
 if (!message.includes(EXPECTED_SHA)) {
   throw new Error(`Active deployment ${latest.id} is not tagged with commit ${EXPECTED_SHA}`);
