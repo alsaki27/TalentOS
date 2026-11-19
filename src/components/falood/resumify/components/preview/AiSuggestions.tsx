@@ -49,6 +49,41 @@ function buildSkillGapSuggestion(item: SkillGapItem): Suggestion {
     };
 }
 
+/** Render persisted suggestion history without passing plain objects to React. */
+function renderOriginalSuggestion(value: unknown, key = 0): React.ReactNode {
+    if (Array.isArray(value)) {
+        return (
+            <div key={key} className="space-y-1">
+                {value.map((item, index) => (
+                    <div key={index}>{renderOriginalSuggestion(item, index)}</div>
+                ))}
+            </div>
+        );
+    }
+
+    if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        if (typeof record.name === 'string' && Array.isArray(record.skills)) {
+            const skills = record.skills.map((skill) =>
+                typeof skill === 'string' ? skill : JSON.stringify(skill),
+            );
+            return (
+                <span key={key}>
+                    {record.name}{skills.length > 0 ? `: ${skills.join(' • ')}` : ''}
+                </span>
+            );
+        }
+
+        return <span key={key}>{JSON.stringify(value)}</span>;
+    }
+
+    if (typeof value === 'string' || typeof value === 'number') {
+        return <span key={key}>{value}</span>;
+    }
+
+    return null;
+}
+
 export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candidateId }) => {
     const { state, importResumeData, setChatHistory, setJobDescription, setPreviewSuggestion } = useResume();
     const { chatHistory: messages, jobDescription } = state;
@@ -634,7 +669,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                             <div className="space-y-1.5">
                                                                 <span className="text-[10px] uppercase font-semibold text-muted-foreground">Original</span>
                                                                 <div className="p-2 bg-red-50/50 dark:bg-red-950/20 rounded text-muted-foreground line-through decoration-red-400/30 text-[11px] leading-relaxed">
-                                                                    {suggestion.original}
+                                                                    {renderOriginalSuggestion(suggestion.original)}
                                                                 </div>
                                                             </div>
                                                         )}
