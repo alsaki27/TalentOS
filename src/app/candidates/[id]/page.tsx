@@ -7,7 +7,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
-import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
+import { openFaloodSavedApplicationStudio, openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
 import { AuditPanel } from "@/components/candidates/AuditPanel";
@@ -16,6 +16,7 @@ import { CandidateOptCountdownCard } from "@/components/candidates/CandidateOptC
 import { CandidateTimezoneCard } from "@/components/candidates/CandidateTimezoneCard";
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
+import { isCandidateContractRoleKey } from "@/lib/auth-edge";
 import { CandidateApplicationFactsPanel } from "@/components/candidates/CandidateApplicationFactsPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 import CustomInterviewHub from "@/components/candidates/CustomInterviewHub";
@@ -398,8 +399,9 @@ export default function CandidateProfilePage() {
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
   const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
   const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
-  const [me, setMe] = useState<{ profile?: { role?: string } } | null>(null);
+  const [me, setMe] = useState<{ profile?: { role?: string; role_key?: string } } | null>(null);
   const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
+  const canAccessContractTab = isCandidateContractRoleKey(me?.profile?.role_key);
 
   async function resetCandidatePassword() {
     if (!confirm("Reset this candidate's portal password and issue a temporary password?")) return;
@@ -434,6 +436,10 @@ export default function CandidateProfilePage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  useEffect(() => {
+    if (activeTab === "Contract" && !canAccessContractTab) setActiveTab("Applications");
+  }, [activeTab, canAccessContractTab]);
 
   useEffect(() => {
     fetch("/api/bootstrap").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
@@ -1091,7 +1097,9 @@ export default function CandidateProfilePage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Custom Interview", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Custom Interview", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const)
+          .filter((tab) => tab !== "Contract" || canAccessContractTab)
+          .map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1347,12 +1355,12 @@ export default function CandidateProfilePage() {
         <CustomInterviewHub candidateId={candidate.id} candidateName={candidate.name} />
       )}
 
-      {activeTab === "Contract" && (
+      {activeTab === "Contract" && canAccessContractTab && (
         <CandidateContractsPanel
           candidateId={candidate.id}
           candidateName={candidate.name}
           hasContract={Boolean(candidate.has_contract)}
-          canManage={isManager}
+          canManage={canAccessContractTab}
           onContractStatusChange={updateHasContract}
           onContractUploaded={markContractUploaded}
         />
@@ -1586,7 +1594,7 @@ export default function CandidateProfilePage() {
                           <button
                             className="row-link"
                             style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
-                            onClick={() => t.isAiGenerated ? openFaloodStudio("application_resume_version", t.id) : window.open(`/falood/studio/tailor/${t.id}`, "_blank")}
+                            onClick={() => t.isAiGenerated ? openFaloodStudio("application_resume_version", t.id) : openFaloodSavedApplicationStudio(t.id)}
                           >
                             Open in studio
                           </button>

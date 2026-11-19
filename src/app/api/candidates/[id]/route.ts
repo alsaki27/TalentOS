@@ -4,12 +4,12 @@
 // DELETE -> remove a candidate (cascades to their applications + resume variants)
 
 import { NextRequest, NextResponse } from "next/server";
-import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { DESTRUCTIVE_MANAGER_ROLES, isCandidateContractRoleKey, MASTER_DATA_MANAGER_ROLES, requireCurrentUser, getTeamRoleKey } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { deleteStorageFile } from "@/lib/storage";
 import { deleteResumeFile } from "@/lib/resumeStorage";
-import { deletePrivateCandidateContract } from "@/server/storage/storageApi";
+import { deleteCandidateContract } from "@/server/storage/candidateContractStorage";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
@@ -62,6 +62,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if (body.has_contract !== undefined && typeof body.has_contract !== "boolean") {
     return NextResponse.json({ error: "has_contract must be true or false" }, { status: 400 });
+  }
+  if ("has_contract" in body && !isCandidateContractRoleKey(getTeamRoleKey(context.profile.role, context.profile.role_variant))) {
+    return NextResponse.json({ error: "Permission denied" }, { status: 403 });
   }
 
   const allowedFields = [
@@ -149,8 +152,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       deleteResumeFile(candidate?.resume_url),
       deleteStorageFile(candidate?.avatar_url),
       ...(resumes ?? []).map((r: any) => deleteResumeFile(r.file_url)),
-      ...contractFiles.map((file) => deletePrivateCandidateContract(file.storage_key).catch((error) => {
-        console.error("[Candidate contracts] Private file cleanup failed.", error instanceof Error ? error.message : "unknown error");
+      ...contractFiles.map((file) => deleteCandidateContract(file.storage_key).catch((error) => {
+        console.error("[Candidate contracts] File cleanup failed.", error instanceof Error ? error.message : "unknown error");
       })),
     ]);
 

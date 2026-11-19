@@ -191,6 +191,7 @@ The TalentOS app is a Next.js 14 application currently running on Vercel + Supab
 | `MS_TENANT_ID` | No | ✅ | ✅ | SharePoint OAuth. |
 | `SHAREPOINT_SITE_ID` | No | ✅ | ✅ | SharePoint config. |
 | `SHAREPOINT_DRIVE_FOLDER` | No | ✅ | ✅ | SharePoint config. |
+| `SHAREPOINT_CONTRACTS_FOLDER` | No | Optional | Optional | Candidate contract folder, relative to the SharePoint drive root; defaults to the configured resume folder plus `/candidate-contracts`. Use a folder whose SharePoint permissions are restricted to the intended staff. |
 
 ---
 

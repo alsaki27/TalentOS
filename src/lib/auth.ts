@@ -2,12 +2,14 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { verifyJWT } from "@/server/auth/jwt";
 import { queryOne } from "@/server/db/neon";
-import { getEffectiveUserRole, getRoleLabel, getTeamRoleKey } from "@/lib/auth-edge";
+import { getEffectiveUserRole, getRoleLabel, getTeamRoleKey, isCandidateContractRoleKey } from "@/lib/auth-edge";
 import type { UserRole } from "@/lib/auth-edge";
 
 export {
   ALL_USER_ROLES,
   CANDIDATE_JOB_REVIEW_ROLES,
+  CANDIDATE_CONTRACT_ACCESS_ROLE_KEYS,
+  isCandidateContractRoleKey,
   getEffectiveUserRole,
   getRoleLabel,
   getTeamRoleKey,
@@ -95,6 +97,22 @@ export async function requireCurrentUser(allowedRoles?: UserRole[]) {
   }
 
   if (allowedRoles?.length && !allowedRoles.includes(context.profile.role)) {
+    return { context: null, response: NextResponse.json({ error: "Permission denied" }, { status: 403 }) };
+  }
+
+  return { context, response: null };
+}
+
+/** Restrict contract file access to admin, manager, and co-manager role variants. */
+export async function requireCandidateContractAccess() {
+  const { context, response } = await requireCurrentUser(["admin", "manager"]);
+  if (response) return { context: null, response };
+  if (!context) {
+    return { context: null, response: NextResponse.json({ error: "Authentication required" }, { status: 401 }) };
+  }
+
+  const roleKey = getTeamRoleKey(context.profile.role, context.profile.role_variant);
+  if (!isCandidateContractRoleKey(roleKey)) {
     return { context: null, response: NextResponse.json({ error: "Permission denied" }, { status: 403 }) };
   }
 

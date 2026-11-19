@@ -352,7 +352,12 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                 const json = await createResponse.json();
                 const savedId = json.data?.id;
                 if (savedId) {
-                    router.push(`/falood/studio/tailor/${savedId}?jobTitle=${encodeURIComponent(data.jobTitle)}&company=${encodeURIComponent(data.company)}`);
+                    const studioParams = new URLSearchParams({
+                        jobTitle: data.jobTitle,
+                        company: data.company,
+                        returnTo: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                    });
+                    router.push(`/falood/studio/tailor/${encodeURIComponent(savedId)}?${studioParams.toString()}`);
                 }
             }
         } catch (error) {

@@ -104,7 +104,13 @@ npx wrangler vars put APP_BASE_URL
 
 npx wrangler vars put RESUME_STORAGE_PROVIDER
 # Value: supabase (keep temporarily) or sharepoint
+
+npx wrangler vars put SHAREPOINT_CONTRACTS_FOLDER
+# Value: path relative to the SharePoint drive root; default is
+# <SHAREPOINT_DRIVE_FOLDER or resumes>/candidate-contracts
 ```
+
+The candidate contracts folder should have SharePoint permissions limited to the intended staff. If omitted, it is created beneath the configured resume folder and inherits that folder's permissions.
 
 ---
 

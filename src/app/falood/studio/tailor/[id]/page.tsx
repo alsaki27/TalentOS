@@ -19,6 +19,7 @@ import type { ResumeData } from '@/components/falood/resumify/types/resume';
 import type { ResumeVersion } from '@/components/falood/resumify/contexts/ResumeContext';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { safeStudioReturnPath } from '@/lib/falood/openStudio';
 
 interface TailorSnapshot {
     resumeData: ResumeData;
@@ -32,6 +33,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const searchParams = useSearchParams();
     const jobTitle = searchParams.get('jobTitle') || 'Untitled Position';
     const company = searchParams.get('company') || '';
+    const returnTo = safeStudioReturnPath(searchParams.get('returnTo'));
     const { state, dispatch } = useResume();
     const [isLoading, setIsLoading] = useState(true);
     const [isSavingVersion, setIsSavingVersion] = useState(false);
@@ -324,7 +326,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 </div>
                 <div className="flex gap-2">
                     <Button size="sm" onClick={() => void load()}>Retry</Button>
-                    <Link href="/falood"><Button size="sm" variant="outline">Back to Falood</Button></Link>
+                    <Link href={returnTo}><Button size="sm" variant="outline">Back to previous page</Button></Link>
                 </div>
             </div>
         );
@@ -350,7 +352,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 {/* Header */}
                 <div className="print:hidden" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                        <Link href="/falood" style={{ color: 'inherit' }}>
+                        <Link href={returnTo} style={{ color: 'inherit' }}>
                             <ArrowLeft size={20} />
                         </Link>
                         <div>

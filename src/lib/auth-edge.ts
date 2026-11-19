@@ -50,6 +50,11 @@ export const TEAM_ROLE_DEFINITIONS: Record<TeamRoleKey, TeamRoleDefinition> = {
 };
 
 export const TEAM_ROLE_KEYS = Object.keys(TEAM_ROLE_DEFINITIONS) as TeamRoleKey[];
+export const CANDIDATE_CONTRACT_ACCESS_ROLE_KEYS: TeamRoleKey[] = ["admin", "manager", "co_manager"];
+
+export function isCandidateContractRoleKey(roleKey: unknown): roleKey is TeamRoleKey {
+  return typeof roleKey === "string" && CANDIDATE_CONTRACT_ACCESS_ROLE_KEYS.includes(roleKey as TeamRoleKey);
+}
 
 export function isTeamRoleKey(role: unknown): role is TeamRoleKey {
   return typeof role === "string" && Object.prototype.hasOwnProperty.call(TEAM_ROLE_DEFINITIONS, role);

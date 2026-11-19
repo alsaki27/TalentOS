@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { requireCandidateContractAccess } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { query, queryOne } from "@/server/db/neon";
-import { deletePrivateCandidateContract, uploadPrivateCandidateContract } from "@/server/storage/storageApi";
+import { deleteCandidateContract, uploadCandidateContract } from "@/server/storage/candidateContractStorage";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ function hasExpectedFileSignature(extension: string, bytes: Uint8Array): boolean
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { response } = await requireCandidateContractAccess();
   if (response) return response;
   try {
     const files = await query<Record<string, unknown>>(
@@ -44,7 +44,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCandidateContractAccess();
   if (response) return response;
   if (!/^[0-9a-f-]{36}$/i.test(params.id)) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
   const contentLength = Number(req.headers.get("content-length") || 0);
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "Contract files must be 20 MB or smaller." }, { status: 413 });
   }
 
-  let fileKey: string | null = null;
+  let storageKey: string | null = null;
   try {
     const candidate = await queryOne<{ id: string; name: string }>("SELECT id, name FROM candidates WHERE id = $1", [params.id]);
     if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
@@ -76,8 +76,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: "The selected file does not match its PDF or Word file extension." }, { status: 415 });
     }
 
-    fileKey = `candidate-contracts/${params.id}/${globalThis.crypto.randomUUID()}${extension}`;
-    await uploadPrivateCandidateContract(fileKey, buffer, contentType);
+    const uploaded = await uploadCandidateContract(params.id, filename, buffer, contentType);
+    storageKey = uploaded.storageKey;
 
     const saved = await queryOne<Record<string, unknown>>(
       `WITH inserted AS (
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
          RETURNING id
        )
        SELECT inserted.* FROM inserted JOIN marked ON TRUE`,
-      [params.id, filename, fileKey, contentType, file.size, context.profile.user_id],
+      [params.id, filename, storageKey, contentType, file.size, context.profile.user_id],
     );
     if (!saved) throw new Error("Contract record was not saved.");
 
@@ -106,17 +106,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     return NextResponse.json({ file: saved, has_contract: true }, { status: 201, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    if (fileKey) {
-      await deletePrivateCandidateContract(fileKey).catch(() => {});
+    if (storageKey) {
+      await deleteCandidateContract(storageKey).catch((cleanupError) => {
+        console.error("[Candidate contracts] Could not remove an unrecorded upload.", cleanupError instanceof Error ? cleanupError.message : "unknown error");
+      });
     }
     const message = error instanceof Error ? error.message : "";
     if ((error as { code?: unknown }) && (error as { code?: unknown }).code === "42P01") {
       return NextResponse.json({ error: "Candidate contract schema is not applied yet." }, { status: 503 });
     }
-    if (message.includes("Private candidate contract storage") || message.includes("R2 credentials")) {
-      return NextResponse.json({ error: "Private contract storage is not configured yet." }, { status: 503 });
+    if (/MS_TENANT_ID|MS_CLIENT_ID|MS_CLIENT_SECRET|SHAREPOINT_SITE_ID/.test(message)) {
+      return NextResponse.json({ error: "SharePoint contract storage is not configured. Contact an administrator." }, { status: 503 });
     }
-    console.error("[Candidate contracts] Upload failed.", message);
-    return NextResponse.json({ error: "Could not upload the contract file." }, { status: 500 });
+    if (/Microsoft Graph token request failed \((401|403)\)|SharePoint (upload|folder creation) failed \((401|403)\)/i.test(message)) {
+      return NextResponse.json({ error: "TalentOS cannot access the configured SharePoint contract folder. Contact an administrator." }, { status: 503 });
+    }
+    console.error("[Candidate contracts] SharePoint upload failed.", message);
+    return NextResponse.json({ error: "Could not verify the contract in SharePoint. The upload was not saved; please retry." }, { status: 502 });
   }
 }

@@ -189,7 +189,7 @@ export default function FaloodDashboardPage() {
                         const companyName = app.companyName || "Unknown company";
 
                         return (
-                            <Link key={app.id} href={`/falood/studio/tailor/${app.id}`} className="no-underline" style={{ color: 'inherit' }}>
+                            <Link key={app.id} href={`/falood/studio/tailor/${app.id}?returnTo=${encodeURIComponent('/falood/dashboard')}`} className="no-underline" style={{ color: 'inherit' }}>
                                 <div className="card" style={{ cursor: 'pointer', transition: 'box-shadow 0.2s', height: '100%' }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                                         <span className="badge" style={{ fontSize: 10 }}>

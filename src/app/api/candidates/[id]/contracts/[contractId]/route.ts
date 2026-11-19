@@ -1,18 +1,25 @@
 import { NextResponse } from "next/server";
-import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { requireCandidateContractAccess } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { queryOne } from "@/server/db/neon";
-import { downloadPrivateCandidateContract } from "@/server/storage/storageApi";
+import { downloadCandidateContract, isSharePointCandidateContractStorageKey } from "@/server/storage/candidateContractStorage";
 
 export const dynamic = "force-dynamic";
 
 function attachmentName(value: string): string {
-  return value.replace(/[\r\n"\\]/g, "_").slice(0, 180) || "candidate-agreement";
+  return value.replace(/[\u0000-\u001f\u007f"\\]/g, "_").slice(0, 180) || "candidate-agreement";
 }
 
-export async function GET(_req: Request, { params }: { params: { id: string; contractId: string } }) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+function contentDisposition(mode: "inline" | "attachment", value: string): string {
+  const safeName = attachmentName(value);
+  const asciiName = safeName.replace(/[^\x20-\x7e]/g, "_");
+  const encodedName = encodeURIComponent(safeName).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${mode}; filename="${asciiName}"; filename*=UTF-8''${encodedName}`;
+}
+
+export async function GET(req: Request, { params }: { params: { id: string; contractId: string } }) {
+  const { context, response } = await requireCandidateContractAccess();
   if (response) return response;
 
   const file = await queryOne<{ storage_key: string; filename: string; content_type: string; candidate_name: string }>(
@@ -23,12 +30,12 @@ export async function GET(_req: Request, { params }: { params: { id: string; con
     [params.contractId, params.id],
   );
   if (!file) return NextResponse.json({ error: "Contract file not found." }, { status: 404 });
-  if (!file.storage_key.startsWith(`candidate-contracts/${params.id}/`)) {
+  if (!isSharePointCandidateContractStorageKey(file.storage_key) && !file.storage_key.startsWith(`candidate-contracts/${params.id}/`)) {
     return NextResponse.json({ error: "Contract file storage reference is invalid." }, { status: 500 });
   }
 
   try {
-    const document = await downloadPrivateCandidateContract(file.storage_key);
+    const document = await downloadCandidateContract(file.storage_key);
     backgroundDispatch(logActivity({
       userId: context.profile.user_id,
       actorName: context.profile.display_name || context.profile.email || undefined,
@@ -42,11 +49,13 @@ export async function GET(_req: Request, { params }: { params: { id: string; con
       document.buffer.byteOffset,
       document.buffer.byteOffset + document.buffer.byteLength,
     ) as ArrayBuffer;
+    const wantsInlinePreview = new URL(req.url).searchParams.get("view") === "inline";
+    const canPreviewInline = wantsInlinePreview && file.content_type === "application/pdf";
     return new Response(body, {
       status: 200,
       headers: {
         "Content-Type": file.content_type,
-        "Content-Disposition": `attachment; filename="${attachmentName(file.filename)}"`,
+        "Content-Disposition": contentDisposition(canPreviewInline ? "inline" : "attachment", file.filename),
         "Cache-Control": "private, no-store, max-age=0",
         "X-Content-Type-Options": "nosniff",
       },

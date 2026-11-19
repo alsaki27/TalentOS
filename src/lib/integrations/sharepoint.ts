@@ -119,11 +119,11 @@ async function ensureFolderPath(token: string, siteId: string, folderPath: strin
 }
 
 export async function uploadToSharePoint(path: string, content: Uint8Array | Blob, contentType: string,
-  options?: { preferExistingFolder?: boolean },
+  options?: { preferExistingFolder?: boolean; driveFolder?: string },
 ): Promise<{ url: string; itemId: string; name: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
-  const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
+  const folder = (options?.driveFolder?.trim() || process.env.SHAREPOINT_DRIVE_FOLDER || "resumes").replace(/^\/+|\/+$/g, "");
   const graphPath = `${folder}/${path}`;
 
   const upload = () => fetch(

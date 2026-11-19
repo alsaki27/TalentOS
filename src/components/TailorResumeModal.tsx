@@ -227,8 +227,12 @@ export function TailorResumeModal({
       if (!newId) throw new Error("Could not start tailoring in Resume Builder.");
 
       onClose();
+      const studioParams = new URLSearchParams();
+      if (job.title) studioParams.set("jobTitle", job.title);
+      if (job.company) studioParams.set("company", job.company);
+      studioParams.set("returnTo", `${window.location.pathname}${window.location.search}${window.location.hash}`);
       router.push(
-        `/falood/studio/tailor/${encodeURIComponent(newId)}?jobTitle=${encodeURIComponent(job.title || "")}&company=${encodeURIComponent(job.company || "")}`
+        `/falood/studio/tailor/${encodeURIComponent(newId)}?${studioParams.toString()}`
       );
     } catch (e: any) {
       setError(e?.message || "Could not start tailoring in Resume Builder.");
