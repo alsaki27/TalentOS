@@ -116,20 +116,33 @@ describe("dedicated browser worker queue routes", () => {
     expect(mocks.queryOne).not.toHaveBeenCalled();
   });
 
-  it("serializes claim expiry in the format required by the worker", async () => {
+  it.each([
+    {
+      label: "valid candidate and job labels",
+      labels: { candidate_name: "  শারমিন রহমান  ", job_title: "Senior Developer / Platform\n Engineering" },
+      expectedNaming: { candidateName: "শারমিন রহমান", jobTitle: "Senior Developer / Platform Engineering" },
+    },
+    { label: "a missing label", labels: { candidate_name: "Example Candidate", job_title: null } },
+    { label: "a control character", labels: { candidate_name: "Example Candidate", job_title: "Developer\u0007" } },
+    { label: "legacy claims without labels", labels: {} },
+  ])("serializes claim expiry and handles résumé naming with $label", async ({ labels, expectedNaming }) => {
     mocks.queryOne.mockResolvedValueOnce({ authorized: true, job: {
       id: requestId, attempt: 1, application_id: applicationId, candidate_id: applicationId, job_id: applicationId,
       lease_expires_at: "2026-11-15T07:30:59.123456+00:00", job_url: "https://www.linkedin.com/jobs/view/123",
       expected_dialog_heading: "Apply to Example", job_version: "a".repeat(64), profile_version: "v1",
       export_id: requestId, resume_version_id: workerId, content_sha256: "c".repeat(64), byte_length: 700,
+      ...labels,
     } });
     const profiles = [{ candidateId: applicationId, profileRef: applicationId, profileVersion: "v1" }];
     const response = await claim(post("claims", { profiles }, workerHeaders));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
+    const envelope = await response.json();
+    expect(envelope).toMatchObject({
       attempt: 1, leaseExpiresAt: "2026-11-15T07:30:59.123Z", expectedDialogHeading: "Apply to Example",
       manifest: { mode: "prepare", applicationId, profileRef: applicationId, artifact: { exportId: requestId, byteLength: 700 } },
     });
+    if (expectedNaming) expect(envelope.resumeNaming).toEqual(expectedNaming);
+    else expect(envelope).not.toHaveProperty("resumeNaming");
   });
 
   it("rejects employer submission, evidence claims and fixture outcomes before writes", async () => {
