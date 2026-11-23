@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { CalendarClock, Clock3 } from "lucide-react";
 import {
   CANDIDATE_OPT_STATUS_NOT_PROVIDED,
@@ -8,6 +8,7 @@ import {
   getOptApprovalCountdown,
   type CandidateOptStatusRecord,
 } from "@/lib/candidateOptStatus";
+import styles from "./CandidateProfileOverview.module.css";
 
 type Tone = { accent: string; surface: string; label: string };
 
@@ -30,7 +31,7 @@ function toneFor(countdown: ReturnType<typeof getOptApprovalCountdown>): Tone {
   return TONES.active;
 }
 
-export function CandidateOptCountdownCard({ candidateId, candidateName, marginBottom = 20 }: { candidateId: string; candidateName: string; marginBottom?: number }) {
+export function CandidateOptCountdownCard({ candidateId, candidateName, marginBottom = 20, compact = false }: { candidateId: string; candidateName: string; marginBottom?: number; compact?: boolean }) {
   const [record, setRecord] = useState<CandidateOptStatusRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -102,6 +103,18 @@ export function CandidateOptCountdownCard({ candidateId, candidateName, marginBo
   const dateValue = (value?: string | null) => value && /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? formatOptCalendarDate(value)
     : "Not available";
+
+  if (compact) return <section className={styles.compactCard} aria-label={`${candidateName} OPT approval countdown`}
+    style={{ "--overview-tone": tone.accent, "--overview-tone-bg": tone.surface } as CSSProperties}>
+    <header className={styles.compactHeader}><h2>OPT approval tracker</h2>
+      <span className={styles.statusPill}>{loading ? "Loading" : tone.label}</span></header>
+    <dl className={styles.clockFacts}>
+      <div><dt>Time remaining</dt><dd className={styles.keyValue}>{daysLabel}</dd></div>
+      <div><dt>Approval date</dt><dd>{loading || loadError ? "Not available" : dateValue(approvalDate)}</dd></div>
+      <div><dt>90-day window ends</dt><dd>{!loading && !loadError && countdown ? formatOptCalendarDate(countdown.endDate) : "Not available"}</dd></div>
+    </dl>
+    <p className={styles.compactNote}>{message}</p>
+  </section>;
 
   return (
     <section

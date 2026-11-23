@@ -1,217 +1,32 @@
-.trigger {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 16px 18px;
-  text-align: left;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: none;
-  backdrop-filter: none;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-
-.trigger:hover:not(:disabled) {
-  background: var(--surface-raised);
-  border-color: var(--accent);
-  box-shadow: none;
-  transform: none;
-}
-
-.triggerIcon {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border-radius: var(--radius);
-  background: var(--accent-soft);
-  color: var(--accent-hover);
-}
-
-.triggerText {
-  display: grid;
-  gap: 6px;
+.panel {
   min-width: 0;
-}
-
-.triggerTitle {
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.35;
-}
-
-.triggerSummary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 12px;
-  color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.pendingCount {
-  padding: 1px 7px;
-  border-radius: 999px;
-  color: var(--ink);
-  background: rgba(var(--warn-rgb), 0.15);
-}
-
-.triggerArrow {
-  color: var(--ink-soft);
-}
-
-.trigger:hover .triggerArrow {
-  color: var(--ink);
-}
-
-.dialog {
-  position: fixed;
-  inset: 0;
-  box-sizing: border-box;
-  width: min(960px, calc(100% - 32px));
-  max-width: none;
-  height: min(760px, calc(100vh - 32px));
-  height: min(760px, calc(100dvh - 32px));
-  max-height: none;
-  margin: auto;
-  padding: 0;
-  color: var(--ink);
-  background: var(--bg);
+  margin-bottom: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 24px 72px rgba(var(--shadow-color), 0.45);
-  overflow: hidden;
+  background: var(--surface);
 }
-
-.dialog[open] {
+.panel button { min-height: 32px; backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none; transition: background-color 0.15s ease, border-color 0.15s ease; }
+.panel button:hover { transform: none; box-shadow: none; }
+.panelHeader {
   display: flex;
-  flex-direction: column;
-}
-
-.dialog::backdrop {
-  background: rgba(0, 0, 0, 0.58);
-  backdrop-filter: blur(3px);
-}
-
-.dialogHeader {
-  display: flex;
-  flex: none;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 18px 24px 12px;
-  background: var(--surface);
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px 18px 12px;
 }
-
-.dialogTitle {
-  margin: 0;
-  color: var(--ink);
-  font-size: clamp(17px, 2.5vw, 22px);
-  font-weight: 700;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.candidateName {
-  margin: 4px 0 0;
-  color: var(--ink-soft);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-
-.closeButton {
-  display: inline-grid;
-  flex: none;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  padding: 0;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--ink-soft);
-  box-shadow: none;
-}
-
-.closeButton:hover {
-  background: var(--surface-raised);
-  color: var(--ink);
-  box-shadow: none;
-  transform: none;
-}
-
-.tabList {
-  display: flex;
-  flex: none;
-  gap: 20px;
-  padding: 0 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 42px;
-  margin-bottom: -1px;
-  padding: 7px 3px;
-  color: var(--ink-soft);
-  background: transparent;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.35;
-  box-shadow: none;
-}
-
-.tab:hover {
-  color: var(--ink);
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-  transform: none;
-}
-
-.tab[aria-selected="true"] {
-  color: var(--ink);
-  border-bottom-color: var(--accent);
-}
-
-.tabCount {
-  min-width: 20px;
-  padding: 1px 5px;
-  border-radius: 999px;
-  background: var(--surface-raised);
-  color: var(--ink-soft);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-  text-align: center;
-}
-
-.tab[aria-selected="true"] .tabCount {
-  color: var(--ink);
-  background: var(--accent-soft);
-}
-
-.dialogBody {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  padding: 20px 24px 24px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
+.panelHeader h2 { margin: 0; font-size: 17px; line-height: 1.35; }
+.panelHeader p { margin: 4px 0 0; color: var(--ink-soft); font-size: 12px; }
+.readiness { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 0 18px 14px; color: var(--ink-soft); font-size: 12px; }
+.readiness .ready strong { color: var(--accent); }
+.readiness .missing { color: var(--warn); }
+.panelBody { border-top: 1px solid var(--border); padding: 16px 18px; min-width: 0; }
+.contentGrid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 20px; align-items: start; }
+.answersSection, .notesSection { min-width: 0; }
+.notesSection { border-left: 1px solid var(--border); padding-left: 20px; }
+.sectionTitle { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; }
+.sectionTitle > span { color: var(--ink-soft); font-size: 12px; font-weight: 500; }
+.answersSection .answerList { grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); align-items: start; }
 .feedback {
   margin: 0 0 14px;
   padding: 10px 12px;
@@ -231,7 +46,7 @@
   flex-wrap: wrap;
   align-items: flex-end;
   gap: 10px 14px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .searchField {
@@ -262,7 +77,7 @@
 }
 
 .answerGroup + .answerGroup {
-  margin-top: 22px;
+  margin-top: 16px;
 }
 
 .answerGroup > h3,
@@ -283,7 +98,7 @@
 
 .answerRow {
   min-width: 0;
-  padding: 13px 14px;
+  padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -295,7 +110,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 5px 8px;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -337,7 +152,7 @@
 
 .emptyState {
   margin: 0;
-  padding: 22px 14px;
+  padding: 14px;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
   color: var(--ink-soft);
@@ -376,7 +191,6 @@
   grid-column: 1 / -1;
 }
 
-.reuseNotice,
 .editorHelp {
   margin: 0 0 14px;
   color: var(--ink-soft);
@@ -464,6 +278,10 @@
 }
 
 .attentionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
   overflow-wrap: anywhere;
 }
 
@@ -472,62 +290,19 @@
   border-top: 1px solid rgba(var(--warn-rgb), 0.22);
 }
 
-.trigger:focus-visible,
-.closeButton:focus-visible,
-.tab:focus-visible,
-.answerMeta > summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
 
+.answerMeta > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 1000px) {
+  .contentGrid { grid-template-columns: minmax(0, 1fr); }
+  .notesSection { border-left: 0; border-top: 1px solid var(--border); padding: 16px 0 0; }
+}
 @media (max-width: 560px) {
-  .trigger {
-    gap: 10px;
-    padding: 13px;
-  }
-
-  .triggerIcon {
-    width: 36px;
-    height: 36px;
-  }
-
-  .dialog {
-    width: calc(100% - 16px);
-    height: calc(100vh - 16px);
-    height: calc(100dvh - 16px);
-  }
-
-  .dialogHeader {
-    gap: 10px;
-    padding: 14px 14px 10px;
-  }
-
-  .tabList {
-    gap: 14px;
-    padding: 0 14px;
-  }
-
-  .dialogBody {
-    padding: 15px 14px;
-    scrollbar-gutter: auto;
-  }
-
-  .searchField {
-    max-width: none;
-  }
-
-  .mainFields {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .answerRow,
-  .editor {
-    padding: 12px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .trigger {
-    transition: none;
-  }
+  .panelHeader { padding: 14px 12px 10px; }
+  .readiness { padding: 0 12px 12px; gap: 6px 12px; }
+  .panelBody { padding: 12px; }
+  .searchField { max-width: none; }
+  .mainFields { grid-template-columns: minmax(0, 1fr); }
+  .attentionRow { grid-template-columns: minmax(0, 1fr); }
+  .attentionRow > button { justify-self: start; }
+  .answerRow, .editor { padding: 12px; }
 }

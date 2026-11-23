@@ -7,6 +7,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronRight, Copy, ExternalLin
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ApplicationStatusChart from "./shared/ApplicationStatusChart";
 import ApplicationSourceChart from "./shared/ApplicationSourceChart";
+import { CandidateActivity } from "./CandidateActivity";
 import styles from "./CandidateApplicationWorkspace.module.css";
 
 export interface CandidateApplicationRow {
@@ -161,6 +162,7 @@ export default function CandidateApplicationsDashboard({ candidateId, customInte
               onBarClick={(label) => updateFilters({ source: label, statusGroup: "All" })} activeSource={source} />
           </section>
         </div>}
+        {!customInterviewOnly && <CandidateActivity candidateId={candidateId} />}
         <form className={styles.filterGrid} onSubmit={(event) => {
           event.preventDefault();
           updateFilters({ search: String(new FormData(event.currentTarget).get("search") ?? "").trim() });

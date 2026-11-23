@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { Globe, MapPin, Clock3 } from "lucide-react";
 import { formatAnyZonedDateTime, formatAnyZonedTime, utcOffsetHours } from "@/lib/easternTime";
+import styles from "./CandidateProfileOverview.module.css";
 
 // AEs are based in Dhaka - every candidate card compares the candidate's local time
 // against it so scheduling an interview is a glance, not a mental timezone-math exercise.
@@ -25,11 +26,13 @@ export function CandidateTimezoneCard({
   timezone,
   currentLocation,
   marginBottom = 20,
+  compact = false,
 }: {
   candidateName: string;
   timezone: string | null;
   currentLocation: string | null;
   marginBottom?: number;
+  compact?: boolean;
 }) {
   // Re-renders periodically so the displayed clock keeps ticking without a page reload.
   // 30s is plenty for a "what time is it there right now" glance - no need for per-second
@@ -49,6 +52,18 @@ export function CandidateTimezoneCard({
   const candidateOffset = timezone ? utcOffsetHours(nowIso, timezone) : null;
   const aeOffset = utcOffsetHours(nowIso, AE_TIME_ZONE);
   const comparison = candidateOffset !== null && aeOffset !== null ? offsetPhrase(candidateOffset, aeOffset) : null;
+
+  if (compact) return <section className={styles.compactCard} aria-label={`${candidateName} timezone`}
+    style={{ "--overview-tone": tone.accent, "--overview-tone-bg": tone.surface } as CSSProperties}>
+    <header className={styles.compactHeader}><h2>Candidate timezone</h2><span className={styles.statusPill}>{timezone ?? "Unknown"}</span></header>
+    <dl className={styles.clockFacts}>
+      <div><dt>Candidate local time</dt><dd className={styles.keyValue}>{candidateTime ?? "Not available"}</dd></div>
+      <div><dt>Current location</dt><dd>{currentLocation || "Not provided"}</dd></div>
+      <div><dt>Dhaka time</dt><dd>{aeTime ?? "Not available"}</dd></div>
+    </dl>
+    <p className={styles.compactNote}>{timezone ? `${candidateDate ?? ""}${comparison ? ` · ${comparison}` : ""}` :
+      "Add a current location in Edit profile to detect the timezone."}</p>
+  </section>;
 
   return (
     <section

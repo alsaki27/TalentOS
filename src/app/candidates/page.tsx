@@ -8,6 +8,8 @@ import Pagination from "@/components/Pagination";
 import { CANDIDATE_PIPELINE_STAGES } from "@/lib/candidatePipeline";
 import { formatOptCalendarDate, getOptApprovalCountdown, localCalendarDateIso } from "@/lib/candidateOptStatus";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
+import { CandidateUpcomingPreview } from "@/components/candidates/CandidateActivity";
+import { CANDIDATE_ACTIVITY_REFRESH_MS, type CandidateActivityItem } from "@/lib/candidateActivity";
 
 interface Candidate {
   id: string;
@@ -25,6 +27,7 @@ interface Candidate {
   audit_mock_interviews?: number | null;
   opt_approval_date?: string | null;
   application_status_counts?: CandidateApplicationStatusCounts | null;
+  upcoming_activities?: CandidateActivityItem[] | null;
 }
 
 type CandidateApplicationStatusCounts = Record<"Applied" | "In Progress" | "Screening" | "Interview" | "Offer" | "Rejected", number>;
@@ -105,7 +108,8 @@ function CandidateProfileCard({
   onStageChange: (stage: string) => void;
   onDelete: () => void;
 }) {
-  const progress = candidate.audit_progress;
+  const progress = candidate.audit_progress != null && Number.isFinite(candidate.audit_progress)
+    && candidate.audit_progress >= 0 && candidate.audit_progress <= 100 ? candidate.audit_progress : null;
   const statusLabel = candidate.status ? candidate.status.replaceAll("_", " ") : "Status unknown";
 
   return (
@@ -155,6 +159,8 @@ function CandidateProfileCard({
         })}
       </section>
 
+      <CandidateUpcomingPreview candidateId={candidate.id} items={candidate.upcoming_activities} />
+
       <div className="candidate-profile-controls">
         <div className="candidate-profile-field">
           <span className="candidate-profile-label">Pipeline stage</span>
@@ -191,14 +197,13 @@ function CandidateProfileCard({
           <div className="candidate-training-metric">
             <span className="candidate-profile-label">Course progress</span>
             <strong>{progress != null ? `${progress}%` : "—"}</strong>
-            <div className="candidate-progress-track" role="progressbar" aria-label="Course progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress != null ? Math.min(100, Math.max(0, progress)) : 0}>
-              <span style={{ width: `${progress != null ? Math.min(100, Math.max(0, progress)) : 0}%` }} />
+            <div className="candidate-progress-track" role="progressbar" aria-label="Course progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress ?? undefined} aria-valuetext={progress == null ? "Not recorded" : `${progress}%`}>
+              <span style={{ width: `${progress ?? 0}%` }} />
             </div>
           </div>
           <div className="candidate-training-metric">
             <span className="candidate-profile-label">Mock interviews</span>
             <strong>{candidate.audit_mock_interviews != null ? candidate.audit_mock_interviews : "—"}</strong>
-            <span className="candidate-training-unit">recorded sessions</span>
           </div>
         </div>
       </section>
@@ -256,6 +261,7 @@ export default function CandidatesPage() {
     params.set("pageSize", String(size));
     params.set("includeOptDays", "1");
     params.set("includeApplicationCounts", "1");
+    params.set("includeUpcoming", "1");
     if (search) params.set("search", search);
     if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
@@ -306,10 +312,13 @@ export default function CandidatesPage() {
       refreshing = true;
       try { await currentPageRefresh.current(); } finally { refreshing = false; }
     };
-    const interval = window.setInterval(() => { void refresh(); }, 30_000);
+    const interval = window.setInterval(() => { void refresh(); }, CANDIDATE_ACTIVITY_REFRESH_MS);
+    const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("candidate-activity") : null;
+    if (channel) channel.onmessage = () => { void refresh(); };
     window.addEventListener("focus", refresh);
     return () => {
       active = false;
+      channel?.close();
       window.clearInterval(interval);
       window.removeEventListener("focus", refresh);
     };

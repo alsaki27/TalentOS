@@ -807,6 +807,13 @@ body::before {
   padding-right: 16px;
 }
 
+/* Standalone activity history uses the full canvas, with responsive gutters. */
+.page:has(.candidate-activity-page) {
+  width: 100%;
+  max-width: none;
+  padding-inline: clamp(12px, 2vw, 32px);
+}
+
 .candidate-profile-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; }
 .candidate-profile-controls { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: nowrap; min-width: 0; }
 .candidate-profile-header .candidate-profile-heading { display: grid; gap: 4px; min-width: 0; }
@@ -3428,6 +3435,7 @@ label {
   gap: 18px;
   min-width: 0;
 }
+.candidates-page .pagination-bar > div { flex-wrap: wrap; min-width: 0; max-width: 100%; }
 
 .candidate-profile-card {
   --candidate-stage-rgb: var(--accent-rgb);
@@ -3737,10 +3745,10 @@ label {
 .candidate-training-summary {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  padding: 10px;
+  gap: 7px;
+  padding: 8px 10px;
   border: 1px solid rgba(var(--accent-rgb), 0.18);
-  border-radius: 13px;
+  border-radius: 10px;
   background: rgba(var(--accent-rgb), 0.045);
 }
 
@@ -3750,30 +3758,32 @@ label {
   gap: 8px;
 }
 
-.candidate-training-heading .candidate-audit-status { padding: 5px 9px; font-size: 12px; font-weight: 750; }
+.candidate-training-heading .candidate-audit-status { padding: 3px 7px; font-size: 10px; font-weight: 750; }
 .candidate-audit-placed,
 .candidate-audit-excellent,
 .candidate-audit-good { color: #86efac; border: 1px solid rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.13); }
 .candidate-audit-excellent { color: #67e8f9; border-color: rgba(34, 211, 238, 0.36); background: rgba(34, 211, 238, 0.13); }
 .candidate-audit-attention { color: #fde68a; border: 1px solid rgba(251, 191, 36, 0.38); background: rgba(251, 191, 36, 0.14); }
 .candidate-audit-risk { color: #fda4af; border: 1px solid rgba(251, 113, 133, 0.38); background: rgba(251, 113, 133, 0.14); }
-.candidate-training-not-recorded { font-size: 12px; font-weight: 600; }
+.candidate-training-not-recorded { font-size: 10px; font-weight: 600; }
 
 .candidate-training-metrics {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
-  gap: 9px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
 }
 
-.candidate-training-metric { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
-.candidate-training-metric strong { color: var(--ink); font-size: 16px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.candidate-training-metric { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 5px; min-width: 0; }
+.candidate-training-metric .candidate-profile-label { font-size: 10px; letter-spacing: 0; }
+.candidate-training-metric strong { color: var(--ink); font-size: 13px; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .candidate-training-metric:first-child strong { color: var(--accent-hover); }
-.candidate-training-unit { color: var(--ink-soft); font-size: 10px; line-height: 1.35; }
 
 .candidate-progress-track {
+  grid-column: 1 / -1;
   width: 100%;
-  height: 6px;
-  margin-top: 2px;
+  height: 4px;
+  margin-top: 0;
   overflow: hidden;
   border-radius: 999px;
   background: rgba(var(--neutral-rgb), 0.16);
@@ -3782,7 +3792,6 @@ label {
 .candidate-progress-track span {
   display: block;
   height: 100%;
-  min-width: 2px;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--accent-hover));
   transition: width 220ms ease;

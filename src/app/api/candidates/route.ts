@@ -3,7 +3,7 @@
 // POST -> create a new candidate
 
 import { NextRequest, NextResponse } from "next/server";
-import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { ALL_USER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
@@ -11,6 +11,8 @@ import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 import { countApplicationStatusRows, emptyStatusCounts, type ApplicationStatusCountRow } from "@/lib/applicationDisplayStatus";
+import { candidateUpcoming } from "@/server/repositories/candidateActivityRepository";
+import { CANDIDATE_CARD_UPCOMING_LIMIT } from "@/lib/candidateActivity";
 
 interface StudentAuditEnrichmentRow {
   candidate_id: string;
@@ -125,6 +127,11 @@ export async function GET(req: NextRequest) {
   const compact = url.searchParams.get("compact") === "1";
   const includeOptDays = url.searchParams.get("includeOptDays") === "1";
   const includeApplicationCounts = url.searchParams.get("includeApplicationCounts") === "1";
+  const includeUpcoming = !compact && url.searchParams.get("includeUpcoming") === "1";
+  if (includeUpcoming) {
+    const { response } = await requireCurrentUser(ALL_USER_ROLES);
+    if (response) return response;
+  }
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
@@ -217,7 +224,15 @@ export async function GET(req: NextRequest) {
     const applicationItems = !compact && includeApplicationCounts
       ? await enrichWithApplicationStatusCounts(auditItems)
       : auditItems;
-    const items = !compact && includeOptDays ? await enrichWithOptApproval(applicationItems) : applicationItems;
+    let items = !compact && includeOptDays ? await enrichWithOptApproval(applicationItems) : applicationItems;
+    if (includeUpcoming && items.length) {
+      try {
+        const upcoming = await candidateUpcoming(items.map((row) => row.id), CANDIDATE_CARD_UPCOMING_LIMIT);
+        items = items.map((row) => ({ ...row, upcoming_activities: upcoming.get(row.id) ?? [] }));
+      } catch {
+        items = items.map((row) => ({ ...row, upcoming_activities: null }));
+      }
+    }
     return NextResponse.json({ items, total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

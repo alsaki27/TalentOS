@@ -17,9 +17,14 @@ import { CandidateTimezoneCard } from "@/components/candidates/CandidateTimezone
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
 import { isCandidateContractRoleKey } from "@/lib/auth-edge";
+import { CandidateResumeParseSummary } from "@/components/candidates/CandidateResumeParseSummary";
+import { CandidateResumeFiles } from "@/components/candidates/CandidateResumeFiles";
+import { CandidateProfileSummary } from "@/components/candidates/CandidateProfileSummary";
+import overviewStyles from "@/components/candidates/CandidateProfileOverview.module.css";
 import { CandidateApplicationFactsPanel } from "@/components/candidates/CandidateApplicationFactsPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 import CustomInterviewHub from "@/components/candidates/CustomInterviewHub";
+import { CANDIDATE_PROFILE_TABS, initialCandidateProfileTab, type CandidateProfileTab } from "@/lib/candidateProfileTabs";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 
 interface BaseResumeSummary {
@@ -367,9 +372,7 @@ export default function CandidateProfilePage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [passwordResetting, setPasswordResetting] = useState(false);
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Custom Interview" | "Contract" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">(
-    searchParams.get("tab") === "Custom Interview" ? "Custom Interview" : "Applications",
-  );
+  const [activeTab, setActiveTab] = useState<CandidateProfileTab>(() => initialCandidateProfileTab(searchParams.get("tab")));
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -397,7 +400,7 @@ export default function CandidateProfilePage() {
   const [parseModalText, setParseModalText] = useState("");
   const [parseModalResumeId, setParseModalResumeId] = useState("");
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
-  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
+  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; resumeId: string } | null>(null);
   const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
   const [me, setMe] = useState<{ profile?: { role?: string; role_key?: string } } | null>(null);
   const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
@@ -806,7 +809,7 @@ export default function CandidateProfilePage() {
         return;
       }
 
-      setMarkitdownResult(data);
+      setMarkitdownResult({ parsed: data.parsed, resumeId });
       // After successful parse, create a base resume
       await createBaseResumeFromParsed(data.parsed);
     } catch (err: any) {
@@ -830,7 +833,7 @@ export default function CandidateProfilePage() {
         alert(data.error || "Failed to parse resume text");
         return;
       }
-      setMarkitdownResult(data);
+      setMarkitdownResult({ parsed: data.parsed, resumeId: parseModalResumeId });
       setShowParseModal(false);
       await createBaseResumeFromParsed(data.parsed);
     } catch (err: any) {
@@ -1053,6 +1056,7 @@ export default function CandidateProfilePage() {
   if (!candidate) return <p className="muted">Candidate not found.</p>;
 
   const primaryResume = candidate.resumes.find((r) => r.is_original_upload) ?? candidate.resumes[0] ?? null;
+  const primaryParsed = markitdownResult?.resumeId === primaryResume?.id ? markitdownResult?.parsed : primaryResume?.parsed_json;
 
   return (
     <div className="candidate-detail-page">
@@ -1097,7 +1101,7 @@ export default function CandidateProfilePage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Custom Interview", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const)
+        {CANDIDATE_PROFILE_TABS
           .filter((tab) => tab !== "Contract" || canAccessContractTab)
           .map((tab) => (
           <button
@@ -1121,9 +1125,11 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Profile Overview" && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 12, marginBottom: 16 }}>
-            <CandidateTimezoneCard candidateName={candidate.name} timezone={candidate.timezone} currentLocation={candidate.current_location} />
-            <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} />
+          <CandidateProfileSummary profile={candidate} uploadingPhoto={uploadingPhoto}
+            onPhotoUpload={handlePhotoUpload} onEdit={() => setShowEdit(true)} />
+          <div className={overviewStyles.timingGrid}>
+            <CandidateTimezoneCard compact candidateName={candidate.name} timezone={candidate.timezone} currentLocation={candidate.current_location} />
+            <CandidateOptCountdownCard compact candidateId={candidate.id} candidateName={candidate.name} />
           </div>
           <CandidateApplicationFactsPanel
             key={candidate.id}
@@ -1135,92 +1141,10 @@ export default function CandidateProfilePage() {
               candidate.applications.flatMap(({ jobs }) => jobs ? [[jobs.id, jobs] as const] : []),
             ).values()]}
           />
-          <div className="card" style={{ marginBottom: 20 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
-              {candidate.avatar_url ? (
-                <img className="avatar-circle" style={{ width: 56, height: 56, fontSize: 18 }} src={candidate.avatar_url} alt={candidate.name} />
-              ) : (
-                <span className="avatar-circle" style={{ width: 56, height: 56, fontSize: 18 }}>{initials(candidate.name)}</span>
-              )}
-              <div>
-                <label>Profile picture</label>
-                <input type="file" accept="image/*" onChange={handlePhotoUpload} disabled={uploadingPhoto} />
-                {uploadingPhoto && <span className="muted" style={{ fontSize: 12 }}> Uploading…</span>}
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <div>
-                <label>Email</label>
-                <p>{candidate.email || "—"}</p>
-              </div>
-              <div>
-                <label>Phone</label>
-                <p>{candidate.phone || "—"}</p>
-              </div>
-              <div>
-                <label>Status</label>
-                <p>{candidate.status}</p>
-              </div>
-              <div>
-                <label>Target tier</label>
-                <p>{candidate.target_tier ? <span className="badge">{candidate.target_tier}</span> : "—"}</p>
-              </div>
-              <div>
-                <label>Target roles</label>
-                <p>{candidate.target_roles || "—"}</p>
-              </div>
-              <div>
-                <label>Preferred locations</label>
-                <p>{candidate.preferred_locations || "—"}</p>
-              </div>
-              <div>
-                <label>Salary expectation</label>
-                <p>{candidate.salary_expectation || "—"}</p>
-              </div>
-              <div>
-                <label>Work authorization</label>
-                <p>{candidate.work_authorization || "—"}</p>
-              </div>
-              <div>
-                <label>LinkedIn</label>
-                <p>{candidate.linkedin_url ? <a href={candidate.linkedin_url} target="_blank" rel="noreferrer">{candidate.linkedin_url}</a> : "—"}</p>
-              </div>
-              <div>
-                <label>GitHub</label>
-                <p>{candidate.github_url ? <a href={candidate.github_url} target="_blank" rel="noreferrer">{candidate.github_url}</a> : "—"}</p>
-              </div>
-              <div>
-                <label>Portfolio</label>
-                <p>{candidate.portfolio_url ? <a href={candidate.portfolio_url} target="_blank" rel="noreferrer">{candidate.portfolio_url}</a> : "—"}</p>
-              </div>
-              <div>
-                <label>Visa status</label>
-                <p>{candidate.visa_status || "—"}</p>
-              </div>
-              <div>
-                <label>Target industries</label>
-                <p>{candidate.target_industries?.length ? candidate.target_industries.join(", ") : "—"}</p>
-              </div>
-              <div>
-                <label>Verified skills</label>
-                <p>{candidate.verified_skills?.length ? candidate.verified_skills.join(", ") : "—"}</p>
-              </div>
-              <div>
-                <label>Location preference</label>
-                <p>{candidate.location_preference || "—"}</p>
-              </div>
-              <div>
-                <label>Work mode preference</label>
-                <p>{candidate.work_mode_preference || "—"}</p>
-              </div>
-              <div>
-                <label>Available start date</label>
-                <p>{candidate.available_start_date ? new Date(candidate.available_start_date).toLocaleDateString() : "—"}</p>
-              </div>
-            </div>
-
-            <div style={{ marginTop: 16 }}>
-              <label>Primary resume</label>
+          <section className={overviewStyles.resumeCard} aria-label="Primary resume">
+            <div>
+              <div className={overviewStyles.resumeHeading}>
+              <h2>Primary resume</h2>
               {primaryResume ? (
                 <p>
                   <a href={primaryResume.file_url} target="_blank" rel="noreferrer">{primaryResume.filename}</a>
@@ -1228,7 +1152,9 @@ export default function CandidateProfilePage() {
               ) : (
                 <p className="muted">No resume uploaded yet.</p>
               )}
-              <input type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
+              <button type="button" className="btn-outline btn-sm" onClick={() => setActiveTab("Base Resumes")}>View resume files ({candidate.resumes.length})</button>
+              </div>
+              <input aria-label="Upload primary resume" type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
               {uploading && <p className="muted">Uploading…</p>}
               {uploadError && (
                 <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 6 }}>
@@ -1237,7 +1163,7 @@ export default function CandidateProfilePage() {
               )}
 
               {primaryResume && (
-                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <div className={overviewStyles.resumeActions}>
                   <button
                     onClick={() => parseWithMarkitdown(primaryResume.id)}
                     disabled={parsingMarkitdown || markitdownAvailable === false}
@@ -1250,7 +1176,7 @@ export default function CandidateProfilePage() {
                           : "Markitdown service not deployed — parsing will use AI fallback. See docs/cloudflare-known-limitations.md for deployment instructions."
                     }
                   >
-                    {parsingMarkitdown ? "Parsing…" : markitdownAvailable === false ? "Parse with AI & Create Base Resume" : "Parse with markitdown & Create Base Resume"}
+                    {parsingMarkitdown ? "Parsing…" : primaryParsed ? "Re-parse & create base resume" : "Parse & create base resume"}
                   </button>
                   <button onClick={() => setShowCreateBaseResume(true)}>
                     + Create blank base resume
@@ -1258,85 +1184,24 @@ export default function CandidateProfilePage() {
                 </div>
               )}
 
-              {markitdownResult && (
-                <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed Resume</h3>
-                  {markitdownResult.parseStatus && (
-                    <div style={{ fontSize: 12, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: "6px 12px" }}>
-                      <span className={markitdownResult.parseStatus.hasName ? "badge" : "badge-closed"}>Name</span>
-                      <span className={markitdownResult.parseStatus.hasEmail ? "badge" : "badge-closed"}>Email</span>
-                      <span className={markitdownResult.parseStatus.hasPhone ? "badge" : "badge-closed"}>Phone</span>
-                      <span className={markitdownResult.parseStatus.hasSummary ? "badge" : "badge-closed"}>Summary</span>
-                      <span className={markitdownResult.parseStatus.skillsCount > 0 ? "badge" : "badge-closed"}>Skills ({markitdownResult.parseStatus.skillsCount})</span>
-                      <span className={markitdownResult.parseStatus.experienceCount > 0 ? "badge" : "badge-closed"}>Jobs ({markitdownResult.parseStatus.experienceCount})</span>
-                      <span className={markitdownResult.parseStatus.educationCount > 0 ? "badge" : "badge-closed"}>Education ({markitdownResult.parseStatus.educationCount})</span>
-                      <span className={markitdownResult.parseStatus.certificationsCount > 0 ? "badge" : "badge-closed"}>Certs ({markitdownResult.parseStatus.certificationsCount})</span>
-                      <span className={markitdownResult.parseStatus.totalBulletPoints > 0 ? "badge" : "badge-closed"}>Bullets ({markitdownResult.parseStatus.totalBulletPoints})</span>
-                    </div>
-                  )}
-                  <p className="muted" style={{ fontSize: 12 }}>Skills: {markitdownResult.parsed.skills?.join(", ") || "—"}</p>
-                  <p className="muted" style={{ fontSize: 12 }}>Experience: {markitdownResult.parsed.experience?.length || 0} entries</p>
-                  <p className="muted" style={{ fontSize: 12 }}>Education: {markitdownResult.parsed.education?.length || 0} entries</p>
-                </div>
-              )}
-
-              {primaryResume?.parsed_json && (
-                <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed Results</h3>
-                  <ParsedResults parsed={primaryResume.parsed_json} />
-                  <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                    <button onClick={() => acceptParsedData(primaryResume)} disabled={acceptingParsed}>
-                      {acceptingParsed ? "Accepting…" : "Accept parsed data into profile"}
+              {primaryResume && primaryParsed && (
+                <>
+                  <CandidateResumeParseSummary parsed={primaryParsed}>
+                    <ParsedResults parsed={primaryParsed} />
+                  </CandidateResumeParseSummary>
+                  {!primaryParsed.parse_error && <div className={overviewStyles.resumeActions}>
+                    <button type="button" onClick={() => acceptParsedData({ ...primaryResume, parsed_json: primaryParsed })} disabled={acceptingParsed}>
+                      {acceptingParsed ? "Applying…" : "Apply parsed data to profile"}
                     </button>
-                    <button onClick={() => generateEvidenceFromResume(primaryResume.id)} disabled={generatingEvidence}>
-                      {generatingEvidence ? "Generating…" : "Generate evidence from resume"}
+                    <button type="button" onClick={() => generateEvidenceFromResume(primaryResume.id)} disabled={generatingEvidence}>
+                      {generatingEvidence ? "Generating…" : "Generate evidence"}
                     </button>
-                    <button
-                      onClick={() => parseWithMarkitdown(primaryResume.id)}
-                      disabled={parsingMarkitdown}
-                      style={{ marginLeft: "auto" }}
-                    >
-                      {parsingMarkitdown ? "Parsing…" : "Re-parse"}
-                    </button>
-                  </div>
-                </div>
+                  </div>}
+                </>
               )}
             </div>
-          </div>
+          </section>
 
-          <div className="page-header">
-            <h2 style={{ fontSize: 16, margin: 0 }}>Resume variants ({candidate.resumes.length})</h2>
-            <button onClick={() => setShowAddVariant(true)}>+ Add variant</button>
-          </div>
-
-          {candidate.resumes.length === 0 ? (
-            <div className="empty" style={{ marginBottom: 20 }}>
-              No tailored resumes or cover letters yet.
-            </div>
-          ) : (
-            <div className="table-shell" style={{ marginBottom: 20 }}>
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Label</th>
-                    <th>Kind</th>
-                    <th>File</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {candidate.resumes.map((r) => (
-                    <tr key={r.id}>
-                      <td><strong>{r.label}</strong></td>
-                      <td><span className="badge">{r.kind}</span></td>
-                      <td><a href={r.file_url} target="_blank" rel="noreferrer">{r.filename}</a></td>
-                      <td><button onClick={() => deleteVariant(r.id)}>Delete</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </>
       )}
 
@@ -1423,16 +1288,16 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Base Resumes" && (
         <div>
-          <div className="page-header">
+          <section className={overviewStyles.variants} aria-label="Base resumes">
+          <div className={overviewStyles.summaryHeader}>
             <h2 style={{ fontSize: 16, margin: 0 }}>Base resumes ({baseResumes.length})</h2>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className={overviewStyles.summaryActions}>
               <button onClick={() => setTailorContext({})}>Tailor resume for job</button>
               <button onClick={() => setShowCreateBaseResume(true)}>+ Create base resume</button>
             </div>
           </div>
-          <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
-            Reusable, structured starting points built with the Falood CLI — not job-specific
-            exports. Use one of these as the base when tailoring an application later.
+          <p className="muted" style={{ fontSize: 12, marginTop: 8, marginBottom: 12 }}>
+            Structured resumes you can edit in Studio and reuse when tailoring job applications.
           </p>
           {baseResumesLoading ? (
             <p className="muted">Loading…</p>
@@ -1446,9 +1311,7 @@ export default function CandidateProfilePage() {
                 <button className="btn-primary" onClick={() => setShowCreateBaseResume(true)}>
                   + Create blank base resume
                 </button>
-                <Link href={`/candidates/${candidate.id}`} onClick={() => setActiveTab("Profile Overview")}>
-                  <button>Upload resume first</button>
-                </Link>
+                <button type="button" onClick={() => setActiveTab("Profile Overview")}>Upload resume first</button>
               </div>
             </div>
           ) : (
@@ -1521,6 +1384,9 @@ export default function CandidateProfilePage() {
               </table>
             </div>
           )}
+          </section>
+          <CandidateResumeFiles files={candidate.resumes} primaryResumeId={primaryResume?.id ?? null}
+            onAdd={() => setShowAddVariant(true)} onDelete={deleteVariant} />
         </div>
       )}
 
@@ -1788,7 +1654,7 @@ function ParsedResults({ parsed }: { parsed: any }) {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
+    <div className={overviewStyles.parsedGrid}>
       <div><label>Name</label><p className="muted">{parsed?.name || "—"}</p></div>
       <div><label>Email</label><p className="muted">{parsed?.email || "—"}</p></div>
       <div><label>Phone</label><p className="muted">{parsed?.phone || "—"}</p></div>
@@ -2187,7 +2053,7 @@ function AddVariantModal({ candidateId, onClose, onAdded }: { candidateId: strin
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Add resume variant</h2>
+        <h2>Add resume file</h2>
         <div className="field-group">
           <label>Label</label>
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. OSP-tailored resume" />

@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { ChevronRight, ClipboardList, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   APPLICATION_FACT_DISPOSITIONS,
   APPLICATION_FACT_KINDS,
@@ -20,6 +19,7 @@ import {
   type CandidateApplicationFact,
 } from "@/lib/candidateApplicationFacts";
 import { CandidateProfileNotes } from "./CandidateProfileNotes";
+import { CandidateSectionPagination } from "./CandidateSectionPagination";
 import styles from "./CandidateApplicationFactsPanel.module.css";
 
 interface Props {
@@ -47,8 +47,6 @@ interface MissingQuestion {
   jobTitle?: string;
   detectedAt: string;
 }
-
-type ReadinessTab = "answers" | "notes";
 
 const emptyForm: FactForm = {
   section: "Screening", question: "", disposition: "known", valueKind: "text",
@@ -78,14 +76,12 @@ export function CandidateApplicationFactsPanel({
   const [search, setSearch] = useState("");
   const [includeRemoved, setIncludeRemoved] = useState(false);
   const [notice, setNotice] = useState("");
-  const [activeTab, setActiveTab] = useState<ReadinessTab>("answers");
+  const [answerPage, setAnswerPage] = useState(1);
+  const [answerPageSize, setAnswerPageSize] = useState(6);
+  const [pendingPage, setPendingPage] = useState(1);
+  const [pendingPageSize, setPendingPageSize] = useState(6);
   const formHeading = useRef<HTMLHeadingElement>(null);
-  const dialogHeading = useRef<HTMLHeadingElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const dialogBody = useRef<HTMLDivElement>(null);
-  const answersTab = useRef<HTMLButtonElement>(null);
-  const notesTab = useRef<HTMLButtonElement>(null);
+  const addAnswerButton = useRef<HTMLButtonElement>(null);
   const hasLoaded = useRef(false);
   const id = useId();
   const isFormOpen = Boolean(form);
@@ -137,8 +133,14 @@ export function CandidateApplicationFactsPanel({
     normalizeApplicationQuestion([fact.section, fact.question, fact.value === null ? "" : formatApplicationFactValue(fact.value)].join(" "))
       .includes(searchKey),
   ).sort((left, right) => left.section.localeCompare(right.section) || left.question.localeCompare(right.question));
+  const visibleAnswerPage = Math.min(answerPage, Math.max(1, Math.ceil(matches.length / answerPageSize)));
+  const visiblePendingPage = Math.min(pendingPage, Math.max(1, Math.ceil(missingQuestions.length / pendingPageSize)));
+  const pageAnswers = matches.slice((visibleAnswerPage - 1) * answerPageSize, visibleAnswerPage * answerPageSize);
+  const pageQuestions = missingQuestions.slice((visiblePendingPage - 1) * pendingPageSize, visiblePendingPage * pendingPageSize);
+  useEffect(() => { setAnswerPage(visibleAnswerPage); }, [visibleAnswerPage]);
+  useEffect(() => { setPendingPage(visiblePendingPage); }, [visiblePendingPage]);
   const sections = new Map<string, CandidateApplicationFact[]>();
-  for (const fact of matches) {
+  for (const fact of pageAnswers) {
     const sectionFacts = sections.get(fact.section);
     if (sectionFacts) sectionFacts.push(fact);
     else sections.set(fact.section, [fact]);
@@ -147,33 +149,6 @@ export function CandidateApplicationFactsPanel({
     .filter((blocked) => blocked.reason === "conflict").map((blocked) => applicationQuestionKey(blocked.question)));
   const conflict = (fact: CandidateApplicationFact) =>
     fact.reviewState !== "revoked" && conflictingQuestions.has(applicationQuestionKey(fact.question));
-
-  function openDialog() {
-    if (!dialog.current || dialog.current.open) return;
-    dialog.current.showModal();
-    setNotice("");
-    setRefreshVersion((current) => current + 1);
-    dialogHeading.current?.focus();
-  }
-
-  function selectTab(next: ReadinessTab) {
-    if (next !== activeTab && dialogBody.current) dialogBody.current.scrollTop = 0;
-    setActiveTab(next);
-  }
-
-  function navigateTabs(event: KeyboardEvent<HTMLButtonElement>, current: ReadinessTab) {
-    let next: ReadinessTab;
-    switch (event.key) {
-      case "Home": next = "answers"; break;
-      case "End": next = "notes"; break;
-      case "ArrowLeft":
-      case "ArrowRight": next = current === "answers" ? "notes" : "answers"; break;
-      default: return;
-    }
-    event.preventDefault();
-    selectTab(next);
-    (next === "answers" ? answersTab : notesTab).current?.focus();
-  }
 
   function update<K extends keyof FactForm>(key: K, value: FactForm[K]) {
     setForm((current) => current && ({ ...current, [key]: value }));
@@ -203,7 +178,7 @@ export function CandidateApplicationFactsPanel({
     setForm(null);
     setEditing(null);
     setAnsweringMissingQuestion(false);
-    answersTab.current?.focus();
+    requestAnimationFrame(() => addAnswerButton.current?.focus());
   }
 
   async function write(method: "POST" | "PATCH", body: object): Promise<boolean> {
@@ -287,57 +262,33 @@ export function CandidateApplicationFactsPanel({
   }
 
   return (
-    <section aria-label="Application Readiness and Answers" style={{ marginBottom: 20 }}>
-      <button type="button" ref={trigger} className={styles.trigger} aria-haspopup="dialog"
-        aria-controls={`${id}-dialog`} aria-labelledby={`${id}-trigger-title`} aria-describedby={`${id}-summary`}
-        onClick={openDialog}>
-        <span className={styles.triggerIcon}><ClipboardList size={22} aria-hidden="true" /></span>
-        <span className={styles.triggerText}>
-          <span className={styles.triggerTitle} id={`${id}-trigger-title`}>Application Readiness and Answers</span>
-          <span className={styles.triggerSummary} id={`${id}-summary`}>
-            <span>{summary}</span>
-            {missingQuestions.length > 0 && <span className={styles.pendingCount}>
-              {missingQuestions.length} {missingQuestions.length === 1 ? "answer" : "answers"} needed
-            </span>}
-          </span>
-        </span>
-        <ChevronRight className={styles.triggerArrow} size={20} aria-hidden="true" />
-      </button>
-      <dialog ref={dialog} id={`${id}-dialog`} className={styles.dialog} aria-labelledby={`${id}-title`}
-        onClose={() => trigger.current?.focus()}>
-        <header className={styles.dialogHeader}>
+    <section className={styles.panel} aria-labelledby={`${id}-title`}>
+        <header className={styles.panelHeader}>
           <div>
-            <h2 className={styles.dialogTitle} id={`${id}-title`} ref={dialogHeading} tabIndex={-1}>
+            <h2 id={`${id}-title`}>
               Application Readiness and Answers
             </h2>
-            {profile.name?.trim() && <p className={styles.candidateName}>{profile.name}</p>}
+            <p>Answers apply to all job applications for this candidate.</p>
           </div>
-          <button type="button" className={styles.closeButton} aria-label="Close application readiness and answers"
-            onClick={() => dialog.current?.close()}><X size={20} aria-hidden="true" /></button>
+          <button type="button" className="btn-outline btn-sm" disabled={busy || loading}
+            onClick={() => setRefreshVersion((current) => current + 1)}>Refresh answers</button>
         </header>
-        <div className={styles.tabList} role="tablist" aria-label="Candidate application information">
-          <button type="button" className={styles.tab} role="tab" ref={answersTab} id={`${id}-answers-tab`}
-            aria-selected={activeTab === "answers"} aria-controls={`${id}-answers-panel`}
-            tabIndex={activeTab === "answers" ? 0 : -1} onClick={() => selectTab("answers")}
-            onKeyDown={(event) => navigateTabs(event, "answers")}>
-            Questions and answers
-            {!loading && <span className={styles.tabCount} aria-hidden="true">{answerCount}</span>}
-          </button>
-          <button type="button" className={styles.tab} role="tab" ref={notesTab} id={`${id}-notes-tab`}
-            aria-selected={activeTab === "notes"} aria-controls={`${id}-notes-panel`}
-            tabIndex={activeTab === "notes" ? 0 : -1} onClick={() => selectTab("notes")}
-            onKeyDown={(event) => navigateTabs(event, "notes")}>
-            Profile notes
-            {!loading && <span className={styles.tabCount} aria-hidden="true">{noteCount}</span>}
-          </button>
+        <div className={styles.readiness} aria-label="Application readiness checks">
+          {readiness.map(([label, ready]) => <span key={label} className={ready ? styles.ready : styles.missing}>
+            {label}: <strong>{ready ? "On file" : "Missing"}</strong>
+          </span>)}
+          {!loading && <span>{answerCount} saved {answerCount === 1 ? "answer" : "answers"}</span>}
+          {!loading && missingQuestions.length > 0 && <span className={styles.missing}>
+            <strong>{missingQuestions.length} {missingQuestions.length === 1 ? "answer" : "answers"} needed</strong>
+          </span>}
         </div>
-        <div className={styles.dialogBody} ref={dialogBody}>
+        <div className={styles.panelBody}>
           {loading && <p className={styles.feedback} role="status">Loading application answers…</p>}
           {error && <p className={styles.feedback} role="alert">{error}</p>}
           {notice && <p className={styles.feedback} role="status">{notice}</p>}
-          <section role="tabpanel" id={`${id}-answers-panel`} aria-labelledby={`${id}-answers-tab`}
-            hidden={activeTab !== "answers"} tabIndex={0}>
-            {!form && <p className={styles.reuseNotice}>Answers are used for all job applications for this candidate.</p>}
+          <div className={styles.contentGrid}>
+          <section className={styles.answersSection} aria-labelledby={`${id}-answers-title`}>
+            <h3 className={styles.sectionTitle} id={`${id}-answers-title`}>Questions and answers</h3>
             {!loading && !form && (
               <>
                 {missingQuestions.length > 0 && (
@@ -345,7 +296,7 @@ export function CandidateApplicationFactsPanel({
                     <h4>Questions needing an approved answer</h4>
                     <p className="muted">Approve these answers before retrying the application.</p>
                     <ul className={styles.attentionList}>
-                      {missingQuestions.map((question) => {
+                      {pageQuestions.map((question) => {
                         const key = applicationQuestionKey(question.question);
                         const existingAnswers = answers.filter((fact) => fact.reviewState !== "revoked" && applicationQuestionKey(fact.question) === key);
                         const job = jobs.find((item) => item.id === question.jobId);
@@ -373,18 +324,21 @@ export function CandidateApplicationFactsPanel({
                         );
                       })}
                     </ul>
+                    <CandidateSectionPagination page={visiblePendingPage} pageSize={pendingPageSize} total={missingQuestions.length}
+                      label="Pending questions" onPageChange={setPendingPage}
+                      onPageSizeChange={(size) => { setPendingPageSize(size); setPendingPage(1); }} />
                   </div>
                 )}
                 <div className={styles.toolbar}>
                   {answers.length > 0 && <label className={styles.searchField}>Find an answer
                     <input type="search" className="input" value={search} placeholder="Search questions or answers"
-                      onChange={(event) => setSearch(event.target.value)} />
+                      onChange={(event) => { setSearch(event.target.value); setAnswerPage(1); }} />
                   </label>}
                   {removedCount > 0 && <label className={styles.historyToggle}>
-                    <input type="checkbox" checked={includeRemoved} onChange={(event) => setIncludeRemoved(event.target.checked)} />
+                    <input type="checkbox" checked={includeRemoved} onChange={(event) => { setIncludeRemoved(event.target.checked); setAnswerPage(1); }} />
                     {" "}Show removed answers ({removedCount})
                   </label>}
-                  <button type="button" className="btn-primary btn-sm" disabled={busy}
+                  <button type="button" ref={addAnswerButton} className="btn-primary btn-sm" disabled={busy}
                     onClick={() => addDraft()}>Add custom answer</button>
                 </div>
                 {!matches.length && !error && <p className={styles.emptyState}>
@@ -442,6 +396,9 @@ export function CandidateApplicationFactsPanel({
                     </ul>
                   </div>
                 ))}
+                <CandidateSectionPagination page={visibleAnswerPage} pageSize={answerPageSize} total={matches.length}
+                  label="Answers" onPageChange={setAnswerPage}
+                  onPageSizeChange={(size) => { setAnswerPageSize(size); setAnswerPage(1); }} />
               </>
             )}
             {!loading && form && (
@@ -508,12 +465,13 @@ export function CandidateApplicationFactsPanel({
               </form>
             )}
           </section>
-          <section role="tabpanel" id={`${id}-notes-panel`} aria-labelledby={`${id}-notes-tab`}
-            hidden={activeTab !== "notes"} tabIndex={0}>
+          <section className={styles.notesSection} aria-labelledby={`${id}-notes-title`}>
+            <h3 className={styles.sectionTitle} id={`${id}-notes-title`}>Profile notes <span>{loading ? "" : noteCount}</span></h3>
+            <p className={styles.editorHelp}>Staff context, separate from application answers.</p>
             {!loading && <CandidateProfileNotes notes={notes} busy={busy} write={write} />}
           </section>
+          </div>
         </div>
-      </dialog>
     </section>
   );
 }

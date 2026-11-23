@@ -97,7 +97,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   try {
@@ -116,9 +116,23 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       return NextResponse.json({ error: "No editable fields provided" }, { status: 400 });
     }
     values.push(auditStudentId);
+    const studentParam = values.length;
+    values.push(context!.profile.user_id, context!.profile.display_name || context!.profile.email, params.id);
 
     const updated = await queryOne<AuditStudentRow>(
-      `UPDATE student_audit_students SET ${setClauses.join(", ")} WHERE id = $${values.length} RETURNING ${STUDENT_COLUMNS}`,
+      `WITH previous AS (
+         SELECT * FROM student_audit_students WHERE id = $${studentParam} FOR UPDATE
+       ), updated AS (
+         UPDATE student_audit_students s SET ${setClauses.join(", ")}
+         FROM previous p WHERE s.id = p.id RETURNING s.*
+       ), logged AS (
+         INSERT INTO activity_logs (user_id, actor_name, actor_type, type, description, entity_type, entity_id, entity_name, metadata)
+         SELECT $${studentParam + 1}, $${studentParam + 2}, 'user', 'update', 'Updated candidate training status',
+           'candidate_training', $${studentParam + 3}, u.name,
+           jsonb_build_object('before', to_jsonb(p), 'after', to_jsonb(u))
+         FROM updated u CROSS JOIN previous p WHERE to_jsonb(p) IS DISTINCT FROM to_jsonb(u)
+         RETURNING id
+       ) SELECT ${STUDENT_COLUMNS} FROM updated`,
       values
     );
     return NextResponse.json({ student: updated });

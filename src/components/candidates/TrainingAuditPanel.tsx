@@ -121,6 +121,15 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
   }, [candidateId]);
 
   useEffect(() => {
+    if (loading || !summary) return;
+    let anchor: string;
+    try { anchor = decodeURIComponent(window.location.hash.slice(1)); } catch { return; }
+    if (!anchor.startsWith("training-mock-")) return;
+    const frame = requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [loading, summary]);
+
+  useEffect(() => {
     const q = searchQuery.trim();
     if (!q) {
       setSearchResults([]);
@@ -522,7 +531,7 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
               const scoreColor = getScoreColor(s.overall_score);
               const analysisLabel = s.pdf_url ? "Audit + PDF" : s.raw_analysis_text ? "Audit Report" : "+ Analysis";
               return (
-                <div key={s.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+                <div key={s.id} id={`training-mock-${s.id}`} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, scrollMarginTop: 80 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       {s.overall_score !== null && (
