@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   requireCurrentUser: mocks.requireCurrentUser,
   MASTER_DATA_MANAGER_ROLES: ["admin", "manager"],
+  JOB_CREATOR_ROLES: ["admin", "manager", "application_engineer"],
 }));
 vi.mock("@/server/repositories/jobsRepository", () => ({
   createJob: mocks.createJob,
