@@ -3,7 +3,7 @@
 // Uses the jobsRepository abstraction instead of direct Supabase queries.
 
 import { NextRequest, NextResponse } from "next/server";
-import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { JOB_CREATOR_ROLES, requireCurrentUser } from "@/lib/auth";
 import { analyzeJD, JdAnalysisInput } from "@/lib/ai/falood/jdAnalyzer";
 import {
   findJobById,
@@ -49,7 +49,7 @@ function safeInsertValue<T>(value: T | null | undefined): T | null {
 }
 
 export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(JOB_CREATOR_ROLES);
   if (response) return response;
 
   let body: any;

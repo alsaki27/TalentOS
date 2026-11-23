@@ -3,7 +3,7 @@
 // POST -> manually add one job
 
 import { NextRequest, NextResponse } from "next/server";
-import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { JOB_CREATOR_ROLES, requireCurrentUser } from "@/lib/auth";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
@@ -181,7 +181,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(JOB_CREATOR_ROLES);
   if (response) return response;
 
   const body = await req.json();
