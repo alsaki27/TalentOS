@@ -26,7 +26,13 @@ const studioFonts: Readonly<Record<string, string>> = {
 
 export const ResumeTemplateSwitch: React.FC<{ data: ResumeData }> = ({ data: resume }) => {
   const font = resume.fontFamily || TEMPLATE_CONFIGS.find((template) => template.id === resume.template)?.fontFamily || 'Inter';
-  const data = { ...resume, fontFamily: Object.hasOwn(studioFonts, font) ? studioFonts[font] : studioFonts.Inter };
+  const data = {
+    ...resume,
+    fontFamily: Object.hasOwn(studioFonts, font) ? studioFonts[font] : studioFonts.Inter,
+    customSections: resume.sections.some((section) => section.id === 'custom' && !section.visible)
+      ? []
+      : [...resume.customSections].sort((a, b) => a.order - b.order),
+  };
   let template: React.ReactNode;
   switch (data.template) {
     case 'tech-sidebar':

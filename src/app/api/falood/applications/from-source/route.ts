@@ -101,8 +101,11 @@ export async function POST(req: NextRequest) {
                   skills = $2,
                   resume_data = $3,
                   updated_at = NOW()
-            WHERE id = $4`,
-          [companyName || null, skills, JSON.stringify(resumeData), existing.id]
+            WHERE id = $4
+              AND EXISTS (
+                SELECT 1 FROM base_resumes WHERE id = $5 AND content IS NOT DISTINCT FROM $6::jsonb
+              )`,
+          [companyName || null, skills, JSON.stringify(resumeData), existing.id, id, JSON.stringify(parsedContent)]
         );
       } else {
         // Content/chat history stay immutable for these sessions (see above),

@@ -12,7 +12,8 @@ import { AiSuggestions } from '@/components/falood/resumify/components/preview/A
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { readResumePresentation } from '@/lib/falood/resumePresentation';
+import { studioDocumentToResumeData } from '@/lib/falood/studioDocumentToResumeData';
+import { normalizeImportedResumeData } from '@/components/falood/resumify/utils/importedResumeData';
 import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -62,130 +63,6 @@ function TailorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (da
     );
 }
 
-function buildCustomSectionsForBuilder(old: any) {
-    const importedSections = Array.isArray(old.customSections)
-        ? old.customSections
-            .map((section: any, index: number) => {
-                const content = Array.isArray(section?.bullets)
-                    ? section.bullets
-                        .map((bullet: any) => bullet?.text || bullet)
-                        .filter(Boolean)
-                        .join('\n')
-                    : typeof section?.content === 'string'
-                        ? section.content.trim()
-                        : '';
-                if (!content) return null;
-                const lines = content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
-                return {
-                    id: section?.id || `custom-${index}`,
-                    title: section?.title || `Custom Section ${index + 1}`,
-                    content,
-                    type: lines.length > 1 ? 'bullets' : 'paragraph',
-                    visible: section?.visible ?? true,
-                    order: index,
-                    placement: section?.placement || 'right',
-                };
-            })
-            .filter(Boolean)
-        : [];
-
-    const certificationLines = Array.isArray(old.certifications)
-        ? old.certifications
-            .map((cert: any) => [cert?.name, cert?.issuer, cert?.date].filter(Boolean).join(' | '))
-            .filter(Boolean)
-        : [];
-
-    if (certificationLines.length > 0) {
-        importedSections.push({
-            id: 'certifications',
-            title: 'Certifications',
-            content: certificationLines.join('\n'),
-            type: 'bullets',
-            visible: true,
-            order: importedSections.length,
-            placement: 'right',
-        });
-    }
-
-    return importedSections;
-}
-
-function projectBulletsToText(value: unknown): string {
-    if (!Array.isArray(value)) return '';
-    return value
-        .map((bullet: any) => bullet?.text || bullet)
-        .filter(Boolean)
-        .join('\n');
-}
-
-function convertOldFormatToNew(old: any): any {
-    if (!old || typeof old !== 'object') return old;
-    // Already the editor-native shape - content passes through untouched, but
-    // presentation is still normalized so a row missing (or carrying an empty)
-    // sections/colors/typography block opens with usable defaults instead of
-    // rendering a blank page. Matches what studioDocumentToResumeData already
-    // does for the same shape, so both editors agree on any given resume.
-    if (old.personalInfo) return { ...old, ...readResumePresentation(old) };
-
-    // It's the old ResumeDocument format (has header, experience, education, etc)
-    return {
-        personalInfo: {
-            fullName: old.header?.fullName || '',
-            jobTitle: '',
-            email: old.header?.email || '',
-            phone: old.header?.phone || '',
-            location: old.header?.location || '',
-            linkedin: old.header?.linkedin || '',
-            github: old.header?.github || '',
-            website: old.header?.portfolio || old.header?.website || ''
-        },
-        summary: old.summary?.text || '',
-        experience: Array.isArray(old.experience) ? old.experience.map((e: any) => ({
-            id: e.id || Math.random().toString(),
-            jobTitle: e.title || '',
-            company: e.company || '',
-            location: e.location || '',
-            startDate: e.startDate || '',
-            endDate: e.endDate || '',
-            current: !e.endDate,
-            description: '',
-            bulletPoints: Array.isArray(e.bullets) ? e.bullets.map((b: any) => b.text || b) : []
-        })) : [],
-        education: Array.isArray(old.education) ? old.education.map((e: any) => ({
-            id: e.id || Math.random().toString(),
-            degree: e.degree || '',
-            institution: e.school || '',
-            location: '',
-            graduationYear: e.graduationDate || '',
-        })) : [],
-        skills: {
-            mode: 'categorized',
-            simple: [],
-            categorized: Array.isArray(old.skills) ? old.skills.map((s: any) => ({
-                id: s.id || Math.random().toString(),
-                name: s.title || '',
-                skills: Array.isArray(s.skills) ? s.skills : []
-            })) : []
-        },
-        projects: Array.isArray(old.projects) ? old.projects.map((p: any) => ({
-            id: p.id || Math.random().toString(),
-            title: p.title || p.name || '',
-            description: p.description || projectBulletsToText(p.bullets) || '',
-            technologies: Array.isArray(p.technologies) ? p.technologies.filter(Boolean) : [],
-            liveUrl: p.liveUrl || p.url || '',
-            githubUrl: p.githubUrl || '',
-            startDate: p.startDate || '',
-            endDate: p.endDate || ''
-        })).filter((project: any) => project.title || project.description || project.technologies.length || project.liveUrl || project.githubUrl) : [],
-        customSections: buildCustomSectionsForBuilder(old),
-        // Presentation settings come from the stored document (falling back
-        // to the same defaults this used to hardcode when it carries none),
-        // so a saved template/color/typography/section-order choice is not
-        // silently reset on reopen. See src/lib/falood/resumePresentation.ts.
-        ...readResumePresentation(old),
-    };
-}
-
 interface BaseResumeSnapshot {
     content: ResumeData;
 }
@@ -200,7 +77,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     const { state, exportResumeData, importResumeData } = useResume();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const router = useRouter();
-    const [isLoading, setIsLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(baseResumeId !== 'new');
     const [loadError, setLoadError] = useState<string | null>(null);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
@@ -256,7 +133,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
             if (!response.ok || !json || typeof json.content !== 'object' || json.content === null) {
                 throw new Error(typeof json?.error === 'string' ? json.error : 'This base resume could not be found.');
             }
-            const convertedData = convertOldFormatToNew(json.content);
+            const convertedData = normalizeImportedResumeData(studioDocumentToResumeData(json.content));
             importResumeData(convertedData);
             studio.markLoaded({ content: convertedData });
             setCandidateId(json.candidate_id || null);
@@ -487,11 +364,11 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                         "lg:block",
                         showPreview ? "hidden lg:flex" : "flex"
                     )} style={{ height: 750, flexShrink: 0 }}>
-                        <div style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+                        <div className="studio-panel-tabs" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center' }}>
-                                <Button variant={activePanel === 'form' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('form')} style={{ borderRadius: 0, padding: '12px 24px' }}>Content</Button>
-                                <Button variant={activePanel === 'customize' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('customize')} style={{ borderRadius: 0, padding: '12px 24px' }}><Palette className="w-4 h-4 mr-2" />Customize</Button>
-                                <Button variant={activePanel === 'settings' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('settings')} style={{ borderRadius: 0, padding: '12px 24px' }}><Settings className="w-4 h-4 mr-2" />Settings</Button>
+                                <Button aria-pressed={activePanel === 'form'} variant={activePanel === 'form' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('form')} style={{ borderRadius: 0, padding: '12px 24px' }}>Content</Button>
+                                <Button aria-pressed={activePanel === 'customize'} variant={activePanel === 'customize' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('customize')} style={{ borderRadius: 0, padding: '12px 24px' }}><Palette className="w-4 h-4 mr-2" />Customize</Button>
+                                <Button aria-pressed={activePanel === 'settings'} variant={activePanel === 'settings' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('settings')} style={{ borderRadius: 0, padding: '12px 24px' }}><Settings className="w-4 h-4 mr-2" />Settings</Button>
                             </div>
                         </div>
                         <div style={{ flex: 1, overflow: 'hidden' }}>

@@ -77,10 +77,13 @@ function getInput(ctx: AgentContext) {
   for (const [index, role] of experience.entries()) {
     const source = datedRoles[index];
     const stated = readResumeText(source?.endDate);
-    role.endDate = stated || (source?.isCurrent === true ? "Present" : null);
+    const current = source?.isCurrent ?? source?.current;
+    role.endDate = current === true ? "Present" : current === false && /^present$/i.test(stated) ? null : stated || null;
   }
   const baseSkills: { title: string; skills: string[] }[] = [];
-  const skills = Array.isArray(base.skills) ? base.skills : rows(record(base.skills).categorized);
+  const nativeSkills = record(base.skills);
+  const skills = Array.isArray(base.skills) ? base.skills
+    : nativeSkills.mode === "simple" ? rows(nativeSkills.simple) : rows(nativeSkills.categorized);
   for (const entry of skills) {
     const group = record(entry);
     if (typeof entry === "string") {
@@ -359,11 +362,6 @@ export async function prepareEvidenceStage(agent: ApplicationAgentId, ctx: Agent
           exportReady: false, pageFit: null, qa: null,
         };
         const studio = finalResumeToStudioDocument(resume, source.base);
-        studio.experience.forEach((role, index) => {
-          const endDate = draft.experience[index].endDate;
-          const current = endDate?.toLowerCase() === "present";
-          Object.assign(role, { isCurrent: current, endDate: current ? undefined : endDate ?? undefined });
-        });
         const pdf = await renderEvidenceReleasePdf(studio, maxPages).catch(() => null);
         if (!pdf?.passed) issues.push("PDF needs review for identity, layout or readability");
         const exportReady = Boolean(pdf?.passed && review?.risk === "clear" && issues.length === 0);

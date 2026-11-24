@@ -1,6 +1,6 @@
 import {
   DEFAULT_COLORS, DEFAULT_FONT_SIZE, DEFAULT_LINE_SPACING, DEFAULT_PAGE_PADDING,
-  DEFAULT_SECTIONS, DEFAULT_TITLE_SPACING, normalizeTitleSpacing, type ResumeData,
+  DEFAULT_SECTIONS, DEFAULT_TITLE_SPACING, normalizeTitleSpacing, type Experience, type ResumeData,
 } from '../types/resume';
 
 export const INITIAL_RESUME_DATA: ResumeData = {
@@ -27,6 +27,7 @@ export const INITIAL_RESUME_DATA: ResumeData = {
 
 export function normalizeImportedResumeData(input: Partial<ResumeData>): ResumeData {
   const data = { ...INITIAL_RESUME_DATA, ...input };
+  data.experience = withSingleCurrentExperience(Array.isArray(data.experience) ? data.experience : []);
   if (!Number.isFinite(data.fontSize)) data.fontSize = DEFAULT_FONT_SIZE;
   data.titleSpacing = normalizeTitleSpacing(data.titleSpacing);
   if (data.skills?.categorized) {
@@ -39,4 +40,12 @@ export function normalizeImportedResumeData(input: Partial<ResumeData>): ResumeD
     };
   }
   return data;
+}
+
+/** Older resumes can have several current roles. Keep the first in resume order. */
+export function withSingleCurrentExperience(experience: Experience[]): Experience[] {
+  const currentIndex = experience.findIndex((entry) => entry.current);
+  return experience.map((entry, index) =>
+    entry.current && index !== currentIndex ? { ...entry, current: false } : entry
+  );
 }

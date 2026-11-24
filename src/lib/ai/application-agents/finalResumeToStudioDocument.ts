@@ -12,7 +12,11 @@
 // can address them by id.
 
 import type { FinalResumeV1, ExperienceEntry } from "./schemas";
-import { readBaseSummary } from "./resumeIntegrity";
+import { readBaseSummary, readResumeText } from "./resumeIntegrity";
+import { pickResumePresentation, type ResumePresentation } from "@/lib/falood/resumePresentation";
+import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
+import type { Education, Skills } from "@/components/falood/resumify/types/resume";
+import type { ResumeCustomSection } from "@/lib/falood/types";
 
 // FinalResumeV1's QA-only fields (appliedIssueIds, rejectedIssueIds,
 // unresolvedWarnings, finalQaScore, exportReady, pageFit) are never read by
@@ -25,6 +29,7 @@ export type RenderableResumeContent = Pick<FinalResumeV1, "summary" | "skills" |
 
 export interface ResumeDocumentHeader {
   fullName: string;
+  jobTitle?: string;
   location?: string;
   phone?: string;
   email?: string;
@@ -33,10 +38,11 @@ export interface ResumeDocumentHeader {
   portfolio?: string;
 }
 
-export interface ResumeDocument {
+export interface ResumeDocument extends Partial<ResumePresentation> {
   header: ResumeDocumentHeader;
   summary?: { id: string; text: string };
   skills: { id: string; name: string; skills: string[] }[];
+  skillDisplayMode: Skills["mode"];
   experience: {
     id: string;
     title: string;
@@ -44,9 +50,10 @@ export interface ResumeDocument {
     location?: string;
     startDate: string;
     endDate?: string;
+    isCurrent?: boolean;
     bullets: { id: string; text: string }[];
   }[];
-  education: { id: string; degree: string; school: string; graduationDate?: string }[];
+  education: { id: string; degree: string; school: string; graduationDate?: string; gpa?: string; honors?: string }[];
   certifications?: { id: string; name: string; issuer?: string; date?: string }[];
   projects?: {
     id: string;
@@ -54,11 +61,7 @@ export interface ResumeDocument {
     description?: string;
     bullets: { id: string; text: string }[];
   }[];
-  customSections?: {
-    id: string;
-    title: string;
-    bullets: { id: string; text: string }[];
-  }[];
+  customSections?: ResumeCustomSection[];
 }
 
 let idCounter = 0;
@@ -72,6 +75,7 @@ function readHeader(baseContent: any): ResumeDocumentHeader {
   if (raw && typeof raw === "object" && typeof raw.fullName === "string") {
     return {
       fullName: raw.fullName,
+      jobTitle: raw.jobTitle,
       location: raw.location ?? undefined,
       phone: raw.phone ?? undefined,
       email: raw.email ?? undefined,
@@ -82,6 +86,7 @@ function readHeader(baseContent: any): ResumeDocumentHeader {
   }
   return {
     fullName: baseContent?.personalInfo?.fullName ?? "",
+    jobTitle: baseContent?.personalInfo?.jobTitle,
     email: baseContent?.personalInfo?.email ?? undefined,
     phone: baseContent?.personalInfo?.phone ?? undefined,
     location: baseContent?.personalInfo?.location ?? undefined,
@@ -91,44 +96,63 @@ function readHeader(baseContent: any): ResumeDocumentHeader {
   };
 }
 
-function mapExperience(entries: ExperienceEntry[]) {
-  return entries.map((e) => {
-    const isCurrent = !e.endDate || e.endDate.trim().toLowerCase() === "present";
+const identityKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+
+function mapExperience(entries: ExperienceEntry[], rawBaseExperience: unknown) {
+  const base = Array.isArray(rawBaseExperience) ? rawBaseExperience : [];
+  const savedSelections = entries.map((entry) => {
+    const matches = base.filter((role) => role
+      && identityKey(readResumeText(role.jobTitle ?? role.title)) === identityKey(entry.title)
+      && identityKey(readResumeText(role.company)) === identityKey(entry.company));
+    const exact = matches.filter((role) => identityKey(readResumeText(role.startDate)) === identityKey(entry.startDate ?? ""));
+    const source = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : undefined;
+    return source?.isCurrent ?? source?.current;
+  });
+  const explicitlyCurrent = savedSelections.indexOf(true);
+  const currentIndex = explicitlyCurrent >= 0 ? explicitlyCurrent : entries.findIndex((entry, index) =>
+    savedSelections[index] !== false && identityKey(entry.endDate ?? "") === "present"
+  );
+  return entries.map((e, index) => {
+    const isCurrent = index === currentIndex;
     return {
       id: uid("exp"),
       title: e.title,
       company: e.company,
       location: e.location ?? undefined,
       startDate: e.startDate ?? "",
-      endDate: isCurrent ? undefined : (e.endDate ?? undefined),
+      endDate: isCurrent || identityKey(e.endDate ?? "") === "present" ? undefined : e.endDate ?? undefined,
       isCurrent,
       bullets: e.bullets.map((b) => ({ id: uid("b"), text: b })),
     };
   });
 }
 
-function mapEducation(edu: FinalResumeV1["education"]) {
-  return edu.map((e) => ({
-    id: uid("edu"),
-    degree: e.degree,
-    school: e.school,
-    graduationDate: e.graduationDate ?? undefined,
-  }));
+function mapEducation(edu: FinalResumeV1["education"], baseEducation: Education[]) {
+  return edu.map((e) => {
+    const matches = baseEducation.filter((entry) =>
+      identityKey(entry.degree) === identityKey(e.degree) && identityKey(entry.institution) === identityKey(e.school)
+    );
+    const exact = matches.filter((entry) => identityKey(entry.graduationYear) === identityKey(e.graduationDate ?? ""));
+    const source = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : undefined;
+    return {
+      id: uid("edu"),
+      degree: e.degree,
+      school: e.school,
+      graduationDate: e.graduationDate ?? undefined,
+      gpa: source?.gpa,
+      honors: source?.honors,
+    };
+  });
 }
 
-function mapSkills(skills: FinalResumeV1["skills"], baseContent: any) {
+function mapSkills(skills: FinalResumeV1["skills"], baseSkills: Skills) {
   if (skills.length > 0) {
     return skills.map((g) => ({ id: uid("skg"), name: (g as any).name ?? g.title, skills: [...g.skills] }));
   }
-  // Fall back to the base resume's own categorized groups only if the agent pipeline
-  // returned nothing at all (e.g. an older run predating the categorized-skills fix).
-  const baseSkills: any[] = Array.isArray(baseContent?.skills) 
-    ? baseContent.skills 
-    : (Array.isArray(baseContent?.skills?.categorized) ? baseContent.skills.categorized : []);
-  
-  return baseSkills.map((g) => ({
+  if (baseSkills.mode === "simple") return [{ id: uid("skg"), name: "Skills", skills: baseSkills.simple }];
+  return baseSkills.categorized.map((g) => ({
     id: uid("skg"),
-    name: g?.name ?? g?.title ?? "Skills",
+    name: g.name,
     skills: Array.isArray(g?.skills) ? g.skills.filter((s: any) => typeof s === "string") : [],
   }));
 }
@@ -158,24 +182,33 @@ function mapCertifications(certs: any[], baseContent: any) {
 // ({ content: string, type, visible }) or the canonical { bullets } shape
 // depending on which editor last touched the row - handle both so a
 // section written by either editor still renders here.
-function mapCustomSections(baseContent: any): { id: string; title: string; bullets: { id: string; text: string }[] }[] {
+function mapCustomSections(baseContent: any): ResumeCustomSection[] {
   const raw: any[] = Array.isArray(baseContent?.customSections) ? baseContent.customSections : [];
   return raw
     .filter((s) => s && typeof s === "object" && s.visible !== false)
-    .map((s) => {
+    .map((s, index) => {
       let bullets: { id: string; text: string }[];
-      if (Array.isArray(s.bullets) && s.bullets.length > 0) {
-        bullets = s.bullets
-          .map((b: any) => ({ id: uid("cs"), text: typeof b === "string" ? b : String(b?.text ?? "").trim() }))
-          .filter((b: { id: string; text: string }) => b.text.length > 0);
-      } else if (typeof s.content === "string" && s.content.trim()) {
+      if (typeof s.content === "string" && s.content.trim()) {
         bullets = s.type === "paragraph"
           ? [{ id: uid("cs"), text: s.content.trim() }]
           : s.content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean).map((text: string) => ({ id: uid("cs"), text }));
+      } else if (Array.isArray(s.bullets) && s.bullets.length > 0) {
+        bullets = s.bullets
+          .map((b: any) => ({ id: uid("cs"), text: typeof b === "string" ? b : String(b?.text ?? "").trim() }))
+          .filter((b: { id: string; text: string }) => b.text.length > 0);
       } else {
         bullets = [];
       }
-      return { id: uid("cs"), title: String(s.title ?? "").trim() || "Additional Information", bullets };
+      return {
+        id: s.id || uid("cs"),
+        title: String(s.title ?? "").trim() || "Additional Information",
+        content: typeof s.content === "string" ? s.content : undefined,
+        type: s.type === "paragraph" ? "paragraph" as const : "bullets" as const,
+        placement: s.placement === "left" || s.placement === "right" ? s.placement : undefined,
+        order: typeof s.order === "number" ? s.order : index,
+        visible: true,
+        bullets,
+      };
     })
     .filter((s) => s.bullets.length > 0);
 }
@@ -199,6 +232,7 @@ function mapProjects(projects: FinalResumeV1["projects"]) {
 
 export function finalResumeToStudioDocument(final: RenderableResumeContent, baseContent: any): ResumeDocument {
   const base = baseContent && typeof baseContent === "object" ? baseContent : {};
+  const editorBase = studioDocumentToResumeData(base);
   // Summary follows the base resume: the pipeline output wins when it has a
   // summary, the base resume's own summary is the fallback (truthful by
   // construction), and a base resume without one produces no summary block.
@@ -211,11 +245,14 @@ export function finalResumeToStudioDocument(final: RenderableResumeContent, base
   return {
     header: readHeader(base),
     summary,
-    skills: mapSkills(final.skills, base),
-    experience: mapExperience(final.experience),
-    education: mapEducation(final.education),
+    skills: mapSkills(final.skills, editorBase.skills),
+    skillDisplayMode: editorBase.skills.mode,
+    experience: mapExperience(final.experience, base.experience),
+    education: mapEducation(final.education, editorBase.education),
     certifications: mapCertifications(final.certifications, base),
     projects: mapProjects(final.projects),
     customSections: mapCustomSections(base),
+    pageFormat: editorBase.pageFormat,
+    ...pickResumePresentation(base),
   };
 }

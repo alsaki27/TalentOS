@@ -165,14 +165,7 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
     case 'SET_VERSIONS':
       return { ...state, versions: action.payload };
     case 'RESTORE_VERSION': {
-      const restoredData = { ...initialResumeData, ...action.payload.resumeData };
-      restoredData.titleSpacing = normalizeTitleSpacing(restoredData.titleSpacing);
-      if (restoredData.skills?.categorized) {
-        restoredData.skills.categorized = restoredData.skills.categorized.map((cat, idx) => ({
-          ...cat,
-          id: cat.id || `restore-cat-${Date.now()}-${idx}`
-        }));
-      }
+      const restoredData = normalizeImportedResumeData(action.payload.resumeData);
       return {
         ...state,
         resumeData: restoredData,

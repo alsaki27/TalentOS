@@ -114,6 +114,7 @@ export const CustomSectionsForm: React.FC = () => {
                       <span className="text-sm font-medium">Section {index + 1}</span>
                       <div className="flex items-center space-x-2">
                         <Switch
+                          aria-label={`Show ${section.title || `section ${index + 1}`}`}
                           checked={section.visible}
                           onCheckedChange={(checked) => updateSection(section.id, 'visible', checked)}
                         />

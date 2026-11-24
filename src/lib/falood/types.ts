@@ -6,6 +6,9 @@
 
 export interface ResumeHeader {
   fullName: string;
+  jobTitle?: string;
+  profileImage?: string;
+  birthDate?: string;
   location?: string;
   phone?: string;
   email?: string;
@@ -41,6 +44,7 @@ export interface ExperienceBlock {
   startDate: string;
   endDate?: string;
   isCurrent?: boolean;
+  description?: string;
   bullets: ResumeBullet[];
 }
 
@@ -59,6 +63,8 @@ export interface EducationBlock {
   school: string;
   location?: string;
   graduationDate?: string;
+  gpa?: string;
+  honors?: string;
 }
 
 export interface CertificationBlock {
@@ -72,6 +78,11 @@ export interface ResumeCustomSection {
   id: string;
   title: string;
   bullets: ResumeBullet[];
+  content?: string;
+  type?: "paragraph" | "bullets";
+  visible?: boolean;
+  order?: number;
+  placement?: "left" | "right";
 }
 
 export interface ResumeFormatting {

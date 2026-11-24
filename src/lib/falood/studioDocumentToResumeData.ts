@@ -29,10 +29,14 @@ import {
   DEFAULT_SECTIONS,
 } from "@/components/falood/resumify/types/resume";
 import { readResumePresentation } from "@/lib/falood/resumePresentation";
+import { withSingleCurrentExperience } from "@/components/falood/resumify/utils/importedResumeData";
 
 export interface StudioDocumentLike {
   header?: {
     fullName?: string;
+    jobTitle?: string;
+    profileImage?: string;
+    birthDate?: string;
     location?: string;
     phone?: string;
     email?: string;
@@ -42,21 +46,30 @@ export interface StudioDocumentLike {
     website?: string;
   };
   summary?: { text?: string } | string | null;
-  skills?: { title?: string; skills?: string[] }[];
+  skills?: { id?: string; title?: string; name?: string; skills?: string[] }[];
+  skillDisplayMode?: ResumeData["skills"]["mode"];
+  studioSkills?: ResumeData["skills"];
   experience?: {
+    id?: string;
     title?: string;
     company?: string;
     location?: string;
     startDate?: string;
     endDate?: string;
+    isCurrent?: boolean;
+    description?: string;
     bullets?: { text?: string }[] | string[];
   }[];
-  education?: { degree?: string; school?: string; graduationDate?: string; location?: string }[];
+  education?: { id?: string; degree?: string; school?: string; graduationDate?: string; location?: string; gpa?: string; honors?: string }[];
   certifications?: { name?: string; issuer?: string; date?: string }[];
   projects?: {
+    id?: string;
     title?: string;
     name?: string;
     description?: string;
+    technologies?: string[];
+    startDate?: string;
+    endDate?: string;
     bullets?: { text?: string }[] | string[];
     url?: string;
     liveUrl?: string;
@@ -108,6 +121,11 @@ function asArray<T>(v: unknown): T[] {
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+function readGpa(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return asOptionalString(value);
 }
 
 function asOptionalString(...values: unknown[]): string | undefined {
@@ -173,7 +191,7 @@ function normalizeResumifyNative(d: any): ResumeData {
     institution: asString(e?.institution),
     location: asString(e?.location),
     graduationYear: asString(e?.graduationYear),
-    gpa: e?.gpa ? asString(e.gpa) : undefined,
+    gpa: readGpa(e?.gpa),
     honors: e?.honors ? asString(e.honors) : undefined,
   }));
   const projects = asArray<any>(d.projects).map((p) => ({
@@ -206,9 +224,11 @@ function normalizeResumifyNative(d: any): ResumeData {
       website: personalInfo.website ? asString(personalInfo.website) : undefined,
       linkedin: personalInfo.linkedin ? asString(personalInfo.linkedin) : undefined,
       github: personalInfo.github ? asString(personalInfo.github) : undefined,
+      profileImage: asOptionalString(personalInfo.profileImage),
+      birthDate: asOptionalString(personalInfo.birthDate),
     },
     summary: asString(d.summary),
-    experience,
+    experience: withSingleCurrentExperience(experience),
     education,
     projects,
     skills: {
@@ -235,39 +255,48 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
 
   const summaryText = typeof d.summary === "string" ? d.summary : d.summary?.text ?? "";
 
-  const experience = asArray<NonNullable<StudioDocumentLike["experience"]>[number]>(d.experience).map((e) => ({
-    id: uid("exp"),
+  const roles = asArray<NonNullable<StudioDocumentLike["experience"]>[number]>(d.experience);
+  // An explicit selection takes priority over old rows that used a missing
+  // end date to mean current. An explicit false must survive the round trip.
+  const hasExplicitCurrent = roles.some((role) => role?.isCurrent === true);
+  const experience = roles.map((e) => ({
+    id: e?.id || uid("exp"),
     jobTitle: e?.title ?? "",
     company: e?.company ?? "",
     location: e?.location ?? "",
     startDate: e?.startDate ?? "",
-    endDate: e?.endDate ?? "",
-    current: !e?.endDate,
-    description: "",
+    endDate: /^present$/i.test(asString(e?.endDate).trim()) ? "" : asString(e?.endDate),
+    current: e?.isCurrent ?? (!hasExplicitCurrent && (!e?.endDate || /^present$/i.test(e.endDate.trim()))),
+    description: asString(e?.description),
     bulletPoints: bulletTexts(e?.bullets),
   }));
   const education = asArray<NonNullable<StudioDocumentLike["education"]>[number]>(d.education).map((e) => ({
-    id: uid("edu"),
+    id: e?.id || uid("edu"),
     degree: e?.degree ?? "",
     institution: e?.school ?? "",
     location: e?.location ?? "",
     graduationYear: e?.graduationDate ?? "",
+    gpa: readGpa(e?.gpa),
+    honors: asOptionalString(e?.honors),
   }));
 
   const projects = asArray<NonNullable<StudioDocumentLike["projects"]>[number]>(d.projects).map((p) => ({
-    id: uid("proj"),
+    id: p?.id || uid("proj"),
     title: (typeof p?.title === "string" ? p.title.trim() : "") || (typeof p?.name === "string" ? p.name.trim() : ""),
-    description: p?.description ?? "",
-    technologies: [] as string[],
+    description: p?.description ?? bulletTexts(p?.bullets).join("\n"),
+    technologies: asArray<string>(p?.technologies),
+    startDate: p?.startDate,
+    endDate: p?.endDate,
     ...projectLinkFields(p),
   }));
 
   const skillGroups = asArray<NonNullable<StudioDocumentLike["skills"]>[number]>(d.skills);
   const categorized = skillGroups.map((g) => ({
-    id: uid("skg"),
-    name: (g as any)?.name ?? g?.title ?? "Skills",
+    id: g?.id || uid("skg"),
+    name: g?.name ?? g?.title ?? "Skills",
     skills: asArray<string>(g?.skills),
   }));
+  const mode = d.studioSkills?.mode ?? d.skillDisplayMode ?? (categorized.length > 1 ? "categorized" : "simple");
 
   // Custom sections (Awards, Languages, Publications, etc.) can arrive here
   // in two shapes: the canonical { id, title, bullets: [{text}] } shape
@@ -290,17 +319,16 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
   // /falood/studio/base/[baseResumeId]/page.tsx, which already tolerates
   // both shapes for the same reason.
   const customSections: ResumeData["customSections"] = asArray<NonNullable<StudioDocumentLike["customSections"]>[number]>(d.customSections)
-    .filter((cs) => cs && (cs.title || (Array.isArray(cs.bullets) && cs.bullets.length > 0) || (typeof cs.content === "string" && cs.content.trim().length > 0)))
+    .filter((cs) => cs && (cs.title || typeof cs.content === "string" || bulletTexts(cs.bullets).length > 0))
     .map((cs, idx) => ({
       id: cs.id || uid("cs"),
       title: cs.title?.trim() || "Additional Information",
-      content: Array.isArray(cs.bullets) ? bulletTexts(cs.bullets).join("\n") : asString(cs.content),
+      content: typeof cs.content === "string" ? cs.content : bulletTexts(cs.bullets).join("\n"),
       type: cs.type === "paragraph" ? "paragraph" as const : "bullets" as const,
       visible: cs.visible !== false,
       order: typeof cs.order === "number" ? cs.order : DEFAULT_SECTIONS.length + 1 + idx,
       placement: cs.placement === "left" || cs.placement === "right" ? cs.placement : undefined,
-    }))
-    .filter((cs) => cs.content.trim().length > 0);
+    }));
   const certifications = asArray<NonNullable<StudioDocumentLike["certifications"]>[number]>(d.certifications);
   if (certifications.length > 0) {
     customSections.push({
@@ -316,22 +344,24 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
   return {
     personalInfo: {
       fullName: header.fullName ?? "",
-      jobTitle: "",
+      jobTitle: header.jobTitle ?? "",
       email: header.email ?? "",
       phone: header.phone ?? "",
       location: header.location ?? "",
       website: header.portfolio ?? header.website ?? undefined,
       linkedin: header.linkedin ?? undefined,
       github: header.github ?? undefined,
+      profileImage: header.profileImage,
+      birthDate: header.birthDate,
     },
     summary: summaryText,
-    experience,
+    experience: withSingleCurrentExperience(experience),
     education,
     projects,
     skills: {
-      mode: categorized.length > 1 ? "categorized" : "simple",
-      simple: categorized.length <= 1 ? categorized[0]?.skills ?? [] : [],
-      categorized,
+      mode,
+      simple: mode === "simple" ? [...new Set(categorized.flatMap((group) => group.skills))] : asArray<string>(d.studioSkills?.simple),
+      categorized: mode === "categorized" || !d.studioSkills ? categorized : asArray(d.studioSkills.categorized),
     },
     customSections,
     // Read from the document rather than hardcoded here. A canonical base

@@ -89,6 +89,7 @@ export const TemplateSelector: React.FC = () => {
                   </div>
 
                   <Button
+                    aria-pressed={selectedTemplate === template.id}
                     variant={selectedTemplate === template.id ? "default" : "outline"}
                     size="sm"
                     className="w-full"

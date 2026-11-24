@@ -115,7 +115,13 @@ export const SkillsForm: React.FC = () => {
   };
 
   const changeMode = (mode: 'simple' | 'categorized') => {
-    updateSkills({ ...skills, mode });
+    if (mode === 'simple' && !skills.simple.length) {
+      updateSkills({ ...skills, mode, simple: [...new Set(skills.categorized.flatMap((group) => group.skills))] });
+    } else if (mode === 'categorized' && !skills.categorized.length && skills.simple.length) {
+      updateSkills({ ...skills, mode, categorized: [{ id: crypto.randomUUID(), name: 'Skills', skills: [...skills.simple] }] });
+    } else {
+      updateSkills({ ...skills, mode });
+    }
   };
 
   return (

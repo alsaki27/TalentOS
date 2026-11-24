@@ -155,7 +155,10 @@ export const ExperienceForm: React.FC = () => {
                   <Checkbox
                     id={`current-${exp.id}`}
                     checked={exp.current}
-                    onCheckedChange={(checked) => updateExp(exp.id, 'current', checked)}
+                    onCheckedChange={(checked) => updateExperience(experience.map((entry) =>
+                      entry.id === exp.id ? { ...entry, current: checked === true }
+                        : checked === true && entry.current ? { ...entry, current: false } : entry
+                    ))}
                   />
                   <Label htmlFor={`current-${exp.id}`}>Currently working here</Label>
                 </div>

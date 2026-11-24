@@ -10,6 +10,7 @@ import { GripVertical, Eye, EyeOff, Settings } from 'lucide-react';
 export const SectionManager: React.FC = () => {
   const { state, updateSections, updatePageFormat } = useResume();
   const { sections, pageFormat } = state.resumeData;
+  const orderedSections = [...sections].sort((a, b) => a.order - b.order);
 
   const toggleSectionVisibility = (sectionId: string) => {
     const updatedSections = sections.map(section =>
@@ -21,7 +22,7 @@ export const SectionManager: React.FC = () => {
   };
 
   const reorderSections = (dragIndex: number, hoverIndex: number) => {
-    const updatedSections = [...sections];
+    const updatedSections = [...orderedSections];
     const draggedSection = updatedSections[dragIndex];
     updatedSections.splice(dragIndex, 1);
     updatedSections.splice(hoverIndex, 0, draggedSection);
@@ -91,9 +92,7 @@ export const SectionManager: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            {sections
-              .sort((a, b) => a.order - b.order)
-              .map((section, index) => (
+            {orderedSections.map((section, index) => (
                 <div
                   key={section.id}
                   className="flex items-center justify-between p-3 border rounded-lg bg-card"
@@ -139,6 +138,7 @@ export const SectionManager: React.FC = () => {
                       Order: {section.order}
                     </span>
                     <Switch
+                      aria-label={`Show ${section.title}`}
                       checked={section.visible}
                       onCheckedChange={() => toggleSectionVisibility(section.id)}
                     />

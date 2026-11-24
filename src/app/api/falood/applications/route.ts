@@ -253,11 +253,18 @@ export async function PATCH(req: NextRequest) {
 
     updates.push(`updated_at = NOW()`);
 
-    const linked = "resumeData" in body ? await queryOne<{ id: string; content: unknown }>(
-      `SELECT rv.id, rv.content
+    const linked = "resumeData" in body ? await queryOne<{ id: string; content: unknown; source?: string }>(
+      `SELECT rv.id, rv.content, 'application_resume_version'::text AS source
        FROM falood_saved_applications s
        JOIN application_resume_versions rv ON rv.id = CASE
          WHEN trim(s.name) ~* '^application_resume_version:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
+         THEN split_part(trim(s.name), ':', 2)::uuid END
+       WHERE s.id = $1
+       UNION ALL
+       SELECT br.id, br.content, 'base_resume'
+       FROM falood_saved_applications s
+       JOIN base_resumes br ON br.id = CASE
+         WHEN trim(s.name) ~* '^base_resume:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$'
          THEN split_part(trim(s.name), ':', 2)::uuid END
        WHERE s.id = $1`,
       [id]
@@ -269,7 +276,33 @@ export async function PATCH(req: NextRequest) {
     values.push(id);
     let row: { id: string; createdAt: string; updatedAt: string; name: string | null; resumeVersionId?: string } | null;
 
-    if (linked) {
+    if (linked?.source === "base_resume") {
+      const merged = mergeResumifyEditorIntoBaseResume(safeParseJson(linked.content), body.resumeData);
+      const baseIdParam = values.length + 1;
+      const sessionIdParam = values.length;
+      const guardedStudioUpdate = studioUpdate.replace(
+        "RETURNING id,", "AND EXISTS (SELECT 1 FROM synced) RETURNING id,",
+      );
+      // Save the source and the editor session together. Lock the session and
+      // reject the save if another writer changed the base during this request.
+      row = await queryOne(
+        `WITH session AS (
+           SELECT id FROM falood_saved_applications
+           WHERE id = $${sessionIdParam} AND lower(trim(name)) = 'base_resume:' || $${baseIdParam}::uuid::text
+           FOR UPDATE
+         ), synced AS (
+           UPDATE base_resumes SET content = $${baseIdParam + 1}::jsonb, updated_at = NOW()
+           WHERE id = $${baseIdParam}::uuid AND content IS NOT DISTINCT FROM $${baseIdParam + 2}::jsonb
+             AND EXISTS (SELECT 1 FROM session)
+           RETURNING id
+         )
+         ${guardedStudioUpdate}`,
+        [...values, linked.id, JSON.stringify(merged), JSON.stringify(safeParseJson(linked.content))],
+      );
+      if (!row) return NextResponse.json({
+        success: false, error: "The base resume changed during the save. Review the latest version and try again.",
+      }, { status: 409 });
+    } else if (linked) {
       const merged = mergeResumifyEditorIntoBaseResume(safeParseJson(linked.content), body.resumeData);
       // Preserve the server fallback for older clients. If Studio explicitly
       // reports that its layout is unavailable, clear the previous badge.
@@ -318,56 +351,6 @@ export async function PATCH(req: NextRequest) {
 
     if (!row) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
-    }
-
-    // This Tailor Studio session may represent a candidate's actual base
-    // resume (created by copying from one - see the "base_resume:<id>" name
-    // convention set at creation time). falood_saved_applications is its own,
-    // separate table; the AI resume pipeline never reads it - only
-    // base_resumes.content. Without this, edits made here look saved (they
-    // are - to this table) but are structurally invisible to Generate/
-    // Regenerate, which keeps producing tailored resumes from the OLD base
-    // resume content forever. Push resume-content edits back into
-    // base_resumes in real time so the very next pipeline run picks them up.
-    // Only runs when this save actually included resumeData - a
-    // chatHistory-only or versions-only save has nothing new to sync.
-    // Best-effort: a sync failure must never fail the Tailor Studio's own
-    // save, which has already succeeded by this point.
-    if ("resumeData" in body && typeof row.name === "string") {
-      const trimmedName = row.name.trim();
-      const baseResumeMatch = /^base_resume:([0-9a-f-]{36})$/i.exec(trimmedName);
-      if (baseResumeMatch) {
-        const baseResumeId = baseResumeMatch[1];
-
-        // The saved application is the authoritative write for this endpoint.
-        // Mirroring the editor content into base_resumes is a derived sync and
-        // must not make the Save button wait on two more database round trips.
-        await backgroundDispatch(
-          (async () => {
-            try {
-              const baseRow = await queryOne<{ content: any }>(
-                "SELECT content FROM base_resumes WHERE id = $1",
-                [baseResumeId]
-              );
-              if (!baseRow) return;
-
-              const mergedContent = mergeResumifyEditorIntoBaseResume(
-                baseRow.content,
-                body.resumeData,
-              );
-              await execute(
-                "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
-                [JSON.stringify(mergedContent), baseResumeId]
-              );
-            } catch (syncErr: any) {
-              console.error(
-                "[Falood Applications PATCH] Base resume sync failed (non-critical):",
-                syncErr?.message || syncErr
-              );
-            }
-          })()
-        );
-      }
     }
 
     return NextResponse.json({

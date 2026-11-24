@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { finalResumeToStudioDocument, type RenderableResumeContent } from "@/lib/ai/application-agents/finalResumeToStudioDocument";
+import { mergeResumifyEditorIntoBaseResume } from "@/lib/falood/resumeDocumentAdapters";
+import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 
 const minimalFinal: RenderableResumeContent = {
   summary: "Tailored summary.",
@@ -11,6 +13,29 @@ const minimalFinal: RenderableResumeContent = {
   certifications: [],
   projects: [],
 };
+
+it("carries saved base formatting and education through the generated Studio document", () => {
+  const base = mergeResumifyEditorIntoBaseResume({ header: { fullName: "Test Candidate" } }, {
+    personalInfo: { fullName: "Test Candidate", jobTitle: "Design Specialist" },
+    template: "modern-minimal", pageFormat: "letter", fontSize: 11, titleSpacing: 0.25,
+    experience: [{ id: "role", jobTitle: "Drafter", company: "Acme", current: false }],
+    education: [{ id: "edu", degree: "B.S.", institution: "State U", graduationYear: "2019", gpa: "3.7/4.0" }],
+    skills: { mode: "simple", simple: ["CAD"], categorized: [{ id: "unused", name: "Saved list", skills: ["Prior category"] }] },
+    customSections: [{ id: "notes", title: "Notes", type: "paragraph", content: "First line\nSecond line", placement: "left", visible: true, order: 2 }],
+  });
+  const reopened = studioDocumentToResumeData(base);
+  expect(reopened.personalInfo.jobTitle).toBe("Design Specialist");
+  expect(reopened.experience[0].current).toBe(false);
+  expect(reopened.skills).toMatchObject({ mode: "simple", simple: ["CAD"], categorized: [{ name: "Saved list" }] });
+  const tailored = studioDocumentToResumeData(finalResumeToStudioDocument(minimalFinal, base));
+  expect(tailored).toMatchObject({
+    template: "modern-minimal", pageFormat: "letter", fontSize: 11, titleSpacing: 0.25,
+    personalInfo: { jobTitle: "Design Specialist" },
+    education: [{ gpa: "3.7/4.0" }],
+    skills: { mode: "simple", simple: ["AutoCAD"] },
+    customSections: [{ id: "notes", type: "paragraph", content: "First line\nSecond line", placement: "left", order: 2 }],
+  });
+});
 
 describe("finalResumeToStudioDocument custom sections pass-through", () => {
   it("carries Resumify-native shaped custom sections (content string) through unchanged", () => {

@@ -14,6 +14,7 @@ import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/re
 import { generateResumePdfBlob, resumifyResumeDataToExportDocument, uploadResumeExport } from '@/lib/falood/clientExport';
 import { isResumeDataEffectivelyEmpty } from '@/lib/falood/resumeEmptyCheck';
 import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
+import { normalizeImportedResumeData } from '@/components/falood/resumify/utils/importedResumeData';
 import { STUDIO_PAGE_FIT_CHANNEL } from '@/lib/falood/studioPageFit';
 import type { ResumeData } from '@/components/falood/resumify/types/resume';
 import type { ResumeVersion } from '@/components/falood/resumify/contexts/ResumeContext';
@@ -146,7 +147,8 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     throw new Error('The server returned no resume content for this session.');
                 }
                 {
-                    dispatch({ type: 'IMPORT_RESUME_DATA', payload: json.data.resumeData });
+                    const loadedResume = normalizeImportedResumeData(json.data.resumeData);
+                    dispatch({ type: 'IMPORT_RESUME_DATA', payload: loadedResume });
                     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: json.data.jobDescription || '' });
                     // candidateId may also be embedded in a legacy "meta-candidate"
                     // chatHistory entry (how this was stashed before candidate_id
@@ -174,7 +176,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     dispatch({ type: 'SET_VERSIONS', payload: loadedVersions });
 
                     studio.markLoaded({
-                        resumeData: json.data.resumeData,
+                        resumeData: loadedResume,
                         chatHistory: seededHistory,
                         jobDescription: json.data.jobDescription || '',
                         versions: loadedVersions,
@@ -415,11 +417,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                             "w-full xl:w-[520px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
                             "xl:flex"
                         )} style={{ height: 780, flexShrink: 0 }}>
-                            <div style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+                            <div className="studio-panel-tabs" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: 8 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                         <Button
-                                            variant={activePanel === 'form' ? 'default' : 'ghost'}
+                                            aria-pressed={activePanel === 'form'} variant={activePanel === 'form' ? 'default' : 'ghost'}
                                             size="sm"
                                             onClick={() => setActivePanel('form')}
                                             style={{ borderRadius: 8 }}
@@ -427,7 +429,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                                             Content
                                         </Button>
                                         <Button
-                                            variant={activePanel === 'customize' ? 'default' : 'ghost'}
+                                            aria-pressed={activePanel === 'customize'} variant={activePanel === 'customize' ? 'default' : 'ghost'}
                                             size="sm"
                                             onClick={() => setActivePanel('customize')}
                                             style={{ borderRadius: 8 }}
@@ -436,7 +438,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                                             Customize
                                         </Button>
                                         <Button
-                                            variant={activePanel === 'settings' ? 'default' : 'ghost'}
+                                            aria-pressed={activePanel === 'settings'} variant={activePanel === 'settings' ? 'default' : 'ghost'}
                                             size="sm"
                                             onClick={() => setActivePanel('settings')}
                                             style={{ borderRadius: 8 }}

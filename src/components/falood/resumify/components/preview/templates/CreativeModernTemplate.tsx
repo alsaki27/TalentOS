@@ -132,6 +132,8 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                           {edu.institution}
                         </div>
                         <div className="text-xs">{edu.graduationYear}</div>
+                        {edu.gpa && <div className="text-xs">GPA: {edu.gpa}</div>}
+                        {edu.honors && <div className="text-xs italic">{edu.honors}</div>}
                       </div>
                     ))}
                   </div>

@@ -139,7 +139,7 @@ export const ColorCustomizer: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent>
                   {fontOptions.map((font) => (
-                    <SelectItem key={font.value} value={font.value}>
+                    <SelectItem className="studio-setting-option" key={font.value} value={font.value}>
                       {font.label}
                     </SelectItem>
                   ))}
@@ -158,7 +158,7 @@ export const ColorCustomizer: React.FC = () => {
                 </SelectTrigger>
                 <SelectContent>
                   {fontSizeOptions.map((size) => (
-                    <SelectItem key={size.value} value={String(size.value)}>
+                    <SelectItem className="studio-setting-option" key={size.value} value={String(size.value)}>
                       {size.label}
                     </SelectItem>
                   ))}

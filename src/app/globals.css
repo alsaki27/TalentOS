@@ -1287,6 +1287,48 @@ button:disabled {
   transform: none;
 }
 
+:root { --studio-selection: #15803d; }
+.dark { --studio-selection: var(--success); }
+
+.studio-editor-controls button:is([role="radio"], [role="checkbox"]) {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--ink-soft);
+  box-shadow: none;
+}
+
+.studio-editor-controls button[role="radio"] { border-radius: 50%; }
+
+.studio-editor-controls button[role="switch"] {
+  padding: 0;
+  border: 2px solid transparent;
+  background: var(--border);
+  box-shadow: none;
+}
+
+.studio-editor-controls button:is([role="radio"], [role="checkbox"], [role="switch"])[aria-checked="true"] {
+  color: #fff;
+  background: var(--studio-selection);
+  border-color: var(--studio-selection);
+}
+
+.studio-editor-controls :is(label:has(+ button[aria-checked="true"]), button[aria-checked="true"] + label) {
+  color: var(--studio-selection);
+}
+
+.studio-editor-controls button[aria-pressed="true"],
+.studio-panel-tabs button[aria-pressed="true"],
+.studio-setting-option[data-state="checked"] {
+  background: color-mix(in srgb, var(--studio-selection) 14%, transparent);
+  color: var(--studio-selection);
+  border-color: var(--studio-selection);
+}
+
 .btn-primary {
   background: linear-gradient(135deg, #8b5cf6, #3b82f6); /* Violet to Blue gradient */
   color: #ffffff;

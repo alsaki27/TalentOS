@@ -70,7 +70,7 @@ export const ResumeForm: React.FC<ResumeFormProps> = ({
   };
 
   return (
-    <ScrollArea className="h-full">
+    <ScrollArea className="studio-editor-controls h-full">
       {renderPanel()}
     </ScrollArea>
   );

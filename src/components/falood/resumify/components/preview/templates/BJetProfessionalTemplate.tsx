@@ -303,7 +303,17 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
       )}
 
       {/* Technical Skills */}
-      {skills && skills.categorized.length > 0 && (
+      {skills.mode === 'simple' && skills.simple.length > 0 && (
+        <div className="mb-4 page-break-inside-avoid">
+          <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
+            Technical Skills 技術スキル
+          </h2>
+          <ul className="list-disc pl-5">
+            {skills.simple.map((skill, index) => <li key={index}>{skill}</li>)}
+          </ul>
+        </div>
+      )}
+      {skills.mode === 'categorized' && skills.categorized.length > 0 && (
         <div className="mb-4 page-break-inside-avoid">
           <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
             Technical Skills 技術スキル

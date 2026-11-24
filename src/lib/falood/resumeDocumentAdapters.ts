@@ -54,7 +54,7 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
   const skills = data?.skills ?? {};
   const groups = Array.isArray(skills.categorized) ? skills.categorized : [];
   const simpleSkills = Array.isArray(skills.simple) ? skills.simple : [];
-  const skillSections = groups.length > 0
+  const skillSections = (skills.mode === "categorized" || (skills.mode !== "simple" && groups.length > 0))
     ? groups.map((group: any, index: number) => ({
         id: group?.id || `skill-${index}`,
         title: group?.name || "Skills",
@@ -65,6 +65,9 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
   return normalizeResumeContentForExport({
     header: {
       fullName: typeof personalInfo.fullName === "string" ? personalInfo.fullName : "",
+      jobTitle: personalInfo.jobTitle,
+      profileImage: personalInfo.profileImage,
+      birthDate: personalInfo.birthDate,
       location: personalInfo.location,
       phone: personalInfo.phone,
       email: personalInfo.email,
@@ -82,7 +85,9 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
       company: entry?.company || "",
       location: entry?.location,
       startDate: entry?.startDate || "",
-      endDate: entry?.current ? undefined : entry?.endDate,
+      endDate: entry?.endDate,
+      isCurrent: entry?.current === true,
+      description: entry?.description,
       bullets: (Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : []).map((text: unknown, bulletIndex: number) => ({
         id: `experience-${index}-bullet-${bulletIndex}`,
         text: typeof text === "string" ? text : "",
@@ -94,13 +99,19 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
       school: entry?.institution || "",
       location: entry?.location,
       graduationDate: entry?.graduationYear,
+      gpa: entry?.gpa,
+      honors: entry?.honors,
     })) : [],
     projects: Array.isArray(data?.projects) ? data.projects.map((entry: any, index: number) => ({
       id: entry?.id || `project-${index}`,
-      title: entry?.title || "",
+      name: entry?.title || "",
       description: entry?.description,
       bullets: [],
       technologies: Array.isArray(entry?.technologies) ? entry.technologies : [],
+      liveUrl: entry?.liveUrl,
+      githubUrl: entry?.githubUrl,
+      startDate: entry?.startDate,
+      endDate: entry?.endDate,
     })) : [],
     customSections: Array.isArray(data?.customSections) ? data.customSections.map((section: any, index: number) => ({
       id: section?.id || `custom-${index}`,
@@ -181,6 +192,7 @@ export function mergeResumifyEditorIntoBaseResume(
     header: converted.header,
     summary: converted.summary,
     skills: converted.skills,
+    ...(rawResumeData.skills ? { studioSkills: rawResumeData.skills } : {}),
     experience: converted.experience,
     education: converted.education,
     projects: converted.projects,

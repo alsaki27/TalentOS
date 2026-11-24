@@ -203,6 +203,8 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                         <h4 className={` font-semibold`}>{edu.degree}</h4>
                         <div style={{ color: colors.secondary }}>{edu.institution}</div>
                         <div className="text-xs">{edu.graduationYear}</div>
+                        {edu.gpa && <div className="text-xs">GPA: {edu.gpa}</div>}
+                        {edu.honors && <div className="text-xs italic">{edu.honors}</div>}
                       </div>
                     ))}
                   </div>

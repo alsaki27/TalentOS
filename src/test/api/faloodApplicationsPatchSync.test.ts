@@ -88,13 +88,21 @@ describe("saving page fit from a linked Tailor Studio", () => {
     expect(mocks.queryOne).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the separate base resume sync", async () => {
-    mocks.queryOne.mockReset().mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: SESSION, name: `base_resume:${VERSION}` })
-      .mockResolvedValueOnce({ content: EXISTING });
+  it("commits the linked base resume before acknowledging Save", async () => {
+    mocks.queryOne.mockReset().mockResolvedValueOnce({ id: VERSION, content: EXISTING, source: "base_resume" })
+      .mockResolvedValueOnce({ id: SESSION, name: `base_resume:${VERSION}` });
     expect((await patch({ resumeData: RESUME, pageUtilizations: [0.9] })).status).toBe(200);
-    expect(mocks.execute).toHaveBeenCalledWith(expect.stringContaining("UPDATE base_resumes"), expect.any(Array));
+    const [sql, parameters] = mocks.queryOne.mock.calls[1];
+    expect(sql).toContain("UPDATE base_resumes");
+    expect(sql).toContain("AND EXISTS (SELECT 1 FROM synced)");
+    expect(JSON.parse(parameters.at(-2))).toMatchObject({ summary: { text: RESUME.summary }, studioSkills: RESUME.skills });
     expect(mocks.measureResumePageFitMetrics).not.toHaveBeenCalled();
+  });
+
+  it("returns a conflict if the linked base write cannot be applied", async () => {
+    mocks.queryOne.mockReset().mockResolvedValueOnce({ id: VERSION, content: EXISTING, source: "base_resume" })
+      .mockResolvedValueOnce(null);
+    expect((await patch({ resumeData: RESUME })).status).toBe(409);
   });
 
   it("leaves page fit alone for chat-only requests", async () => {
