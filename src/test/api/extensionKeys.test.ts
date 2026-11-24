@@ -64,4 +64,22 @@ describe("admin extension API key ownership", () => {
     expect((await response.json()).error).toContain("active team member");
     expect(mocks.queryOne).toHaveBeenCalledTimes(1);
   });
+
+  it("requires ownership for the dedicated recorder scope", async () => {
+    const response = await POST(new NextRequest("https://talentos.test/api/admin/extension-keys", {
+      method: "POST", body: JSON.stringify({ label: "Recorder", scopes: ["extension:submission-records:write"] }),
+    }));
+    expect(response.status).toBe(400);
+    expect(mocks.queryOne).not.toHaveBeenCalled();
+  });
+
+  it("checks candidate binding before issuing a recorder key", async () => {
+    mocks.queryOne.mockResolvedValueOnce({user_id:"owner"}).mockResolvedValueOnce(null);
+    const response = await POST(new NextRequest("https://talentos.test/api/admin/extension-keys", {
+      method: "POST", body: JSON.stringify({ label: "Recorder", scopes: ["extension:submission-records:write"], ownerUserId:"owner", candidateId:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("active, available candidate");
+    expect(mocks.queryOne).toHaveBeenCalledTimes(2);
+  });
 });

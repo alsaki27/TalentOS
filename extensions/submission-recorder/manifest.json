@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "TalentOS Submission Recorder",
+  "version": "2.0.0",
+  "description": "Record form questions and answers for the candidate you select in TalentOS.",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms", "scripting", "activeTab", "unlimitedStorage"],
+  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_popup": "popup.html", "default_title": "TalentOS Submission Recorder"},
+  "options_page": "popup.html"
+}

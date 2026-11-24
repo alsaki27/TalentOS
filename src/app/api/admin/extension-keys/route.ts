@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { guardedSafetyCheck } from "@/lib/safetyCheck";
 import { requireCurrentUser } from "@/lib/auth";
+import { SUBMISSION_RECORD_SCOPE, SUBMISSION_UUID } from "@/lib/submissionRecords";
 
 const VALID_SCOPES = [
   "extension:job:capture",
@@ -16,6 +17,7 @@ const VALID_SCOPES = [
   "extension:adapters:read",
   "extension:resume:read",
   "extension:application:assign",
+  "extension:submission-records:write",
 ];
 
 async function sha256(input: string): Promise<string> {
@@ -69,10 +71,10 @@ export async function POST(request: NextRequest) {
     }
 
     const needsTeamMemberOwner = requestedScopes.some((scope) =>
-      scope === "extension:job:capture" || scope === "extension:application:assign"
+      scope === "extension:job:capture" || scope === "extension:application:assign" || scope === "extension:submission-records:write"
     );
     if (needsTeamMemberOwner && (typeof ownerUserId !== "string" || !ownerUserId.trim())) {
-      return NextResponse.json({ error: "An active team member must own job-capture and candidate-logging keys." }, { status: 400 });
+      return NextResponse.json({ error: "An active team member must own job-capture, candidate-logging, and submission-recorder keys." }, { status: 400 });
     }
     if (ownerUserId) {
       const owner = await queryOne<{ user_id: string }>(
@@ -81,6 +83,16 @@ export async function POST(request: NextRequest) {
         [ownerUserId],
       );
       if (!owner) return NextResponse.json({ error: "Key owner must be an active team member." }, { status: 400 });
+    }
+
+    if (requestedScopes.includes(SUBMISSION_RECORD_SCOPE) && candidateId) {
+      if (typeof candidateId !== "string" || !SUBMISSION_UUID.test(candidateId)) {
+        return NextResponse.json({ error: "Candidate binding must be a TalentOS candidate ID." }, { status: 400 });
+      }
+      const candidate = await queryOne<{ id: string }>(
+        "SELECT id FROM candidates WHERE id=$1 AND status='active' AND COALESCE(pipeline_stage,'not_started') NOT IN ('paused','placed','dropped')", [candidateId],
+      );
+      if (!candidate) return NextResponse.json({ error: "Choose an active, available candidate for this recorder key." }, { status: 400 });
     }
 
     // Generate the key and hash it for storage

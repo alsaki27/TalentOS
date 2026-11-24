@@ -24,6 +24,7 @@ import { CandidateResumeFiles } from "@/components/candidates/CandidateResumeFil
 import { CandidateProfileSummary } from "@/components/candidates/CandidateProfileSummary";
 import overviewStyles from "@/components/candidates/CandidateProfileOverview.module.css";
 import { CandidateApplicationFactsPanel } from "@/components/candidates/CandidateApplicationFactsPanel";
+import { CandidateSubmissionRecords } from "@/components/candidates/CandidateSubmissionRecords";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 import CustomInterviewHub from "@/components/candidates/CustomInterviewHub";
 import { CANDIDATE_PROFILE_TABS, initialCandidateProfileTab, type CandidateProfileTab } from "@/lib/candidateProfileTabs";
@@ -1210,6 +1211,10 @@ export default function CandidateProfilePage() {
               onAdd={() => setShowAddVariant(true)} onDelete={deleteVariant} />
           </div>
         </>
+      )}
+
+      {activeTab === "Submission Records" && (
+        <CandidateSubmissionRecords key={id} candidateId={id} canManageKeys={me?.profile?.role === "admin"} />
       )}
 
       {activeTab === "Training Audit" && (

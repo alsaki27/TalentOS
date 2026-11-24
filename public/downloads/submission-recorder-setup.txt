@@ -1,0 +1,33 @@
+TalentOS Submission Recorder — Chrome, Brave and Edge
+
+1. In TalentOS, open Admin > Extension API Keys.
+2. Create a key with only Submission Recorder permission and an active team-member owner.
+   Leave Candidate binding blank to choose among active candidates, or bind it to one candidate ID.
+3. Download the recorder ZIP from that page and extract it into a permanent folder.
+4. Open your browser's Extensions page, enable Developer mode, click Load unpacked,
+   and select the extracted folder. Repeat in each browser profile/PC you use.
+5. Enter https://talent.skarion.com, your API key, and a distinct browser/computer name.
+6. Allow recording on the current HTTPS form site or all HTTPS websites.
+7. Choose the candidate and click Start recording.
+
+The selection persists across browser restarts. Recording runs without page popups.
+The extension icon shows REC while enabled, OFF while paused, and ! for sync errors.
+Switch candidates in the extension before filling another person's forms.
+Read the records in that person's TalentOS profile > Submission Records.
+
+Each record contains the question, answer, source page, recording/sync timestamps,
+field details, browser instance, and responsible team member. Browser instances
+using the same TalentOS candidate share that candidate's central history.
+Entries are observed form inputs, not confirmation that an application succeeded.
+
+Offline entries remain in that browser's local queue and retry while the browser
+is running. Do not uninstall the extension or clear its data until the queue is empty.
+The extension cannot run while the browser/PC is closed or on restricted browser pages.
+Passwords, hidden/file fields, payment credentials and security codes are excluded.
+TalentOS pages are excluded to avoid recording API keys and internal profile edits.
+URL query strings and fragments are not stored. Only enabled sites are recorded.
+
+To stop: click Pause or remove recording websites. To revoke access: revoke the key
+in TalentOS. A rejected key/candidate pauses capture; queued records keep their
+original candidate. Rotate a key using Change connection, with the same owner/server,
+then resume. Separate keys per browser allow independent revocation.

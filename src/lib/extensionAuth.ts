@@ -14,6 +14,7 @@ export const EXTENSION_SCOPES = {
   adaptersRead: "extension:adapters:read",
   resumeRead: "extension:resume:read",
   applicationAssign: "extension:application:assign",
+  submissionRecordsWrite: "extension:submission-records:write",
 } as const;
 
 export type ExtensionScope = typeof EXTENSION_SCOPES[keyof typeof EXTENSION_SCOPES];

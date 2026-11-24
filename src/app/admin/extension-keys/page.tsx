@@ -28,6 +28,7 @@ const ALL_SCOPES = [
   { value: "extension:adapters:read", label: "Adapters Read" },
   { value: "extension:resume:read", label: "Resume Read" },
   { value: "extension:application:assign", label: "Match & Log Candidates" },
+  { value: "extension:submission-records:write", label: "Submission Recorder" },
 ];
 
 export default function ExtensionKeysAdminPage() {
@@ -81,7 +82,7 @@ export default function ExtensionKeysAdminPage() {
 
   useEffect(() => { loadAuth(); loadKeys(); loadTeamMembers(); }, []);
 
-  const needsOwner = selectedScopes.has("extension:job:capture") || selectedScopes.has("extension:application:assign");
+  const needsOwner = selectedScopes.has("extension:job:capture") || selectedScopes.has("extension:application:assign") || selectedScopes.has("extension:submission-records:write");
 
   function toggleScope(s: string) {
     setSelectedScopes((prev) => {
@@ -170,6 +171,8 @@ export default function ExtensionKeysAdminPage() {
 
     {error && <p className={`form-error ${styles.alert}`}>{error}</p>}
     {message && <p className={styles.notice}>{message}</p>}
+
+    <p className={styles.notice}>For the form recorder, select <strong>Submission Recorder</strong> and choose its team-member owner. Paste the new key into the extension, then select a TalentOS candidate. Entries appear in that candidate&apos;s <strong>Submission Records</strong> tab. <a href="/downloads/talentos-submission-recorder.zip" download>Download recorder extension</a> · <a href="/downloads/submission-recorder-setup.txt">Setup instructions</a></p>
 
     {createdKey && <section className={styles.createdKey} aria-live="polite">
       <div className={styles.createdHeading}><span className={styles.successIcon}>✓</span><div><h2>Key created</h2><p>Save this key now. It is shown only once.</p></div></div>
