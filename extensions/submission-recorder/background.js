@@ -21,7 +21,7 @@ function safeServer(value) {
 }
 async function api(c,path,options={}) {
   const response = await fetch(c.server+'/api/extension/v1/submission-records'+path, {
-    ...options, headers:{Authorization:`Bearer ${c.apiKey}`,'Content-Type':'application/json','X-TalentOS-Client':'submission-recorder/2.0.0'}, signal:AbortSignal.timeout(20000)
+    ...options, headers:{Authorization:`Bearer ${c.apiKey}`,'Content-Type':'application/json','X-TalentOS-Client':'submission-recorder/2.0.1'}, signal:AbortSignal.timeout(20000)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { const error = new Error(data.error?.message || `TalentOS returned ${response.status}.`); error.status=response.status; throw error; }
@@ -100,8 +100,13 @@ function allowed(url,c) {
   } catch { return false; }
 }
 async function handle(message,sender) {
+  if (sender.id!==chrome.runtime.id) throw new Error('Unsupported sender.');
+  // Options pages opened in a browser tab also have sender.tab. Identify our
+  // controls by their extension URL, not by the absence of a tab.
+  const isControlPage = sender.url?.split(/[?#]/,1)[0] === chrome.runtime.getURL('popup.html');
   const c = await config();
-  if (sender.tab) {
+  if (!isControlPage) {
+    if (!sender.tab || !/^https?:\/\//.test(sender.url||'')) throw new Error('Unsupported sender.');
     if (message.type==='CONTEXT') return context();
     if (message.type!=='CAPTURE') throw new Error('Unsupported page request.');
     const e=message.event;
@@ -113,7 +118,6 @@ async function handle(message,sender) {
     await store('readwrite',s=>s.put({id:e.id,server:c.server,ownerId:c.ownerId,record}));
     await sync(); return {saved:true};
   }
-  if (sender.id!==chrome.runtime.id) throw new Error('Unsupported sender.');
   switch(message.type) {
     case 'STATUS': return {config:{...c,apiKey:undefined},queued:await store('readonly',s=>s.count()),...await chrome.storage.local.get(['syncError','lastSync'])};
     case 'CONNECT': {

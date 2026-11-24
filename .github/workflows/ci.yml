@@ -22,6 +22,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - name: Test submission recorder extension
+        run: node --test extensions/submission-recorder/tests/*.test.mjs
       - run: npm run build
 
       - name: Build for Cloudflare (OpenNext)

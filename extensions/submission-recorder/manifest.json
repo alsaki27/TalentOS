@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TalentOS Submission Recorder",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Record form questions and answers for the candidate you select in TalentOS.",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "alarms", "scripting", "activeTab", "unlimitedStorage"],
