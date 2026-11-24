@@ -28,4 +28,17 @@ describe("Candidate activity API", () => {
     expect((await GET(request("?limit=20&page=2"), {params:{id}})).status).toBe(200);
     expect(mocks.activity).toHaveBeenCalledWith(id,{limit:20,cursor:null,type:undefined,page:2});
   });
+  it.each(["dateStart=2026-02-30", "dateEnd=not-a-date", "dateStart=2026-11-25&dateEnd=2026-11-24"])("rejects invalid timeline dates before reading activity: %s", async search => {
+    expect((await GET(request(`?${search}`), { params: { id } })).status).toBe(400);
+    expect(mocks.activity).not.toHaveBeenCalled();
+  });
+  it("combines inclusive date filters with the activity type and numbered page", async () => {
+    expect((await GET(request("?limit=20&page=2&type=mock&dateStart=2026-11-01&dateEnd=2026-11-24"), { params: { id } })).status).toBe(200);
+    expect(mocks.activity).toHaveBeenCalledWith(id, { limit: 20, cursor: null, type: "mock", page: 2, dateStart: "2026-11-01", dateEnd: "2026-11-24" });
+  });
+  it("supports a one-sided date bound and preserves the range when loading older entries", async () => {
+    const cursor = JSON.stringify(["2026-11-24T12:00:00Z", "event"]);
+    expect((await GET(request(`?limit=7&cursor=${encodeURIComponent(cursor)}&dateEnd=2026-11-24`), { params: { id } })).status).toBe(200);
+    expect(mocks.activity).toHaveBeenCalledWith(id, { limit: 7, cursor: { at: "2026-11-24T12:00:00.000Z", id: "event" }, type: undefined, dateEnd: "2026-11-24" });
+  });
 });

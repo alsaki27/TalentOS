@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as repo from "@/server/repositories/candidateActivityRepository";
 import { getCandidateActivity } from "@/server/services/candidateActivityService";
+import { readActivityCursor } from "@/lib/candidateActivity";
 const mocks = vi.hoisted(() => ({ query: vi.fn(), queryOne: vi.fn(), upcoming: vi.fn() }));
 vi.mock("@/server/db/neon", () => ({ query: mocks.query, queryOne: mocks.queryOne }));
 vi.mock("@/server/repositories/candidateActivityRepository", async (original) => ({ ...await original<typeof repo>(), candidateUpcoming: mocks.upcoming }));
@@ -85,5 +86,29 @@ describe("Candidate activity source accuracy", () => {
     expect(result?.items[0].currentDetails).toContainEqual({ label: "Staff notes", value: "Bring examples." });
     expect(result?.items[1].details.find((field) => field.label === "Appointment")?.value).toContain("Nov 25");
     expect(result?.items[1].currentDetails?.find((field) => field.label === "Appointment")?.value).toContain("Nov 26");
+  });
+  it("filters by displayed date and type before counting and paginating without changing upcoming items", async () => {
+    const audit = Array.from({ length: 42 }, (_, index) => ({ id: `entry-${index}`, application_id: "app", action: "interview_stage.updated", created_at: new Date(Date.UTC(2026, 10, 24, 5, index)).toISOString(), metadata: {} }));
+    audit.push({ ...audit[0], id: "before", created_at: "2026-11-24T04:59:59Z" }, { ...audit[0], id: "after", created_at: "2026-11-25T05:00:00Z" });
+    mocks.query.mockImplementation(async (sql: string) => sql === repo.ACTIVITY_AUDIT_SQL ? audit : sql === repo.ACTIVITY_MOCKS_SQL ? [{ id: "mock", created_at: "2026-11-24T12:00:00Z" }] : []);
+    mocks.upcoming.mockResolvedValue(new Map([[id, [{ id: "future", at: "2027-01-01" }]]]));
+    const options = { limit: 20, cursor: null, type: "interview" as const, dateStart: "2026-11-24", dateEnd: "2026-11-24" };
+    const first = await getCandidateActivity(id, { ...options, page: 1 });
+    const second = await getCandidateActivity(id, { ...options, page: 2 });
+    const last = await getCandidateActivity(id, { ...options, page: 3 });
+    expect(first?.total).toBe(42);
+    expect(first?.items).toHaveLength(20);
+    expect(second?.items).toHaveLength(20);
+    expect(last?.items).toHaveLength(2);
+    expect(new Set([...first!.items, ...second!.items, ...last!.items].map(item => item.id)).size).toBe(42);
+    const next = await getCandidateActivity(id, { ...options, cursor: readActivityCursor(first!.nextCursor) });
+    expect(next?.items.map(item => item.id)).toEqual(second?.items.map(item => item.id));
+    expect(first?.upcoming).toEqual([{ id: "future", at: "2027-01-01" }]);
+  });
+  it("returns an empty filtered page with zero total and a clearable full history", async () => {
+    mocks.query.mockImplementation(async (sql: string) => sql === repo.ACTIVITY_NOTES_SQL ? [{ id: "note", date: "2026-11-23", content: "Recorded note" }] : []);
+    const empty = await getCandidateActivity(id, { limit: 20, cursor: null, dateStart: "2026-11-24", dateEnd: "2026-11-24" });
+    expect(empty).toMatchObject({ items: [], total: 0, nextCursor: null });
+    expect((await getCandidateActivity(id, { limit: 20, cursor: null }))?.total).toBe(1);
   });
 });

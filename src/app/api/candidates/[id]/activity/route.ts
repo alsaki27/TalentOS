@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { CANDIDATE_ACTIVITY_TYPES, readActivityCursor, type CandidateActivityType } from "@/lib/candidateActivity";
+import { CANDIDATE_ACTIVITY_TYPES, readActivityCursor, readActivityDateRange, type CandidateActivityType } from "@/lib/candidateActivity";
 import { getCandidateActivity } from "@/server/services/candidateActivityService";
 import { canManageCustomActivity } from "@/lib/candidateCustomActivity";
 
@@ -13,6 +13,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
   const limit = Number(search.get("limit") || 7);
   const type = search.get("type") || undefined;
   const page = search.has("page") ? Number(search.get("page")) : undefined;
+  let dateRange;
+  try { dateRange = readActivityDateRange(search); }
+  catch { return NextResponse.json({ error: "Provide valid activity dates (YYYY-MM-DD), with the start date on or before the end date." }, { status: 400 }); }
   let cursor;
   try { cursor = readActivityCursor(search.get("cursor")); }
   catch { return NextResponse.json({ error: "Invalid activity cursor." }, { status: 400 }); }
@@ -20,7 +23,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
     return NextResponse.json({ error: "Invalid activity filters." }, { status: 400 });
   }
   try {
-    const data = await getCandidateActivity(params.id, { limit, cursor, type: type as CandidateActivityType | undefined, ...(page ? { page } : {}) });
+    const data = await getCandidateActivity(params.id, { limit, cursor, type: type as CandidateActivityType | undefined, ...(page ? { page } : {}), ...dateRange });
     return data ? NextResponse.json({ ...data, canManageCustom: canManageCustomActivity(context?.profile) }, { headers: { "Cache-Control": "private, no-store" } }) :
       NextResponse.json({ error: "Candidate not found." }, { status: 404 });
   } catch { return NextResponse.json({ error: "Could not load candidate activity." }, { status: 500 }); }

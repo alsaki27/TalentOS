@@ -3,6 +3,7 @@ export const CANDIDATE_ACTIVITY_TYPES = ["interview", "mock", "training", "opt",
 export type CandidateActivityType = typeof CANDIDATE_ACTIVITY_TYPES[number];
 export const CANDIDATE_CARD_UPCOMING_LIMIT = 1;
 export const CANDIDATE_ACTIVITY_REFRESH_MS = 15_000;
+export interface CandidateActivityDateRange { dateStart?: string; dateEnd?: string }
 export interface CandidateActivityItem {
   id: string;
   candidateId: string;
@@ -61,6 +62,30 @@ export function activityDateLabel(value: string, dateOnly = false, timeZone?: st
     : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", ...(timeZone ? { timeZone } : {}) };
   try { return new Intl.DateTimeFormat("en-US", options).format(date); }
   catch { return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).format(date); }
+}
+
+export function readActivityDateRange(search: URLSearchParams): CandidateActivityDateRange {
+  const dateStart = search.get("dateStart") || undefined;
+  const dateEnd = search.get("dateEnd") || undefined;
+  for (const date of [dateStart, dateEnd]) {
+    if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || activityDate(date) !== date)) throw new Error("Invalid activity date range.");
+  }
+  if (dateStart && dateEnd && dateStart > dateEnd) throw new Error("The end date must be on or after the start date.");
+  return { ...(dateStart ? { dateStart } : {}), ...(dateEnd ? { dateEnd } : {}) };
+}
+
+/** Compare the calendar dates shown in the timeline, including both boundary days. */
+export function activityInDateRange(item: Pick<CandidateActivityItem, "at" | "dateOnly" | "timeZone">, range: CandidateActivityDateRange): boolean {
+  if (!range.dateStart && !range.dateEnd) return true;
+  let day = item.at.slice(0, 10);
+  if (!item.dateOnly) {
+    const options: Intl.DateTimeFormatOptions = { year: "numeric", month: "2-digit", day: "2-digit", timeZone: item.timeZone || "UTC" };
+    let parts: Intl.DateTimeFormatPart[];
+    try { parts = new Intl.DateTimeFormat("en-US", options).formatToParts(new Date(item.at)); }
+    catch { parts = new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).formatToParts(new Date(item.at)); }
+    day = ["year", "month", "day"].map(type => parts.find(part => part.type === type)?.value).join("-");
+  }
+  return (!range.dateStart || day >= range.dateStart) && (!range.dateEnd || day <= range.dateEnd);
 }
 
 export function readActivityCursor(value: string | null): { at: string; id: string } | null {

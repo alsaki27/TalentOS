@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Activity, ArrowLeft, ArrowUpRight, BookOpen, CalendarClock, Clock3, ExternalLink, GraduationCap, ShieldCheck, NotebookPen, Plus, Pencil, Trash2 } from "lucide-react";
 import { activityDateLabel, activityScheduleLabel, CANDIDATE_ACTIVITY_TYPES, CANDIDATE_CARD_UPCOMING_LIMIT, CANDIDATE_ACTIVITY_REFRESH_MS, safeActivityUrl, type CandidateActivityData, type CandidateActivityItem, type CandidateActivityType } from "@/lib/candidateActivity";
 import type { CandidateCustomActivity } from "@/lib/candidateCustomActivity";
@@ -105,6 +106,8 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [type, setType] = useState("");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
   const [page, setPage] = useState(1);
   const [customEditor, setCustomEditor] = useState<{ activity?: CandidateCustomActivity; deleting?: boolean } | null>(null);
   const [upcomingCount, setUpcomingCount] = useState(3);
@@ -121,13 +124,15 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
     const params = new URLSearchParams({ limit: full ? "20" : "7" });
     if (full) params.set("page", String(page));
     if (type) params.set("type", type);
+    if (dateStart) params.set("dateStart", dateStart);
+    if (dateEnd) params.set("dateEnd", dateEnd);
     void fetch(`/api/candidates/${candidateId}/activity?${params}`, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => { const body = await response.json(); if (!response.ok) throw new Error(body.error || "Could not load candidate activity."); return body; })
       .then((body) => { if (!controller.signal.aborted && version === requestVersion.current) setData(body); })
       .catch((cause) => { if (!controller.signal.aborted && version === requestVersion.current) setError(cause.message); })
       .finally(() => { if (!controller.signal.aborted && version === requestVersion.current) setLoading(false); });
     return () => controller.abort();
-  }, [candidateId, full, type, attempt, page]);
+  }, [candidateId, full, type, dateStart, dateEnd, attempt, page]);
 
   useEffect(() => { if (full && data && page > Math.max(1, Math.ceil(data.total / 20))) setPage(Math.max(1, Math.ceil(data.total / 20))); }, [data, full, page]);
 
@@ -139,13 +144,15 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
     const params = new URLSearchParams({ limit: full ? "20" : "7" });
     if (full) params.set("page", String(page));
     if (type) params.set("type", type);
+    if (dateStart) params.set("dateStart", dateStart);
+    if (dateEnd) params.set("dateEnd", dateEnd);
     try {
       const response = await fetch(`/api/candidates/${candidateId}/activity?${params}`, { cache: "no-store" });
       if (!response.ok) return;
       const body = await response.json();
       if (version === requestVersion.current && quietVersion === quietRefreshRequest.current && !expandedHistory.current) setData(body);
     } catch { /* Keep the last successful view. Explicit refresh surfaces errors. */ }
-  }, [candidateId, full, type, page]);
+  }, [candidateId, full, type, dateStart, dateEnd, page]);
   useEffect(() => {
     const timer = window.setInterval(() => { void refresh(); }, CANDIDATE_ACTIVITY_REFRESH_MS);
     const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("candidate-activity") : null;
@@ -162,6 +169,8 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
     setLoadingMore(true); setError("");
     const params = new URLSearchParams({ limit: full ? "25" : "7", cursor: data.nextCursor });
     if (type) params.set("type", type);
+    if (dateStart) params.set("dateStart", dateStart);
+    if (dateEnd) params.set("dateEnd", dateEnd);
     try {
       const response = await fetch(`/api/candidates/${candidateId}/activity?${params}`, { cache: "no-store" });
       const body: CandidateActivityData & { error?: string } = await response.json();
@@ -188,13 +197,22 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
             <button type="button" disabled={loading || loadingMore} onClick={() => setAttempt((value) => value + 1)}>Refresh</button>
           </div>
         </header>
-        {full && <label className={styles.filter}>Activity type<select aria-label="Activity type" value={type} onChange={(event) => { setType(event.target.value); setPage(1); }}>
-          <option value="">All activity</option>{CANDIDATE_ACTIVITY_TYPES.filter((kind) => kind !== "follow_up").map((kind) => <option key={kind} value={kind}>{typeNames[kind]}</option>)}
-        </select></label>}
+        {full && <>
+          <div className={styles.filters} role="group" aria-label="Activity filters">
+            <label className={styles.filter}>Activity type<select aria-label="Activity type" value={type} onChange={(event) => { setType(event.target.value); setPage(1); }}>
+              <option value="">All activity</option>{CANDIDATE_ACTIVITY_TYPES.filter((kind) => kind !== "follow_up").map((kind) => <option key={kind} value={kind}>{typeNames[kind]}</option>)}
+            </select></label>
+            <div className={styles.dateFilter} role="group" aria-label="Timeline dates"><span>Timeline dates</span>
+              <DateRangePicker dateStart={dateStart} dateEnd={dateEnd} onChange={(start, end) => { setDateStart(start); setDateEnd(end); setPage(1); }} />
+            </div>
+            {(type || dateStart || dateEnd) && <button type="button" onClick={() => { setType(""); setDateStart(""); setDateEnd(""); setPage(1); }}>Clear filters</button>}
+          </div>
+          <p className={styles.filterHint}>Filter by the dates shown in the timeline. Start and end dates are included.</p>
+        </>}
         {error && <div className={styles.error} role="alert">{error} <button type="button" onClick={() => data?.nextCursor ? void loadMore() : setAttempt((value) => value + 1)}>Retry</button></div>}
         {loading && <p className={styles.empty} role="status">Loading candidate activity…</p>}
         {!loading && data?.warnings.map((warning) => <p className={styles.warning} key={warning}>{warning}</p>)}
-        {!loading && !data?.items.length && !error && <p className={styles.empty}>{data?.warnings.length ? "Activity could not be fully loaded from its sources." : `No recorded activity${type ? " in this category" : " yet"}.`}</p>}
+        {!loading && !data?.items.length && !error && <p className={styles.empty}>{data?.warnings.length ? "Activity could not be fully loaded from its sources." : type || dateStart || dateEnd ? "No recorded activity matches these filters." : "No recorded activity yet."}</p>}
         {!!data?.items.length && <ol className={styles.timeline}>{data.items.map((item) => <ActivityRow key={item.id} item={item} detailed={full}
           onCustomAction={data.canManageCustom ? (activity, deleting) => setCustomEditor({ activity, deleting }) : undefined} />)}</ol>}
         {data && full && <CandidateSectionPagination label="Activities" page={page} pageSize={20} total={data.total} onPageChange={setPage} pageSizeOptions={[20]} onPageSizeChange={() => setPage(1)} />}

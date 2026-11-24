@@ -1,5 +1,5 @@
 import { query, queryOne } from "@/server/db/neon";
-import { activityDate, activityDateLabel, activityPage, safeActivityUrl, type CandidateActivityData, type CandidateActivityItem, type CandidateActivityType } from "@/lib/candidateActivity";
+import { activityDate, activityDateLabel, activityInDateRange, activityPage, safeActivityUrl, type CandidateActivityData, type CandidateActivityDateRange, type CandidateActivityItem, type CandidateActivityType } from "@/lib/candidateActivity";
 import { CANDIDATE_PIPELINE_STAGES } from "@/lib/candidatePipeline";
 import * as repo from "@/server/repositories/candidateActivityRepository";
 import { customActivityState, type CandidateCustomActivity } from "@/lib/candidateCustomActivity";
@@ -37,7 +37,7 @@ function currentInterviewDetails(stage: Row | null | undefined) {
 
 export async function getCandidateActivity(candidateId: string, options: {
   limit: number; cursor: { at: string; id: string } | null; type?: CandidateActivityType; page?: number;
-}): Promise<CandidateActivityData | null> {
+} & CandidateActivityDateRange): Promise<CandidateActivityData | null> {
   const candidate = await queryOne<{ id: string; name: string; pipeline_stage: keyof typeof CANDIDATE_PIPELINE_STAGES; status: string; timezone: string | null }>(
     "SELECT id,name,pipeline_stage,status,timezone FROM candidates WHERE id=$1", [candidateId]);
   if (!candidate) return null;
@@ -67,7 +67,7 @@ export async function getCandidateActivity(candidateId: string, options: {
     details: CandidateActivityItem["details"], href: string, extra: Partial<CandidateActivityItem> = {}) {
     const at = activityDate(date);
     if (!at) return;
-    items.push({ id, candidateId, type, title, at, summary, dateOnly: at.length === 10, timeZone: candidate!.timezone,
+    items.push({ id, candidateId, type, title, at, summary, dateOnly: at.length === 10, timeZone: candidate!.timezone || "UTC",
       details, links: [{ label: "Open source", href }], ...extra });
   }
   for (const row of rows[0]) {
@@ -179,6 +179,6 @@ export async function getCandidateActivity(candidateId: string, options: {
   }
   try { upcoming = (await repo.candidateUpcoming([candidateId], 100)).get(candidateId) || []; }
   catch { warnings.push("Upcoming activities could not be loaded."); }
-  const filtered = options.type ? items.filter((item) => item.type === options.type) : items;
+  const filtered = items.filter((item) => (!options.type || item.type === options.type) && activityInDateRange(item, options));
   return { candidate: { id: candidate.id, name: candidate.name, timezone: candidate.timezone }, ...activityPage(filtered, options.limit, options.cursor, options.page), upcoming, current, warnings };
 }

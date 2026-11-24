@@ -9,7 +9,7 @@ interface DateRangePickerProps {
 
 export function DateRangePicker({ dateStart, dateEnd, onChange }: DateRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [viewDate, setViewDate] = useState(() => (dateStart ? new Date(dateStart) : new Date()));
+  const [viewDate, setViewDate] = useState(() => (dateStart ? new Date(`${dateStart}T12:00:00`) : new Date()));
   const [start, setStart] = useState<Date | null>(dateStart ? new Date(`${dateStart}T12:00:00`) : null);
   const [end, setEnd] = useState<Date | null>(dateEnd ? new Date(`${dateEnd}T12:00:00`) : null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,7 +56,8 @@ export function DateRangePicker({ dateStart, dateEnd, onChange }: DateRangePicke
     }
 
     setEnd(day);
-    onChange(start.toISOString().split("T")[0], day.toISOString().split("T")[0]);
+    const calendarDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    onChange(calendarDate(start), calendarDate(day));
     setIsOpen(false);
   }
 

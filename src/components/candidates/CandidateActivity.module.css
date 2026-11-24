@@ -60,8 +60,13 @@
 .empty { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.5; padding: 6px 0; }
 .warning { color: var(--warn); font-size: 12px; margin: 6px 0; }
 .error { color: var(--danger); font-size: 12px; padding: 10px 0; }
-.filter { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; margin: 0 0 14px; }
-.filter select { width: auto; min-width: 160px; }
+.filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px 12px; margin-bottom: 8px; }
+.filter, .dateFilter { display: grid; gap: 5px; min-width: 0; font-size: 12px; margin: 0; }
+.filter { flex: 1 1 160px; }
+.dateFilter { flex: 2 1 260px; }
+.filter select { width: 100%; min-width: 0; }
+.dateFilter > div > div { max-width: 100%; }
+.filterHint { margin: 0 0 14px; color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
 .fullHeader { margin-bottom: 20px; }
 .fullHeader h1 { margin: 12px 0 4px; font-size: 22px; overflow-wrap: anywhere; }
 .fullHeader p { color: var(--ink-soft); font-size: 13px; }
