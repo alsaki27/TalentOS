@@ -1,4 +1,18 @@
 let databasePromise, syncing;
+const RECORDING_SITES = ['https://*/*'];
+let controlQueue = Promise.resolve();
+const CONTROL_MUTATIONS = new Set(['CONNECT','SELECT','STOP']);
+function isControlSender(sender) {
+  return sender.id === chrome.runtime.id && sender.url?.split(/[?#]/,1)[0] === chrome.runtime.getURL('popup.html');
+}
+function handle(message,sender) {
+  if (isControlSender(sender) && CONTROL_MUTATIONS.has(message.type)) {
+    const pending = controlQueue.then(()=>processMessage(message,sender));
+    controlQueue = pending.catch(()=>{});
+    return pending;
+  }
+  return processMessage(message,sender);
+}
 function database() {
   return databasePromise ||= new Promise((resolve,reject) => {
     const request = indexedDB.open('talentos-submission-recorder',1);
@@ -21,7 +35,7 @@ function safeServer(value) {
 }
 async function api(c,path,options={}) {
   const response = await fetch(c.server+'/api/extension/v1/submission-records'+path, {
-    ...options, headers:{Authorization:`Bearer ${c.apiKey}`,'Content-Type':'application/json','X-TalentOS-Client':'submission-recorder/2.0.1'}, signal:AbortSignal.timeout(20000)
+    ...options, headers:{Authorization:`Bearer ${c.apiKey}`,'Content-Type':'application/json','X-TalentOS-Client':'submission-recorder/2.1.0'}, signal:AbortSignal.timeout(20000)
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { const error = new Error(data.error?.message || `TalentOS returned ${response.status}.`); error.status=response.status; throw error; }
@@ -31,7 +45,7 @@ async function badge() {
   const c = await config(), {syncError} = await chrome.storage.local.get('syncError');
   await chrome.action.setBadgeText({text:syncError?'!':c.enabled&&c.candidateId?'REC':'OFF'});
   await chrome.action.setBadgeBackgroundColor({color:syncError?'#b54708':c.enabled?'#176b52':'#64748b'});
-  await chrome.action.setTitle({title:syncError?`TalentOS recorder: ${syncError}`:c.enabled?`Recording for ${c.candidateName}`:'TalentOS recorder paused'});
+  await chrome.action.setTitle({title:syncError?`TalentOS recorder: ${syncError}`:c.enabled?`Recording for ${c.candidateName}`:'TalentOS recorder stopped'});
 }
 async function context() {
   const c = await config();
@@ -44,8 +58,8 @@ async function notifyTabs() {
 }
 async function register() {
   const c = await config(), matches = [];
-  for (const site of c.sites||[]) if (await chrome.permissions.contains({origins:[site]})) matches.push(site);
-  if (matches.length !== (c.sites||[]).length) {
+  for (const site of RECORDING_SITES) if (await chrome.permissions.contains({origins:[site]})) matches.push(site);
+  if (JSON.stringify(matches) !== JSON.stringify(c.sites||[])) {
     await chrome.storage.local.set({config:{...c,sites:matches,enabled:!!c.enabled && matches.length>0}});
   }
   const scripts = await chrome.scripting.getRegisteredContentScripts();
@@ -99,11 +113,11 @@ function allowed(url,c) {
     return (c.sites||[]).some(site => site==='https://*/*'?u.protocol==='https:':site===u.origin+'/*');
   } catch { return false; }
 }
-async function handle(message,sender) {
+async function processMessage(message,sender) {
   if (sender.id!==chrome.runtime.id) throw new Error('Unsupported sender.');
   // Options pages opened in a browser tab also have sender.tab. Identify our
   // controls by their extension URL, not by the absence of a tab.
-  const isControlPage = sender.url?.split(/[?#]/,1)[0] === chrome.runtime.getURL('popup.html');
+  const isControlPage = isControlSender(sender);
   const c = await config();
   if (!isControlPage) {
     if (!sender.tab || !/^https?:\/\//.test(sender.url||'')) throw new Error('Unsupported sender.');
@@ -121,6 +135,7 @@ async function handle(message,sender) {
   switch(message.type) {
     case 'STATUS': return {config:{...c,apiKey:undefined},queued:await store('readonly',s=>s.count()),...await chrome.storage.local.get(['syncError','lastSync'])};
     case 'CONNECT': {
+      if (c.enabled) throw new Error('Stop recording before changing the connection.');
       const server=safeServer(message.server), apiKey=String(message.apiKey||'').trim(), instanceName=String(message.instanceName||'').trim();
       if (!apiKey.startsWith('tos_') || apiKey.length>200) throw new Error('Paste a TalentOS extension API key beginning with tos_.');
       if (!instanceName || instanceName.length>120) throw new Error('Name this browser / computer (up to 120 characters).');
@@ -129,30 +144,22 @@ async function handle(message,sender) {
       const sameConnection=c.server===server && c.ownerId===data.ownerUserId;
       const selected=sameConnection?data.candidates.find(person=>person.id===c.candidateId):null;
       await chrome.storage.local.set({config:{server,apiKey,ownerId:data.ownerUserId,instanceId:c.instanceId||crypto.randomUUID(),instanceName,
-        candidateId:selected?.id,candidateName:selected?.name,enabled:false,sites:c.sites||[]},candidates:data.candidates,syncError:null});
-      await notifyTabs(); return {ok:true};
+        candidateId:selected?.id,candidateName:selected?.name,enabled:false,sites:RECORDING_SITES},candidates:data.candidates,syncError:null});
+      await register(); await notifyTabs(); return {ok:true};
     }
     case 'CANDIDATES': {
       const data=await candidates(c); await chrome.storage.local.set({candidates:data.candidates}); return data.candidates;
     }
     case 'SELECT': {
+      if (c.enabled) throw new Error('Stop recording before choosing another candidate.');
       const data=await candidates(c), selected=data.candidates.find(person=>person.id===message.id);
       if (!selected) throw new Error('This candidate is no longer available to your key.');
-      if (!(c.sites||[]).length) throw new Error('Enable a recording website first.');
-      await chrome.storage.local.set({config:{...c,candidateId:selected.id,candidateName:selected.name,enabled:true},syncError:null});
-      await notifyTabs(); return {ok:true};
-    }
-    case 'TOGGLE':
-      if (!c.candidateId) throw new Error('Choose a candidate first.');
-      if (!c.enabled) { const data=await candidates(c); if (!data.candidates.some(person=>person.id===c.candidateId)) throw new Error('The selected candidate is unavailable.'); }
-      await chrome.storage.local.set({config:{...c,enabled:!c.enabled}}); await notifyTabs(); return {ok:true};
-    case 'ADD_SITE':
-      if (!/^https:\/\/(\*|[^/]+)\/\*$/.test(message.origin)) throw new Error('Choose an HTTPS website.');
-      if (!await chrome.permissions.contains({origins:[message.origin]})) throw new Error('Site permission was not granted.');
-      await chrome.storage.local.set({config:{...c,sites:[...new Set([...(c.sites||[]),message.origin])]}});
+      if (!await chrome.permissions.contains({origins:RECORDING_SITES})) throw new Error('Allow this extension on all sites in your browser extension settings, then try again.');
+      await chrome.storage.local.set({config:{...c,candidateId:selected.id,candidateName:selected.name,enabled:true,sites:RECORDING_SITES},syncError:null});
       await register(); await notifyTabs(); return {ok:true};
-    case 'CLEAR_SITES':
-      await chrome.storage.local.set({config:{...c,sites:[],enabled:false}}); await register(); await notifyTabs(); return {ok:true};
+    }
+    case 'STOP':
+      await chrome.storage.local.set({config:{...c,enabled:false}}); await notifyTabs(); return {ok:true};
     case 'SYNC': await sync(); return {ok:true};
     default: throw new Error('Unknown action.');
   }
@@ -166,7 +173,7 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
 async function init() {
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   await chrome.alarms.create('sync',{periodInMinutes:0.5});
-  await register(); await badge(); await sync();
+  await register(); await notifyTabs(); await sync();
 }
 chrome.runtime.onInstalled.addListener(()=>{init();chrome.runtime.openOptionsPage();});
 chrome.runtime.onStartup.addListener(()=>init());

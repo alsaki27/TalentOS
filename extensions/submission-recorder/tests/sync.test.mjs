@@ -10,7 +10,8 @@ async function fixture() {
   const chrome={runtime:{id:'extension',getURL:path=>'chrome-extension://extension/'+path,onMessage:listener,onInstalled:listener,onStartup:listener},storage:{local:{
     get:async keys=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(key=>[key,data[key]])),set:async updates=>Object.assign(data,updates)}},
     action:{setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{},setTitle:async()=>{}},
-    tabs:{query:async()=>[]},alarms:{onAlarm:listener},permissions:{onRemoved:listener}};
+    tabs:{query:async()=>[]},alarms:{onAlarm:listener},permissions:{onRemoved:listener,contains:async()=>true},
+    scripting:{getRegisteredContentScripts:async()=>[],registerContentScripts:async()=>{},unregisterContentScripts:async()=>{}}};
   const context=vm.createContext({chrome,URL,TextEncoder,AbortSignal,crypto,Map,Set,Date,fetch:async(url,options)=>{requests.push({url,options});return reply(url,options);}});
   vm.runInContext(await readFile(new URL('../background.js',import.meta.url),'utf8'),context);
   context.fakeStore=async(mode,action)=>{const request=action({put:item=>{records.set(item.id,item);return {result:item.id};},getAll:(_,limit)=>({result:[...records.values()].slice(0,limit)}),count:()=>({result:records.size}),delete:id=>records.delete(id)});return request?.result;};
@@ -31,7 +32,7 @@ for (const inTab of [false,true]) test(`setup can connect and select a candidate
   assert.equal(f.data.config.ownerId,'owner');
   assert.equal((await f.handle({type:'STATUS'},sender)).config.apiKey,undefined);
   assert.deepEqual(await f.handle({type:'CANDIDATES'},sender),people);
-  f.data.config.sites=['https://forms.test/*'];
+  assert.deepEqual(Array.from(f.data.config.sites),['https://*/*']);
   await f.handle({type:'SELECT',id:'candidate-a'},sender);
   assert.equal(f.data.config.enabled,true);
   assert.equal(f.data.config.candidateId,'candidate-a');
@@ -68,11 +69,41 @@ test('rejected credentials pause capture and retain queued answers',async()=>{
 });
 test('different connection cannot receive pending entries or replace their owner',async()=>{
   const f=await fixture();await f.handle({type:'CAPTURE',event},page);
+  await f.handle({type:'STOP'});
   f.setReply(async()=>({ok:true,json:async()=>({ownerUserId:'other',candidates:[]})}));
   await assert.rejects(f.handle({type:'CONNECT',server:'https://other.test',apiKey:'tos_other',instanceName:'Work'}),/Sync the queued records/);
   assert.equal(f.data.config.server,'https://talentos.test');
   f.data.config.server='https://other.test';const sent=f.requests.length;
   await f.sync();assert.equal(f.requests.length,sent);assert.equal(f.records.size,1);
+});
+test('recording locks candidate and credentials until Stop; queued answers remain with original person',async()=>{
+  const f=await fixture();await f.handle({type:'CAPTURE',event},page);
+  await assert.rejects(f.handle({type:'SELECT',id:'candidate-b'}),/Stop recording/);
+  await assert.rejects(f.handle({type:'CONNECT',server:'https://other.test',apiKey:'tos_other',instanceName:'Work'}),/Stop recording/);
+  assert.equal(f.data.config.candidateId,'candidate-a');
+  await f.handle({type:'STOP'});
+  assert.equal(f.data.config.enabled,false);
+  await f.handle({type:'CAPTURE',event:{...event,id:'after-stop'}},page);
+  assert.equal(f.records.size,1);
+  f.setReply(async()=>({ok:true,json:async()=>({ownerUserId:'owner',candidates:[{id:'candidate-b',name:'B'}]})}));
+  await f.handle({type:'SELECT',id:'candidate-b'});
+  assert.equal(f.data.config.candidateId,'candidate-b');
+  assert.equal(f.data.config.enabled,true);
+  assert.equal(f.records.get('event-a').record.candidate_id,'candidate-a');
+});
+test('two open control pages cannot switch candidates during an active recording',async()=>{
+  const f=await fixture();await f.handle({type:'STOP'});
+  f.setReply(async()=>({ok:true,json:async()=>({ownerUserId:'owner',candidates:[{id:'candidate-a',name:'A'},{id:'candidate-b',name:'B'}]})}));
+  const results=await Promise.allSettled([f.handle({type:'SELECT',id:'candidate-a'}),f.handle({type:'SELECT',id:'candidate-b'})]);
+  assert.equal(results[0].status,'fulfilled');assert.equal(results[1].status,'rejected');
+  assert.equal(f.data.config.candidateId,'candidate-a');
+});
+test('updates enable all HTTPS sites while preserving the current candidate and recording state',async()=>{
+  const f=await fixture();await f.context.register();
+  assert.deepEqual(Array.from(f.data.config.sites),['https://*/*']);
+  assert.equal(f.data.config.enabled,true);assert.equal(f.data.config.candidateId,'candidate-a');
+  await f.handle({type:'CAPTURE',event},{...page,url:'https://another-form.test/apply'});
+  assert.equal(f.records.size,1);
 });
 test('late messages cannot be attributed to the newly selected candidate',async()=>{
   const f=await fixture();f.data.config.candidateId='candidate-b';

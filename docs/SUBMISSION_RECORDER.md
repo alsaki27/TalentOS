@@ -46,9 +46,11 @@ The extension observes input changes with a 600 ms debounce plus change/blur/sub
 events, preserving empty answers. It captures standard inputs, textareas, selects,
 checkboxes, radio buttons and common contenteditable fields. Custom widgets and
 closed shadow roots may not expose labels/answers; autofill requires a browser event.
-Recording requires an explicit site permission and selected candidate. Selection
+All HTTPS websites are enabled by default through the manifest host permission;
+the browser still controls installation/update and site-access permissions. Recording
+requires a selected candidate. The candidate is locked until Stop recording is used. Selection
 and enablement persist across browser restarts; no in-page prompts appear. Toolbar
-status and Pause remain available. Browsers must be running to capture/sync.
+status and Stop recording remain available. Browsers must be running to capture/sync.
 
 IndexedDB retains pending records before sending. Every entry carries an immutable
 candidate ID, event UUID, instance UUID/name, timestamp, question/answer, sanitized
