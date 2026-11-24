@@ -18,6 +18,8 @@ import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptSta
 import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
 import { isCandidateContractRoleKey } from "@/lib/auth-edge";
 import { CandidateResumeParseSummary } from "@/components/candidates/CandidateResumeParseSummary";
+import { CandidateParsedResumeDetails as ParsedResults } from "@/components/candidates/CandidateParsedResumeDetails";
+import { getCandidateResumePreview } from "@/lib/candidateResumePreview";
 import { CandidateResumeFiles } from "@/components/candidates/CandidateResumeFiles";
 import { CandidateProfileSummary } from "@/components/candidates/CandidateProfileSummary";
 import overviewStyles from "@/components/candidates/CandidateProfileOverview.module.css";
@@ -919,18 +921,18 @@ export default function CandidateProfilePage() {
   async function acceptParsedData(resume: Resume) {
     if (!candidate) return;
     setAcceptingParsed(true);
-    const p = resume.parsed_json;
+    const p = getCandidateResumePreview(resume.parsed_json).contact;
     const res = await fetch(`/api/candidates/${candidate.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: p.name ?? candidate.name,
-        email: p.email ?? candidate.email,
-        phone: p.phone ?? candidate.phone,
-        linkedin_url: p.linkedin_url ?? candidate.linkedin_url,
-        github_url: p.github_url ?? candidate.github_url,
-        portfolio_url: p.portfolio_url ?? candidate.portfolio_url,
-        location_preference: p.location ?? candidate.location_preference,
+        name: p.name || candidate.name,
+        email: p.email || candidate.email,
+        phone: p.phone || candidate.phone,
+        linkedin_url: p.linkedin_url || candidate.linkedin_url,
+        github_url: p.github_url || candidate.github_url,
+        portfolio_url: p.portfolio_url || candidate.portfolio_url,
+        location_preference: p.location || candidate.location_preference,
       }),
     });
     setAcceptingParsed(false);
@@ -1629,72 +1631,6 @@ export default function CandidateProfilePage() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function ParsedResults({ parsed }: { parsed: any }) {
-  const skills = parsed?.skills ?? [];
-  const experience = parsed?.experience ?? [];
-  const education = parsed?.education ?? [];
-  const certifications = parsed?.certifications ?? [];
-
-  if (parsed?.parse_error || (!skills.length && !experience.length && !education.length && !certifications.length && !parsed?.name && !parsed?.email)) {
-    return (
-      <div>
-        {parsed?.parse_error ? (
-          <div style={{ padding: "8px 12px", borderRadius: 6, background: "rgba(211, 38, 30, 0.12)", fontSize: 13 }}>
-            <strong>Parsing failed:</strong> {parsed.parse_error}
-          </div>
-        ) : (
-          <p className="muted" style={{ fontSize: 14 }}>No structured data was extracted from this resume.</p>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className={overviewStyles.parsedGrid}>
-      <div><label>Name</label><p className="muted">{parsed?.name || "—"}</p></div>
-      <div><label>Email</label><p className="muted">{parsed?.email || "—"}</p></div>
-      <div><label>Phone</label><p className="muted">{parsed?.phone || "—"}</p></div>
-      <div><label>Location</label><p className="muted">{parsed?.location || "—"}</p></div>
-      <div style={{ gridColumn: "1 / -1" }}>
-        <label>Skills</label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-          {skills.length ? skills.map((s: string) => <span key={s} className="badge">{s}</span>) : <span className="muted">—</span>}
-        </div>
-      </div>
-      <div style={{ gridColumn: "1 / -1" }}>
-        <label>Experience</label>
-        {experience.length ? (
-          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-            {experience.map((exp: any, i: number) => (
-              <li key={i} className="muted">{exp.company} — {exp.title}</li>
-            ))}
-          </ul>
-        ) : <p className="muted">—</p>}
-      </div>
-      <div style={{ gridColumn: "1 / -1" }}>
-        <label>Education</label>
-        {education.length ? (
-          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-            {education.map((edu: any, i: number) => (
-              <li key={i} className="muted">{edu.school} — {edu.degree}</li>
-            ))}
-          </ul>
-        ) : <p className="muted">—</p>}
-      </div>
-      <div style={{ gridColumn: "1 / -1" }}>
-        <label>Certifications</label>
-        {certifications.length ? (
-          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
-            {certifications.map((cert: any, i: number) => (
-              <li key={i} className="muted">{cert.name || cert}</li>
-            ))}
-          </ul>
-        ) : <p className="muted">—</p>}
-      </div>
     </div>
   );
 }
