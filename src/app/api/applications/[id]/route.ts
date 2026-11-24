@@ -25,13 +25,21 @@ import {
 import { buildAppliedApplicationUpdates } from "@/server/services/applicationAppliedStage";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
-const CUSTOM_INTERVIEW_STATUS_STAGE: Record<string, string> = {
-  applied: "applied",
-  replied: "screening",
-  interview: "interview",
-  offer: "offer",
-  rejected: "rejected",
-  withdrawn: "withdrawn",
+type CustomInterviewStatusTransition = {
+  applicationStage: (typeof APPLICATION_STAGES)[number];
+  aeStage: (typeof AE_STAGES)[number];
+};
+
+const CUSTOM_INTERVIEW_STATUS_TRANSITIONS: Record<string, CustomInterviewStatusTransition> = {
+  assigned: { applicationStage: "ready_for_review", aeStage: "ready_for_review" },
+  stacked: { applicationStage: "ready_for_review", aeStage: "ready_for_review" },
+  in_progress: { applicationStage: "ready_for_review", aeStage: "ready_for_review" },
+  applied: { applicationStage: "applied", aeStage: "applied" },
+  replied: { applicationStage: "screening", aeStage: "applied" },
+  interview: { applicationStage: "interview", aeStage: "applied" },
+  offer: { applicationStage: "offer", aeStage: "applied" },
+  rejected: { applicationStage: "rejected", aeStage: "applied" },
+  withdrawn: { applicationStage: "withdrawn", aeStage: "applied" },
 };
 
 // Had no GET handler at all (only PATCH/DELETE) - same missing-method pattern
@@ -90,22 +98,30 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // lifecycle, but do not use the AI hand-off stage. Keep status, canonical
   // stage, and audit timestamps aligned without applying the AE hand-off
   // compatibility behavior below (which maps non-AE stages to `in_progress`).
-  const customInterviewTargetStage =
+  const customInterviewTransition =
     prefetchedApplication?.source_type === "custom_interview" && typeof updates.status === "string"
-      ? CUSTOM_INTERVIEW_STATUS_STAGE[updates.status]
+      ? CUSTOM_INTERVIEW_STATUS_TRANSITIONS[updates.status]
       : undefined;
-  const customInterviewStageChanged = Boolean(customInterviewTargetStage);
-  if (customInterviewTargetStage) {
+  const isCustomInterviewStatusUpdate = Boolean(customInterviewTransition);
+  if (customInterviewTransition) {
     const changedAt = new Date().toISOString();
     const actorName = currentUser.profile.display_name || currentUser.profile.email;
-    updates.application_stage = customInterviewTargetStage;
-    updates.ae_stage = customInterviewTargetStage;
-    updates.application_stage_changed_at = changedAt;
-    updates.application_stage_changed_by_user_id = currentUser.profile.user_id;
-    updates.application_stage_changed_by_name = actorName;
-    updates.ae_stage_updated_at = changedAt;
-    updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
-    updates.ae_stage_updated_by_name = actorName;
+    const currentApplicationStage = prefetchedApplication?.application_stage ?? prefetchedApplication?.ae_stage;
+    if (currentApplicationStage !== customInterviewTransition.applicationStage) {
+      updates.application_stage = customInterviewTransition.applicationStage;
+      updates.application_stage_changed_at = changedAt;
+      updates.application_stage_changed_by_user_id = currentUser.profile.user_id;
+      updates.application_stage_changed_by_name = actorName;
+    }
+    // `ae_stage` is constrained to the four AE queue values. The actual
+    // candidate lifecycle belongs in `application_stage`; later lifecycle
+    // states stay at the allowed `applied` AE marker after leaving that queue.
+    if (prefetchedApplication?.ae_stage !== customInterviewTransition.aeStage) {
+      updates.ae_stage = customInterviewTransition.aeStage;
+      updates.ae_stage_updated_at = changedAt;
+      updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
+      updates.ae_stage_updated_by_name = actorName;
+    }
     updates.updated_at = changedAt;
     if (updates.status === "applied") {
       updates.applied_at = prefetchedApplication?.applied_at ?? changedAt;
@@ -113,7 +129,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  if ("ae_stage" in updates && !customInterviewStageChanged && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
+  if ("ae_stage" in updates && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
     return NextResponse.json({ error: "Invalid AE stage." }, { status: 400 });
   }
   if ("application_stage" in updates && !APPLICATION_STAGES.includes(updates.application_stage as typeof APPLICATION_STAGES[number])) {
@@ -122,7 +138,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   // application_stage is the canonical lifecycle field. ae_stage remains a
   // compatibility mirror until the queue and old clients are fully migrated.
-  if ("application_stage" in updates && !("ae_stage" in updates)) {
+  if ("application_stage" in updates && !("ae_stage" in updates) && !isCustomInterviewStatusUpdate) {
     updates.ae_stage = updates.application_stage;
   }
 
@@ -175,7 +191,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (updates.status === "applied" && !("ae_stage" in updates) && effectiveStage === "ready_for_application") {
     updates.ae_stage = "applied";
   }
-  const marksAeApplied = updates.ae_stage === "applied" && !customInterviewStageChanged;
+  const marksAeApplied = updates.ae_stage === "applied" && !isCustomInterviewStatusUpdate;
   const reapproveResume = body.approve_resume === true;
   const approveAndApply = reapproveResume && body.ae_stage === "applied";
   const approvalRevision = typeof body.resume_approval_revision === "string" ? body.resume_approval_revision : undefined;
@@ -202,7 +218,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       userId: currentUser.profile.user_id,
       name: currentUser.profile.display_name || currentUser.profile.email,
     }, new Date().toISOString()));
-  } else if ("ae_stage" in updates && updates.ae_stage !== effectiveStage && !customInterviewStageChanged) {
+  } else if ("ae_stage" in updates && updates.ae_stage !== effectiveStage && !isCustomInterviewStatusUpdate) {
     if (updates.ae_stage === "in_ai_pipeline" && currentApplication?.resume_generation_status === "ready") {
       return NextResponse.json(
         { error: "Cannot move back to AI Pipeline when a resume is already generated. Please use 'Regenerate' if you need a new draft." },
@@ -323,9 +339,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // successful application update.
     if (currentUser.profile.is_active) {
       const reachedReviewComplete =
-        effectiveStage === "ready_for_review" && updates.ae_stage === "ready_for_application";
+        !isCustomInterviewStatusUpdate && effectiveStage === "ready_for_review" && updates.ae_stage === "ready_for_application";
       const reachedApplied =
-        (updates.ae_stage === "applied" && effectiveStage !== "applied") ||
+        (!isCustomInterviewStatusUpdate && updates.ae_stage === "applied" && effectiveStage !== "applied") ||
         (updates.status === "applied" && previousStatus !== "applied");
 
       const activityWrites: Promise<unknown>[] = [];
@@ -377,17 +393,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     const backgroundTasks: Promise<unknown>[] = [];
 
-    if ("ae_stage" in updates && updates.ae_stage !== effectiveStage) {
+    const historyTargetStage = customInterviewTransition?.applicationStage ??
+      ("ae_stage" in updates ? String(updates.ae_stage) : null);
+    if (historyTargetStage && historyTargetStage !== effectiveStage) {
       backgroundTasks.push(execute(
         'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [params.id, effectiveStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
+        [params.id, effectiveStage, historyTargetStage, currentUser.profile.user_id,
+          currentUser.profile.display_name || currentUser.profile.email,
+          body.event_note ?? (isCustomInterviewStatusUpdate ? "Custom interview status changed." : null),
+          isCustomInterviewStatusUpdate ? 'manual' : 'queue']
       ));
     }
 
     if ("status" in updates && updates.status !== previousStatus) {
       backgroundTasks.push(execute(
         'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
-        [params.id, previousStatus, updates.status, body.event_note ?? ("ae_stage" in updates ? `AE stage moved to ${updates.ae_stage}.` : null)]
+        [params.id, previousStatus, updates.status, body.event_note ?? (isCustomInterviewStatusUpdate
+          ? `Custom interview status changed to ${customInterviewTransition?.applicationStage}.`
+          : "ae_stage" in updates ? `AE stage moved to ${updates.ae_stage}.` : null)]
       ));
     }
 

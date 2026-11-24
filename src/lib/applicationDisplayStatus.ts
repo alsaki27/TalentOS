@@ -53,13 +53,14 @@ export interface ApplicationStatusCountRow {
   status: string;
   application_stage: string | null;
   has_active_interview: boolean;
+  source_type?: string | null;
 }
 
 /** Counts each application independently, matching the candidate Applications dashboard. */
 export function countApplicationStatusRows(rows: ApplicationStatusCountRow[]): Record<string, number> {
   const counts = emptyStatusCounts();
   for (const row of rows) {
-    const group = applicationDashboardStatusGroup(row.status, row.application_stage, row.has_active_interview);
+    const group = applicationDashboardStatusGroup(row.status, row.application_stage, row.has_active_interview, row.source_type);
     if (Object.prototype.hasOwnProperty.call(counts, group)) counts[group] += 1;
   }
   return counts;
@@ -70,8 +71,12 @@ export function applicationDashboardStatusGroup(
   status: string,
   applicationStage: string | null,
   hasActiveInterview: boolean,
+  sourceType?: string | null,
 ): string {
   const group = DISPLAY_GROUPS[status] || status;
+  // A manual lifecycle change must control this record's filter/count even
+  // when an older interview round is retained in its history.
+  if (sourceType === "custom_interview") return group;
   if (group === "Offer" || group === "Rejected" || applicationStage === "closed") return group;
   if (applicationStage === "interview" || hasActiveInterview) return "Interview";
   return group;

@@ -247,6 +247,7 @@ function dashboardStatusGroup(row: DashboardRow) {
     row.status,
     row.application_stage,
     Boolean(row.interview_stages?.some((stage) => ["planned", "scheduled", "in_progress"].includes(stage.status))),
+    row.source_type,
   );
 }
 

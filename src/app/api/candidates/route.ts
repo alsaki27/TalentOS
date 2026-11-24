@@ -30,6 +30,7 @@ interface CandidateApplicationStatusRow {
   candidate_id: string;
   application_id: string;
   status: ApplicationStatusCountRow["status"];
+  source_type: ApplicationStatusCountRow["source_type"];
   application_stage: ApplicationStatusCountRow["application_stage"];
   has_active_interview: ApplicationStatusCountRow["has_active_interview"];
 }
@@ -95,7 +96,7 @@ async function enrichWithApplicationStatusCounts(rows: Record<string, any>[]): P
       `SELECT a.candidate_id,
               a.id AS application_id,
               a.status,
-              a.application_stage,
+              a.application_stage, a.source_type,
               EXISTS (
                 SELECT 1
                   FROM interview_schedules s

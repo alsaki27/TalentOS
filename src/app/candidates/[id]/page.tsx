@@ -355,6 +355,7 @@ function ConfirmDeleteModal({
 }
 
 export default function CandidateProfilePage() {
+  const uploadedResumeFilesRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
@@ -1154,7 +1155,7 @@ export default function CandidateProfilePage() {
               ) : (
                 <p className="muted">No resume uploaded yet.</p>
               )}
-              <button type="button" className="btn-outline btn-sm" onClick={() => setActiveTab("Base Resumes")}>View resume files ({candidate.resumes.length})</button>
+              <button type="button" className="btn-outline btn-sm" onClick={() => uploadedResumeFilesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}>View resume files ({candidate.resumes.length})</button>
               </div>
               <input aria-label="Upload primary resume" type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
               {uploading && <p className="muted">Uploading…</p>}
@@ -1204,6 +1205,10 @@ export default function CandidateProfilePage() {
             </div>
           </section>
 
+          <div ref={uploadedResumeFilesRef}>
+            <CandidateResumeFiles files={candidate.resumes} primaryResumeId={primaryResume?.id ?? null}
+              onAdd={() => setShowAddVariant(true)} onDelete={deleteVariant} />
+          </div>
         </>
       )}
 
@@ -1387,8 +1392,6 @@ export default function CandidateProfilePage() {
             </div>
           )}
           </section>
-          <CandidateResumeFiles files={candidate.resumes} primaryResumeId={primaryResume?.id ?? null}
-            onAdd={() => setShowAddVariant(true)} onDelete={deleteVariant} />
         </div>
       )}
 

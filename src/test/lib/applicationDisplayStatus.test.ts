@@ -21,6 +21,18 @@ describe("applicationDashboardStatusGroup", () => {
     expect(applicationDashboardStatusGroup("applied", "closed", false)).toBe("Applied");
   });
 
+  it("respects a custom interview's saved status after moving backward with existing interview rounds", () => {
+    expect(applicationDashboardStatusGroup("replied", "screening", true, "custom_interview")).toBe("Screening");
+    expect(applicationDashboardStatusGroup("applied", "applied", true, "custom_interview")).toBe("Applied");
+    expect(applicationDashboardStatusGroup("assigned", "ready_for_review", true, "custom_interview")).toBe("In Progress");
+    expect(applicationDashboardStatusGroup("interview", "interview", true, "custom_interview")).toBe("Interview");
+    expect(countApplicationStatusRows([
+      {status: "replied", application_stage: "screening", has_active_interview: true, source_type: "custom_interview"},
+      {status: "applied", application_stage: "applied", has_active_interview: true, source_type: "custom_interview"},
+      {status: "assigned", application_stage: "ready_for_review", has_active_interview: true, source_type: "custom_interview"},
+    ])).toEqual({Applied: 1, "In Progress": 1, Screening: 1, Interview: 0, Offer: 0, Rejected: 0});
+  });
+
   it("counts interview state per application instead of promoting its whole status group", () => {
     expect(countApplicationStatusRows([
       { status: "assigned", application_stage: "in_progress", has_active_interview: true },
