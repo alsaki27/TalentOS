@@ -1,3 +1,4 @@
+import { currentExperienceIndex, isPresentEndDate } from "@/lib/falood/currentEmployment";
 import {
   DEFAULT_COLORS, DEFAULT_FONT_SIZE, DEFAULT_LINE_SPACING, DEFAULT_PAGE_PADDING,
   DEFAULT_SECTIONS, DEFAULT_TITLE_SPACING, normalizeTitleSpacing, type Experience, type ResumeData,
@@ -44,8 +45,10 @@ export function normalizeImportedResumeData(input: Partial<ResumeData>): ResumeD
 
 /** Older resumes can have several current roles. Keep the first in resume order. */
 export function withSingleCurrentExperience(experience: Experience[]): Experience[] {
-  const currentIndex = experience.findIndex((entry) => entry.current);
-  return experience.map((entry, index) =>
-    entry.current && index !== currentIndex ? { ...entry, current: false } : entry
-  );
+  const currentIndex = currentExperienceIndex(experience);
+  return experience.map((entry, index) => ({
+    ...entry,
+    current: index === currentIndex,
+    endDate: isPresentEndDate(entry.endDate) ? "" : entry.endDate,
+  }));
 }

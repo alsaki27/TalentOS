@@ -810,7 +810,7 @@ CRITICAL RULES:
 - For certifications: include every certification mentioned anywhere in the resume.
 - For linkedin_url: Look carefully for any LinkedIn profile reference. It may appear as a full URL, a spaced/broken URL like "linkedin . com / in / name", or text like "Linked In" followed by a profile path. Normalize it to a canonical "https://www.linkedin.com/in/username" URL. Also check the header/contact section for LinkedIn icons or labels.
 - Dates: prefer 'Month Year' or just 'Year'. Use null if unparseable.
-- Current jobs: set endDate to null.
+- Use "Present" for endDate only if the source explicitly says the job is current. Use null for an unknown end date.
 - If a field is truly missing, use null for strings and [] for arrays.
 - Do NOT hallucinate information not present in the text.
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
@@ -875,7 +875,7 @@ CRITICAL RULES:
 - For projects: create an entry for every project mentioned (academic, personal, or professional). Extract the name, a short description, technologies used, any bullet points, and a link/url if available.
 - For linkedin_url: Look carefully for LinkedIn profile references, including full URLs, spaced/broken URLs like "linkedin . com / in / name", or text like "LinkedIn" followed by a profile path. Normalize to "https://www.linkedin.com/in/username".
 - Dates: prefer 'Month Year' or just 'Year'. Use null if unparseable.
-- Current jobs: set endDate to null.
+- Use "Present" for endDate only if the source explicitly says the job is current. Use null for an unknown end date.
 - Do NOT hallucinate information not present in the markdown.
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
 
@@ -1246,7 +1246,7 @@ export function parsedResumeToEvidence(parsed: ParsedResume): Array<{
     rows.push({
       source_type: "uploaded_resume",
       title: `${exp.title} at ${exp.company}`,
-      description: `${exp.startDate ?? "?"} – ${exp.endDate ?? "Present"}${description ? `\n${description}` : ""}`,
+      description: [exp.startDate, exp.endDate].filter(Boolean).join(" – ") + (description ? `\n${description}` : ""),
       related_skills: parsed.skills.filter((s) =>
         description.toLowerCase().includes(s.toLowerCase())
       ),

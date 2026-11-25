@@ -18,6 +18,7 @@ import {
   ApplicationResumeExportRow,
 } from "@/server/repositories/applicationResumeExportsRepository";
 import { ResumeDocument } from "@/lib/falood/types";
+import { currentExperienceIndex, employmentEndDate } from "@/lib/falood/currentEmployment";
 import { query, execute } from "@/server/db/neon";
 
 // Cloudflare Workers: PDF/DOCX export disabled — @react-pdf/renderer and docx are Node.js-only
@@ -289,10 +290,12 @@ function renderResumeAsMarkdownText(content: ResumeDocument): string {
 
   if (content.experience.length > 0) {
     lines.push("## Professional Experience");
-    for (const exp of content.experience) {
-      const dates = exp.endDate ? `${exp.startDate} – ${exp.endDate}` : `${exp.startDate} – Present`;
+    const currentIndex = currentExperienceIndex(content.experience);
+    for (const [index, exp] of content.experience.entries()) {
+      const end = employmentEndDate(exp.endDate, index === currentIndex);
+      const dates = [exp.startDate, end].filter(Boolean).join(" – ");
       lines.push(`### ${exp.title} — ${exp.company}${exp.location ? `, ${exp.location}` : ""}`);
-      lines.push(`*${dates}*`);
+      if (dates) lines.push(`*${dates}*`);
       for (const b of exp.bullets) lines.push(`- ${b.text}`);
       lines.push("");
     }

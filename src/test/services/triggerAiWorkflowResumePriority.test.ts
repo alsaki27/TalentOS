@@ -91,6 +91,9 @@ function baseDbMock() {
       const [preferredId] = params ?? [];
       return { id: preferredId, content: { personalInfo: { fullName: "Chosen" } } };
     }
+    if (sql.includes("SELECT content FROM base_resumes WHERE id = $1 AND candidate_id = $2")) {
+      return { content: { experience: [{ current: false }, { current: true }] } };
+    }
     if (sql.includes("SELECT id, content FROM base_resumes WHERE candidate_id")) {
       return { id: "resume-most-recent", content: { personalInfo: { fullName: "Most Recent" } } };
     }
@@ -139,6 +142,9 @@ describe("triggerAiWorkflowForApplication - base resume priority", () => {
     expect(createWorkflow).toHaveBeenCalledTimes(1);
     const call = (createWorkflow as any).mock.calls[0][0];
     expect(call.configSnapshot.baseResume.base_resume_id).toBe("resume-A-wrong");
+    expect(call.configSnapshot.baseResume.content.experience).toEqual([{ current: false }, { current: true }]);
+    expect(queryOne).toHaveBeenCalledWith("SELECT content FROM base_resumes WHERE id = $1 AND candidate_id = $2",
+      ["resume-A-wrong", CANDIDATE_ID]);
     expect(call.matchReason).toBeUndefined();
   });
 

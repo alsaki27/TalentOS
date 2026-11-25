@@ -1,3 +1,4 @@
+import { currentExperienceIndex, isPresentEndDate, savedCurrentFlag } from "@/lib/falood/currentEmployment";
 import type { ParsedResume } from "@/lib/resumeParsing";
 import type {
   CertificationBlock,
@@ -536,7 +537,7 @@ function normalizeSkills(rawSkills: unknown): SkillSection[] {
 function normalizeExperience(rawExperience: unknown): ExperienceBlock[] {
   if (!Array.isArray(rawExperience)) return [];
 
-  return rawExperience.reduce<ExperienceBlock[]>((acc, item, index) => {
+  const roles = rawExperience.reduce<ExperienceBlock[]>((acc, item, index) => {
       const record = asRecord(item);
       if (!record) return acc;
 
@@ -568,11 +569,17 @@ function normalizeExperience(rawExperience: unknown): ExperienceBlock[] {
         location: asTrimmedString(record.location) || undefined,
         startDate: asTrimmedString(record.startDate) || asTrimmedString(record.start_date) || "",
         endDate: endDate || undefined,
-        isCurrent: !endDate,
+        isCurrent: savedCurrentFlag(record),
         bullets,
       });
       return acc;
     }, []);
+  const currentIndex = currentExperienceIndex(roles);
+  return roles.map((role, index) => ({
+    ...role,
+    isCurrent: index === currentIndex,
+    endDate: isPresentEndDate(role.endDate) ? undefined : role.endDate,
+  }));
 }
 
 function normalizeEducation(rawEducation: unknown): EducationBlock[] {

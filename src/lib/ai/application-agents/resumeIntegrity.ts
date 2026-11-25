@@ -1,4 +1,5 @@
 import type { ExperienceEntry } from "./schemas";
+import { currentExperienceIndex, employmentEndDate } from "@/lib/falood/currentEmployment";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -172,15 +173,12 @@ function readYear(value: unknown): number | null {
  * candidate's base resume out of 33 scanned live - not a systemic pattern,
  * but worth guarding against wherever it next occurs.
  */
-function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null, label: string, isCurrentJob: boolean = false): string | null {
+function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null): string | null {
   if (!rawStartDate || !rawEndDate) return rawEndDate;
   const startYear = readYear(rawStartDate);
   const endYear = readYear(rawEndDate);
   if (startYear !== null && endYear !== null && endYear < startYear) {
-    console.warn(
-      `[resumeIntegrity] Dropping impossible end date for "${label}": "${rawEndDate}" is before start date "${rawStartDate}". Changing to "Present".`
-    );
-    return "Present";
+    return null;
   }
   return rawEndDate;
 }
@@ -191,13 +189,14 @@ function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null,
  */
 export function enforceExperienceIntegrity(
   generatedEntries: unknown[],
-  baseEntries: unknown[]
+  baseEntries: unknown[],
+  options: { preserveDatesForReview?: boolean } = {},
 ): ExperienceEntry[] {
   const validBase = baseEntries.filter(
     (entry): entry is UnknownRecord => isRecord(entry) && Boolean(readTitle(entry))
   );
   if (validBase.length === 0) {
-    return generatedEntries.filter(isRecord).map((entry, index) => {
+    return generatedEntries.filter(isRecord).map((entry) => {
       const startDate = readResumeText(entry.startDate) || null;
       const rawEndDate = readResumeText(entry.endDate) || null;
       return {
@@ -205,7 +204,7 @@ export function enforceExperienceIntegrity(
         company: readResumeText(entry.company),
         location: readResumeText(entry.location) || null,
         startDate,
-        endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(entry.title), index === 0),
+        endDate: sanitizeEndDate(startDate, employmentEndDate(rawEndDate, false)),
         bullets: readBullets(entry),
         evidenceIds: readEvidenceIds(entry),
       };
@@ -213,6 +212,8 @@ export function enforceExperienceIntegrity(
   }
 
   const used = new Set<number>();
+  const sourceRoles = baseEntries.map(entry => isRecord(entry) ? entry : null);
+  const currentRole = sourceRoles[currentExperienceIndex(sourceRoles)];
   return validBase.map((base, index) => {
     const generated = bestUnusedMatch(
       base,
@@ -224,13 +225,13 @@ export function enforceExperienceIntegrity(
     );
     const tailoredBullets = generated ? readBullets(generated) : [];
     const startDate = readResumeText(base.startDate) || null;
-    const rawEndDate = readResumeText(base.endDate) || null;
+    const endDate = employmentEndDate(readResumeText(base.endDate), base === currentRole);
     return {
       title: readTitle(base),
       company: readResumeText(base.company),
       location: readResumeText(base.location) || null,
       startDate,
-      endDate: sanitizeEndDate(startDate, rawEndDate, readTitle(base), index === 0),
+      endDate: options.preserveDatesForReview ? endDate : sanitizeEndDate(startDate, endDate),
       bullets: tailoredBullets.length > 0 ? tailoredBullets : readBullets(base),
       evidenceIds: generated ? readEvidenceIds(generated) : [],
     };

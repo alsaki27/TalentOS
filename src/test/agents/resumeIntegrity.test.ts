@@ -16,7 +16,7 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
     ];
     const result = enforceExperienceIntegrity([], base);
     expect(result[0].startDate).toBe("Jul 2025");
-    expect(result[0].endDate).toBe("Present");
+    expect(result[0].endDate).toBeNull();
   });
 
   it("keeps a valid, chronologically sound end date untouched", () => {
@@ -27,12 +27,12 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
     expect(result[0].endDate).toBe("Jul 2025");
   });
 
-  it("keeps a missing end date as null (current role) rather than inventing one", () => {
+  it("marks an explicitly current role as Present", () => {
     const base = [
       { title: "OSP Design Engineer", company: "BAYSHORE COMMUNICATION", startDate: "Jul 2025", isCurrent: true },
     ];
     const result = enforceExperienceIntegrity([], base);
-    expect(result[0].endDate).toBeNull();
+    expect(result[0].endDate).toBe("Present");
   });
 
   it("does not flag dates it cannot parse a year from", () => {
@@ -51,7 +51,7 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
       { title: "GIS Analyst", company: "BAYSHORE COMMUNICATION", startDate: "Jul 2025", endDate: "Jan 2001", bullets: ["Tailored bullet"] },
     ];
     const result = enforceExperienceIntegrity(generated, base);
-    expect(result[0].endDate).toBe("Present");
+    expect(result[0].endDate).toBeNull();
     expect(result[0].bullets).toEqual(["Tailored bullet"]);
   });
 

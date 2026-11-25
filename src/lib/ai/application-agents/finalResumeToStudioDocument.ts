@@ -13,6 +13,7 @@
 
 import type { FinalResumeV1, ExperienceEntry } from "./schemas";
 import { readBaseSummary, readResumeText } from "./resumeIntegrity";
+import { currentExperienceIndex, isPresentEndDate } from "@/lib/falood/currentEmployment";
 import { pickResumePresentation, type ResumePresentation } from "@/lib/falood/resumePresentation";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 import type { Education, Skills } from "@/components/falood/resumify/types/resume";
@@ -98,20 +99,27 @@ function readHeader(baseContent: any): ResumeDocumentHeader {
 
 const identityKey = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
 
+type RoleIdentity = { title?: unknown; jobTitle?: unknown; company?: unknown; startDate?: unknown };
+
+function findSelectedRole(entries: ExperienceEntry[], base: RoleIdentity[], selected: RoleIdentity) {
+  const title = (role: RoleIdentity) => identityKey(readResumeText(role.title) || readResumeText(role.jobTitle));
+  const company = (role: RoleIdentity) => identityKey(readResumeText(role.company));
+  const start = (role: RoleIdentity) => identityKey(readResumeText(role.startDate));
+  const sameRole = (role: RoleIdentity) => role && title(role) === title(selected) && company(role) === company(selected);
+  const candidates = entries.filter(sameRole);
+  const originals = base.filter(sameRole);
+  if (candidates.length === 1 && originals.length === 1) return entries.indexOf(candidates[0]);
+  // Separate repeat engagements by start date. Identical records retain base order in the pipeline.
+  const sameStart = (role: RoleIdentity) => start(role) === start(selected);
+  const engagements = originals.filter(sameStart);
+  const generated = candidates.filter(sameStart);
+  return engagements.length === generated.length ? entries.indexOf(generated[engagements.indexOf(selected)]) : -1;
+}
+
 function mapExperience(entries: ExperienceEntry[], rawBaseExperience: unknown) {
   const base = Array.isArray(rawBaseExperience) ? rawBaseExperience : [];
-  const savedSelections = entries.map((entry) => {
-    const matches = base.filter((role) => role
-      && identityKey(readResumeText(role.jobTitle ?? role.title)) === identityKey(entry.title)
-      && identityKey(readResumeText(role.company)) === identityKey(entry.company));
-    const exact = matches.filter((role) => identityKey(readResumeText(role.startDate)) === identityKey(entry.startDate ?? ""));
-    const source = exact.length === 1 ? exact[0] : matches.length === 1 ? matches[0] : undefined;
-    return source?.isCurrent ?? source?.current;
-  });
-  const explicitlyCurrent = savedSelections.indexOf(true);
-  const currentIndex = explicitlyCurrent >= 0 ? explicitlyCurrent : entries.findIndex((entry, index) =>
-    savedSelections[index] !== false && identityKey(entry.endDate ?? "") === "present"
-  );
+  const selected = base[currentExperienceIndex(base)];
+  const currentIndex = selected ? findSelectedRole(entries, base, selected) : -1;
   return entries.map((e, index) => {
     const isCurrent = index === currentIndex;
     return {
@@ -120,7 +128,7 @@ function mapExperience(entries: ExperienceEntry[], rawBaseExperience: unknown) {
       company: e.company,
       location: e.location ?? undefined,
       startDate: e.startDate ?? "",
-      endDate: isCurrent || identityKey(e.endDate ?? "") === "present" ? undefined : e.endDate ?? undefined,
+      endDate: isCurrent || isPresentEndDate(e.endDate) ? undefined : e.endDate ?? undefined,
       isCurrent,
       bullets: e.bullets.map((b) => ({ id: uid("b"), text: b })),
     };

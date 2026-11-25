@@ -29,7 +29,7 @@ import {
   DEFAULT_SECTIONS,
 } from "@/components/falood/resumify/types/resume";
 import { readResumePresentation } from "@/lib/falood/resumePresentation";
-import { withSingleCurrentExperience } from "@/components/falood/resumify/utils/importedResumeData";
+import { currentExperienceIndex, isPresentEndDate } from "@/lib/falood/currentEmployment";
 
 export interface StudioDocumentLike {
   header?: {
@@ -174,14 +174,16 @@ function uid(prefix: string): string {
 /** Normalizes an already-Resumify-shaped document (personalInfo/jobTitle/bulletPoints/institution/...) - fills in any missing pieces rather than re-mapping field names. */
 function normalizeResumifyNative(d: any): ResumeData {
   const personalInfo = d.personalInfo && typeof d.personalInfo === "object" ? d.personalInfo : {};
-  const experience = asArray<any>(d.experience).map((e) => ({
+  const roles = asArray<any>(d.experience);
+  const currentIndex = currentExperienceIndex(roles);
+  const experience = roles.map((e, index) => ({
     id: asString(e?.id) || uid("exp"),
     jobTitle: asString(e?.jobTitle),
     company: asString(e?.company),
     location: asString(e?.location),
     startDate: asString(e?.startDate),
-    endDate: asString(e?.endDate),
-    current: Boolean(e?.current),
+    endDate: isPresentEndDate(e?.endDate) ? "" : asString(e?.endDate),
+    current: index === currentIndex,
     description: asString(e?.description),
     bulletPoints: asArray<string>(e?.bulletPoints),
   }));
@@ -228,7 +230,7 @@ function normalizeResumifyNative(d: any): ResumeData {
       birthDate: asOptionalString(personalInfo.birthDate),
     },
     summary: asString(d.summary),
-    experience: withSingleCurrentExperience(experience),
+    experience,
     education,
     projects,
     skills: {
@@ -256,17 +258,15 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
   const summaryText = typeof d.summary === "string" ? d.summary : d.summary?.text ?? "";
 
   const roles = asArray<NonNullable<StudioDocumentLike["experience"]>[number]>(d.experience);
-  // An explicit selection takes priority over old rows that used a missing
-  // end date to mean current. An explicit false must survive the round trip.
-  const hasExplicitCurrent = roles.some((role) => role?.isCurrent === true);
-  const experience = roles.map((e) => ({
+  const currentIndex = currentExperienceIndex(roles);
+  const experience = roles.map((e, index) => ({
     id: e?.id || uid("exp"),
     jobTitle: e?.title ?? "",
     company: e?.company ?? "",
     location: e?.location ?? "",
     startDate: e?.startDate ?? "",
-    endDate: /^present$/i.test(asString(e?.endDate).trim()) ? "" : asString(e?.endDate),
-    current: e?.isCurrent ?? (!hasExplicitCurrent && (!e?.endDate || /^present$/i.test(e.endDate.trim()))),
+    endDate: isPresentEndDate(e?.endDate) ? "" : asString(e?.endDate),
+    current: index === currentIndex,
     description: asString(e?.description),
     bulletPoints: bulletTexts(e?.bullets),
   }));
@@ -355,7 +355,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
       birthDate: header.birthDate,
     },
     summary: summaryText,
-    experience: withSingleCurrentExperience(experience),
+    experience,
     education,
     projects,
     skills: {

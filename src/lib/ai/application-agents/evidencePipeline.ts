@@ -70,16 +70,7 @@ function cleanParts(description: string) {
 
 function getInput(ctx: AgentContext) {
   const base = record(ctx.baseResume.content);
-  const experience = enforceExperienceIntegrity([], rows(base.experience));
-  // For this path a missing or invalid date stays unknown. Explicit current
-  // status can come only from the base. Keep unparseable text for human review.
-  const datedRoles = rows(base.experience).map(record).filter(role => readResumeText(role.title) || readResumeText(role.jobTitle));
-  for (const [index, role] of experience.entries()) {
-    const source = datedRoles[index];
-    const stated = readResumeText(source?.endDate);
-    const current = source?.isCurrent ?? source?.current;
-    role.endDate = current === true ? "Present" : current === false && /^present$/i.test(stated) ? null : stated || null;
-  }
+  const experience = enforceExperienceIntegrity([], rows(base.experience), { preserveDatesForReview: true });
   const baseSkills: { title: string; skills: string[] }[] = [];
   const nativeSkills = record(base.skills);
   const skills = Array.isArray(base.skills) ? base.skills

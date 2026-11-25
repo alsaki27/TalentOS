@@ -17,6 +17,7 @@
 // pass whatever shape it has without its own adapter.
 
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
+import { currentExperienceIndex, isPresentEndDate } from "@/lib/falood/currentEmployment";
 import { pickResumePresentation } from "@/lib/falood/resumePresentation";
 
 export const DEFAULT_FORMATTING: ResumeFormatting = {
@@ -51,6 +52,8 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
 /** Converts the legacy Resumify editor shape into the canonical PDF document shape. */
 export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
   const personalInfo = data?.personalInfo ?? {};
+  const roles: any[] = Array.isArray(data?.experience) ? data.experience : [];
+  const currentIndex = currentExperienceIndex(roles);
   const skills = data?.skills ?? {};
   const groups = Array.isArray(skills.categorized) ? skills.categorized : [];
   const simpleSkills = Array.isArray(skills.simple) ? skills.simple : [];
@@ -79,20 +82,20 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
       ? { id: "summary", text: data.summary }
       : undefined,
     skills: skillSections,
-    experience: Array.isArray(data?.experience) ? data.experience.map((entry: any, index: number) => ({
+    experience: roles.map((entry, index) => ({
       id: entry?.id || `experience-${index}`,
       title: entry?.jobTitle || "",
       company: entry?.company || "",
       location: entry?.location,
       startDate: entry?.startDate || "",
-      endDate: entry?.endDate,
-      isCurrent: entry?.current === true,
+      endDate: isPresentEndDate(entry?.endDate) ? undefined : entry?.endDate,
+      isCurrent: index === currentIndex,
       description: entry?.description,
       bullets: (Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : []).map((text: unknown, bulletIndex: number) => ({
         id: `experience-${index}-bullet-${bulletIndex}`,
         text: typeof text === "string" ? text : "",
       })),
-    })) : [],
+    })),
     education: Array.isArray(data?.education) ? data.education.map((entry: any, index: number) => ({
       id: entry?.id || `education-${index}`,
       degree: entry?.degree || "",

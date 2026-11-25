@@ -88,7 +88,7 @@ async function parseResumeWithAI(resumeText: string) {
           company: "company name",
           location: "job location or null",
           startDate: "Month Year or Year",
-          endDate: "Month Year or null for present/current",
+          endDate: "Month Year, Present if explicitly current, or null if unknown",
           bullets: ["array of EVERY bullet point, achievement, responsibility. Do not skip any. Extract the full text of each bullet."]
         }
       ],
@@ -156,7 +156,7 @@ async function parseResumeWithAI(resumeText: string) {
     "5. For certifications: include every certification mentioned anywhere in the resume.",
     "5b. For linkedin_url: Look carefully for ANY LinkedIn profile reference in the resume. Normalize it to a canonical 'https://www.linkedin.com/in/username' URL.",
     "6. Dates: use 'Month Year' format (e.g., 'January 2020'). If only year is available, use just the year.",
-    "7. Current jobs: set endDate to null.",
+    '7. Use "Present" for endDate only if the source explicitly says the job is current. Use null for an unknown end date.',
     "8. If a field is truly missing from the resume, use null for strings and [] for arrays.",
     "9. DO NOT hallucinate — only extract what is actually in the resume text.",
     "10. Return ONLY the JSON object, no other text."

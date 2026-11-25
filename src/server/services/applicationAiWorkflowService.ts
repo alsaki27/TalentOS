@@ -414,7 +414,7 @@ export async function triggerAiWorkflowForApplication(
     // Prioritise the resume linked to the target_job for this application's
     // job, falling back to domain-matched base resume, then the candidate's
     // most recent base resume overall.
-    resumeRow = await queryOne<any>(
+    let linkedVersion = await queryOne<any>(
       `SELECT arv.* FROM application_resume_versions arv
        WHERE arv.target_job_id IN (
          SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
@@ -423,7 +423,7 @@ export async function triggerAiWorkflowForApplication(
        ORDER BY arv.created_at DESC LIMIT 1`,
       [appRow.candidate_id, appRow.job_id]
     );
-    if (!resumeRow) {
+    if (!linkedVersion) {
       // Domain-matched base resume selection — score each active base_resume
       // by industry/role overlap with the job, pick the best one, materialize
       // from it (not from the most recent), and persist the score + reason so
@@ -434,11 +434,19 @@ export async function triggerAiWorkflowForApplication(
         matchReason = best.reason;
         resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, best.resume.id);
       } else {
-        resumeRow = await queryOne<any>(
+        linkedVersion = await queryOne<any>(
           "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
           [appRow.candidate_id]
         );
       }
+    }
+    if (linkedVersion) {
+      // Reuse the choice of base, then freeze its currently saved content for this new run.
+      const source = linkedVersion.base_resume_id ? await queryOne<{ content: unknown }>(
+        "SELECT content FROM base_resumes WHERE id = $1 AND candidate_id = $2",
+        [linkedVersion.base_resume_id, appRow.candidate_id],
+      ) : null;
+      resumeRow = source?.content ? { ...linkedVersion, content: source.content } : linkedVersion;
     }
   }
   if (!resumeRow) {

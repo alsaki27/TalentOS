@@ -3,6 +3,7 @@
 // and the job analysis. No hardcoded category maps. The AI decides where skills belong.
 
 import { readBaseSummary } from "../resumeIntegrity";
+import { currentExperienceIndex, employmentEndDate } from "@/lib/falood/currentEmployment";
 import { mergeSkillSources } from "./mergeSkillSources";
 import { projectJobAnalysisForDraft } from "../promptProjections";
 
@@ -61,8 +62,10 @@ function buildBulletRequirements(experiences: any[]): string {
  */
 function buildExperienceSnapshot(experiences: any[]): string {
   if (!experiences || experiences.length === 0) return "(no experience entries)";
+  const currentIndex = currentExperienceIndex(experiences);
   return experiences.map((exp, idx) => {
-    const header = `${idx + 1}. ${exp.title ?? "Role"} at ${exp.company ?? ""} (${exp.startDate ?? ""} – ${exp.endDate ?? "Present"})`;
+    const dates = [exp.startDate, employmentEndDate(exp.endDate, idx === currentIndex)].filter(Boolean).join(" – ");
+    const header = `${idx + 1}. ${exp.title ?? "Role"} at ${exp.company ?? ""}${dates ? ` (${dates})` : ""}`;
     const bullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
     const bulletLines = bullets.length > 0
       ? bullets.map((b: string, i: number) => `   ${i + 1}. ${b}`).join("\n")
