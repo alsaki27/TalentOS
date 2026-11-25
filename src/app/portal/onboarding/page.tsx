@@ -3,6 +3,7 @@
 import { FormEvent, UIEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ContractSignatureFields, type SignatureFieldsValue } from "@/components/contracts/ContractSignatureFields";
+import { ContractSigningConfirmation } from "@/components/contracts/ContractSigningConfirmation";
 import { validateContractSigning } from "@/lib/contractSignature";
 import PortalLogo from "../PortalLogo";
 
@@ -119,7 +120,12 @@ export default function PortalOnboardingPage() {
     router.replace("/portal/login");
   }
 
-  if (completed) return <div className="portal-onboarding-page"><section className="portal-onboarding-dialog"><h1>Your signed agreement is saved</h1><p>PDF copies are queued for delivery to {signing.signerEmail} and info@skarion.com. Delivery retries automatically if the email service is unavailable.</p><a className="portal-btn portal-btn-primary" href="/api/portal/me/signed-contract">Download signed PDF</a><button className="portal-btn portal-btn-secondary" onClick={()=>{router.replace('/portal');router.refresh();}}>Continue to portal</button></section></div>;
+  if (completed) return (
+    <ContractSigningConfirmation
+      email={signing.signerEmail}
+      onContinue={() => { router.replace("/portal"); router.refresh(); }}
+    />
+  );
   if (loading) {
     return <div className="portal-onboarding-gate" role="status">Loading the required agreement…</div>;
   }
