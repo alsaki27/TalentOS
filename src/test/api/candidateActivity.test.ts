@@ -13,6 +13,10 @@ describe("Candidate activity API", () => {
     expect((await GET(request(), { params: { id } })).status).toBe(401);
     expect(mocks.activity).not.toHaveBeenCalled();
   });
+  it("shows the edit control for a Grunter without add or delete controls", async () => {
+    mocks.auth.mockResolvedValue({ context: { profile: { role: "application_engineer", role_variant: "application_engineer_grunter" } }, response: null });
+    expect(await (await GET(request(), { params: { id } })).json()).toMatchObject({ canEditCustom: true, canManageCustom: false });
+  });
   it("validates filters, cursor, limits and candidate IDs", async () => {
     for (const query of ["?limit=0", "?limit=999", "?limit=1.5", "?type=secrets", "?cursor=invalid", "?page=0", "?page=1.5"]) expect((await GET(request(query), { params: { id } })).status).toBe(400);
     expect((await GET(request(), { params: { id: "bad" } })).status).toBe(404);

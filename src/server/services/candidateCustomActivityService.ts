@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { canManageCustomActivity, parseCustomActivity } from "@/lib/candidateCustomActivity";
+import { canEditCustomActivity, canManageCustomActivity, parseCustomActivity } from "@/lib/candidateCustomActivity";
 import { queryOne } from "@/server/db/neon";
 
 type Params = { id: string; activityId?: string };
@@ -8,7 +8,8 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function mutateCandidateCustomActivity(request: Request, params: Params, method: "POST" | "PATCH" | "DELETE") {
   const { context, response } = await requireCurrentUser(ALL_USER_ROLES);
   if (response) return response;
-  if (!canManageCustomActivity(context?.profile)) return NextResponse.json({ error: "AE Grunter cannot add, edit, or delete custom activities." }, { status: 403 });
+  const permitted = method === "PATCH" ? canEditCustomActivity(context?.profile) : canManageCustomActivity(context?.profile);
+  if (!permitted) return NextResponse.json({ error: "Permission denied." }, { status: 403 });
   if (!uuid.test(params.id) || (method !== "POST" && !uuid.test(params.activityId || ""))) return NextResponse.json({ error: "Activity not found." }, { status: 404 });
   let body, activity;
   try {

@@ -24,6 +24,7 @@ export interface CandidateActivityItem {
 export interface CandidateActivityData {
   candidate: { id: string; name: string; timezone?: string | null };
   canManageCustom?: boolean;
+  canEditCustom?: boolean;
   items: CandidateActivityItem[];
   upcoming: CandidateActivityItem[];
   current: { label: string; value: string; href: string }[];

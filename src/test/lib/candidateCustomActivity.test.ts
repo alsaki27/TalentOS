@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TEAM_ROLE_KEYS, getTeamRoleStorage } from "@/lib/auth-edge";
-import { canManageCustomActivity, customActivityState, parseCustomActivity, type CandidateCustomActivity } from "@/lib/candidateCustomActivity";
+import { canEditCustomActivity, canManageCustomActivity, customActivityState, parseCustomActivity, type CandidateCustomActivity } from "@/lib/candidateCustomActivity";
 const base = { title: "Vacation", body: "Away with family", schedule_mode: "none" };
 describe("Custom activity validation and permissions", () => {
   it("requires title and reason and rejects unsafe links", () => {
@@ -20,8 +20,13 @@ describe("Custom activity validation and permissions", () => {
     expect(() => parseCustomActivity({ ...activity, end_time: "08:00" })).toThrow();
     expect(() => parseCustomActivity({ ...activity, start_date: "2026-03-08", end_date: "2026-03-08", start_time: "02:30", time_zone: "America/New_York" })).toThrow();
   });
-  it("allows all configured staff roles except AE Grunter", () => {
-    for (const key of TEAM_ROLE_KEYS) expect(canManageCustomActivity(getTeamRoleStorage(key))).toBe(key !== "application_engineer_grunter");
+  it("allows all staff to edit and restricts creation and deletion for Grunters", () => {
+    for (const key of TEAM_ROLE_KEYS) {
+      const profile = getTeamRoleStorage(key);
+      expect(canEditCustomActivity(profile)).toBe(true);
+      expect(canManageCustomActivity(profile)).toBe(key !== "application_engineer_grunter");
+    }
+    expect(canEditCustomActivity(null)).toBe(false);
     expect(canManageCustomActivity(null)).toBe(false);
   });
 });

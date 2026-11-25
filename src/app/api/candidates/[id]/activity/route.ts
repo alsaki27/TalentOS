@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { CANDIDATE_ACTIVITY_TYPES, readActivityCursor, readActivityDateRange, type CandidateActivityType } from "@/lib/candidateActivity";
 import { getCandidateActivity } from "@/server/services/candidateActivityService";
-import { canManageCustomActivity } from "@/lib/candidateCustomActivity";
+import { canEditCustomActivity, canManageCustomActivity } from "@/lib/candidateCustomActivity";
 
 export const dynamic = "force-dynamic";
 export async function GET(request: Request, { params }: { params: { id: string } }) {
@@ -24,7 +24,11 @@ export async function GET(request: Request, { params }: { params: { id: string }
   }
   try {
     const data = await getCandidateActivity(params.id, { limit, cursor, type: type as CandidateActivityType | undefined, ...(page ? { page } : {}), ...dateRange });
-    return data ? NextResponse.json({ ...data, canManageCustom: canManageCustomActivity(context?.profile) }, { headers: { "Cache-Control": "private, no-store" } }) :
+    return data ? NextResponse.json({
+      ...data,
+      canEditCustom: canEditCustomActivity(context?.profile),
+      canManageCustom: canManageCustomActivity(context?.profile),
+    }, { headers: { "Cache-Control": "private, no-store" } }) :
       NextResponse.json({ error: "Candidate not found." }, { status: 404 });
   } catch { return NextResponse.json({ error: "Could not load candidate activity." }, { status: 500 }); }
 }

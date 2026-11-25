@@ -9,7 +9,13 @@ export interface CandidateCustomActivity {
   starts_at: string | null; ends_at: string | null; time_zone: string | null;
   version: number; created_at: string; updated_at: string;
 }
-export function canManageCustomActivity(profile: { role?: string; role_variant?: string | null } | null | undefined) {
+type ActivityStaff = { role?: string; role_variant?: string | null } | null | undefined;
+
+export function canEditCustomActivity(profile: ActivityStaff) {
+  return isTeamRoleKey(profile?.role);
+}
+
+export function canManageCustomActivity(profile: ActivityStaff) {
   return Boolean(profile?.role && isTeamRoleKey(profile.role) && profile.role !== "application_engineer_grunter"
     && getTeamRoleKey(profile.role, profile.role_variant) !== "application_engineer_grunter");
 }

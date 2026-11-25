@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -19,10 +19,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "../../lib/utils";
 import { TEAM_ROLE_DEFINITIONS, TEAM_ROLE_KEYS } from "@/lib/auth-edge";
 import { matchesTeamMemberFilters, type TeamRoleGroupFilter, type TeamStatusFilter } from "@/lib/teamMemberFilters";
@@ -92,6 +92,10 @@ export default function TeamPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [roleMember, setRoleMember] = useState<TeamMember | null>(null);
+  const [selectedRole, setSelectedRole] = useState("");
+  const [roleError, setRoleError] = useState("");
+  const roleTrigger = useRef<HTMLButtonElement | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [search, setSearch] = useState("");
   const [roleGroup, setRoleGroup] = useState<TeamRoleGroupFilter>("all");
@@ -187,24 +191,29 @@ export default function TeamPage() {
     setFeedback({ kind: "success", text: "User created." });
   }
 
-  async function changeRole(memberId: string, newRole: string) {
-    setActionId(memberId);
+  async function saveRole() {
+    if (!roleMember || actionId || selectedRole === (roleMember.role_key ?? roleMember.role)) return;
+    setActionId(roleMember.user_id);
+    setRoleError("");
     setFeedback(null);
-    const res = await fetch(`/api/users/${memberId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: newRole }),
-    });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not update role." });
-      return;
+    try {
+      const res = await fetch(`/api/users/${roleMember.user_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: selectedRole }),
+      });
+      const updated = await res.json();
+      if (!res.ok || updated?.user_id !== roleMember.user_id) {
+        throw new Error(updated?.error || "Could not update role. Refresh the team list and try again.");
+      }
+      setMembers((current) => current.map((m) => m.user_id === updated.user_id ? updated : m));
+      setFeedback({ kind: "success", text: `Updated ${updated.display_name} to ${updated.role_label || roleLabel(selectedRole)}.` });
+      setRoleMember(null);
+    } catch (error) {
+      setRoleError(error instanceof Error ? error.message : "Could not update role.");
+    } finally {
+      setActionId("");
     }
-    const updated = (await res.json()) as TeamMember;
-    setMembers((current) => current.map((m) => (m.user_id === memberId ? updated : m)));
-    setFeedback({ kind: "success", text: "Role updated." });
-    setOpenMenuId(null);
   }
 
   async function toggleStatus(memberId: string) {
@@ -272,15 +281,8 @@ export default function TeamPage() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <p className="muted" style={{ margin: 0 }}>
-          Roles:
-          {" "}
-          <strong>Admin</strong> can access everything.
-          {" "}
-          <strong>Manager</strong> can access everything except the Team page.
-          {" "}
-          <strong>Application Engineer</strong> can access everything except Team, Jobs, and Companies.
-          {" "}
-          Co-manager and Application Engineer (Reviewer &amp; Manager) currently use Manager access; Application Engineer (Reviewer) and Application Engineer (Grunter) use Application Engineer access. Their role variants are stored separately so permissions can be separated later.
+          Admins manage team roles. All staff can edit candidate profiles and custom candidate activities.
+          Managers, Co-managers, and Application Engineers (Reviewer &amp; Manager) can also manage candidate stages.
         </p>
       </div>
 
@@ -370,8 +372,13 @@ export default function TeamPage() {
                           open={openMenuId === member.user_id}
                           onOpenChange={(open) => setOpenMenuId(open ? member.user_id : null)}
                         >
-                          <DropdownMenuTrigger asChild>
+                          <DropdownMenuTrigger asChild
+                            onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey) event.preventDefault(); }}
+                            onClick={() => setOpenMenuId(current => current === member.user_id ? null : member.user_id)}
+                          >
                             <button
+                              type="button"
+                              id={`member-actions-${member.user_id}`}
                               className={styles.actionButton}
                               disabled={actionId === member.user_id}
                               aria-label={`Open actions for ${member.display_name || member.email || "user"}`}
@@ -379,21 +386,17 @@ export default function TeamPage() {
                               <MoreHorizontal size={18} />
                             </button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="min-w-[220px] border-border bg-surface p-1 shadow-lg">
-                            <DropdownMenuLabel className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">Change Role</DropdownMenuLabel>
-                            {roleOptions.map((roleOption) => (
-                              <DropdownMenuItem
-                                key={roleOption.value}
-                                className={cn(
-                                  "cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink",
-                                  memberRoleKey === roleOption.value && "bg-accent-soft text-accent focus:bg-accent-soft focus:text-accent"
-                                )}
-                                onSelect={() => changeRole(member.user_id, roleOption.value)}
-                                disabled={me?.profile.user_id === member.user_id}
-                              >
-                                <roleOption.icon className="h-3.5 w-3.5" />{roleOption.label}
-                              </DropdownMenuItem>
-                            ))}
+                          <DropdownMenuContent align="end" className="min-w-[220px] border-border bg-surface p-1 shadow-lg"
+                            onCloseAutoFocus={(event) => { if (roleTrigger.current) event.preventDefault(); }}>
+                            <DropdownMenuItem disabled={!me || me.profile.user_id === member.user_id}
+                              onSelect={() => {
+                                roleTrigger.current = document.getElementById(`member-actions-${member.user_id}`) as HTMLButtonElement;
+                                setRoleError("");
+                                setSelectedRole(memberRoleKey);
+                                setRoleMember(member);
+                              }}>
+                              Change role…
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator className="my-1 bg-border" />
                             <DropdownMenuItem className="cursor-pointer rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink" onSelect={() => toggleStatus(member.user_id)}>
                               {member.is_active ? "Deactivate" : "Activate"}
@@ -421,6 +424,31 @@ export default function TeamPage() {
           </div>
         )}
       </section>
+
+      <Dialog open={!!roleMember} onOpenChange={open => { if (!open && !actionId) setRoleMember(null); }}>
+        {roleMember && <DialogContent className="bg-surface text-ink" onCloseAutoFocus={event => {
+          event.preventDefault();
+          roleTrigger.current?.focus();
+          roleTrigger.current = null;
+        }}>
+          <DialogTitle>Change role</DialogTitle>
+          <DialogDescription>{roleMember.display_name} · Current role: {roleMember.role_label || roleLabel(roleMember.role_key ?? roleMember.role)}</DialogDescription>
+          <label className="field-group">
+            Team role
+            <select value={selectedRole} onChange={event => { setSelectedRole(event.target.value); setRoleError(""); }} disabled={!!actionId}>
+              {roleOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          {roleError && <p role="alert" className="text-danger">{roleError}</p>}
+          <div className="modal-actions">
+            <button type="button" disabled={!!actionId} onClick={() => setRoleMember(null)}>Cancel</button>
+            <button type="button" className="btn-primary" onClick={saveRole}
+              disabled={!!actionId || selectedRole === (roleMember.role_key ?? roleMember.role)}>
+              {actionId ? "Saving…" : "Save role"}
+            </button>
+          </div>
+        </DialogContent>}
+      </Dialog>
 
       {modalOpen && (
         <div className="modal-overlay" onClick={() => setModalOpen(false)}>

@@ -7,10 +7,14 @@ const id="11111111-1111-4111-8111-111111111111", activityId="22222222-2222-4222-
 const request=(data:unknown)=>new Request("https://example.test/api/custom",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
 describe("Custom activity API writes",()=>{
  beforeEach(()=>{vi.resetAllMocks();mocks.auth.mockResolvedValue({context:{profile:{user_id:id,email:null,role:"manager"}},response:null});});
- it("blocks every mutation for AE Grunter before reading or writing data",async()=>{
+ it("lets a Grunter edit an existing activity and keeps creation and deletion restricted",async()=>{
   mocks.auth.mockResolvedValue({context:{profile:{role:"application_engineer",role_variant:"application_engineer_grunter"}},response:null});
-  for(const method of["POST","PATCH","DELETE"] as const)expect((await mutateCandidateCustomActivity(request({}),{id,activityId},method)).status).toBe(403);
+  for(const method of["POST","DELETE"] as const)expect((await mutateCandidateCustomActivity(request({}),{id,activityId},method)).status).toBe(403);
   expect(mocks.query).not.toHaveBeenCalled();
+  mocks.query.mockResolvedValue({id:activityId,version:2});
+  const result = await mutateCandidateCustomActivity(request({title:"Appointment",body:"Updated",version:1}),{id,activityId},"PATCH");
+  expect(result.status).toBe(200);
+  expect(mocks.query.mock.calls[0][1]).toContain("candidate_activity.updated");
  });
  it("validates required data before a write",async()=>{
   expect((await mutateCandidateCustomActivity(request({title:"Missing reason"}),{id},"POST")).status).toBe(400);expect(mocks.query).not.toHaveBeenCalled();

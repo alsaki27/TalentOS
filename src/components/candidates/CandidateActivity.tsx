@@ -56,7 +56,13 @@ function ItemDetails({ item }: { item: CandidateActivityItem }) {
   </div>;
 }
 
-function ActivityRow({ item, upcoming = false, detailed = false, onCustomAction }: { item: CandidateActivityItem; upcoming?: boolean; detailed?: boolean; onCustomAction?: (activity: CandidateCustomActivity, deleting?: boolean) => void }) {
+function ActivityRow({ item, upcoming = false, detailed = false, onEdit, onDelete }: {
+  item: CandidateActivityItem;
+  upcoming?: boolean;
+  detailed?: boolean;
+  onEdit?: (activity: CandidateCustomActivity) => void;
+  onDelete?: (activity: CandidateCustomActivity) => void;
+}) {
   const Icon = icons[item.type];
   return <li className={styles.row} data-kind={item.type}>
     <span className={styles.icon} aria-hidden="true"><Icon size={16} /></span>
@@ -66,9 +72,9 @@ function ActivityRow({ item, upcoming = false, detailed = false, onCustomAction 
         <time dateTime={item.at}>{upcoming ? activityScheduleLabel(item) : activityDateLabel(item.at, item.dateOnly, item.timeZone)}</time>
       </div>
       {item.summary && <p className={styles.summary}>{item.summary}</p>}
-      {item.customActivity && onCustomAction && <div className={styles.customActions}>
-        <button type="button" onClick={() => onCustomAction(item.customActivity!)}><Pencil size={13} aria-hidden="true" />Edit</button>
-        <button type="button" onClick={() => onCustomAction(item.customActivity!, true)}><Trash2 size={13} aria-hidden="true" />Delete</button>
+      {item.customActivity && (onEdit || onDelete) && <div className={styles.customActions}>
+        {onEdit && <button type="button" onClick={() => onEdit(item.customActivity!)}><Pencil size={13} aria-hidden="true" />Edit</button>}
+        {onDelete && <button type="button" onClick={() => onDelete(item.customActivity!)}><Trash2 size={13} aria-hidden="true" />Delete</button>}
       </div>}
       <details className={styles.details}>
         <summary>{upcoming ? "Show details" : "Show more"}</summary>
@@ -214,7 +220,8 @@ export function CandidateActivity({ candidateId, full = false }: { candidateId: 
         {!loading && data?.warnings.map((warning) => <p className={styles.warning} key={warning}>{warning}</p>)}
         {!loading && !data?.items.length && !error && <p className={styles.empty}>{data?.warnings.length ? "Activity could not be fully loaded from its sources." : type || dateStart || dateEnd ? "No recorded activity matches these filters." : "No recorded activity yet."}</p>}
         {!!data?.items.length && <ol className={styles.timeline}>{data.items.map((item) => <ActivityRow key={item.id} item={item} detailed={full}
-          onCustomAction={data.canManageCustom ? (activity, deleting) => setCustomEditor({ activity, deleting }) : undefined} />)}</ol>}
+          onEdit={data.canEditCustom ? (activity) => setCustomEditor({ activity }) : undefined}
+          onDelete={data.canManageCustom ? (activity) => setCustomEditor({ activity, deleting: true }) : undefined} />)}</ol>}
         {data && full && <CandidateSectionPagination label="Activities" page={page} pageSize={20} total={data.total} onPageChange={setPage} pageSizeOptions={[20]} onPageSizeChange={() => setPage(1)} />}
         {data && !full && <footer className={styles.footer}><span>{data.items.length} of {data.total} recorded activities</span>
           <div className={styles.footerActions}>
