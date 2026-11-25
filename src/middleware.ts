@@ -88,6 +88,7 @@ const CRM_INTEGRATION_PATHS = new Set([
   "/api/integrations/crm/companies",
   "/api/integrations/crm/candidates",
   "/api/integrations/crm/candidate-outreach",
+  "/api/integrations/crm/recruiter-workspace",
 ]);
 
 function isCrmIntegrationAuthorized(req: NextRequest, pathname: string) {
