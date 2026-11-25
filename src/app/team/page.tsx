@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -51,6 +51,8 @@ const roleOptions = TEAM_ROLE_KEYS.map((value) => {
   return { value, label: definition.label, icon };
 });
 
+const REPEATED_TAP_WINDOW_MS = 500;
+
 function roleLabel(role: string) {
   return roleOptions.find((r) => r.value === role)?.label || role;
 }
@@ -92,6 +94,7 @@ export default function TeamPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const lastMenuOpen = useRef<{ memberId: string; time: number } | null>(null);
   const [roleMember, setRoleMember] = useState<TeamMember | null>(null);
   const [selectedRole, setSelectedRole] = useState("");
   const [roleError, setRoleError] = useState("");
@@ -107,6 +110,21 @@ export default function TeamPage() {
 
   function isValidEmail(email: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+
+  function toggleMemberMenu(event: MouseEvent<HTMLButtonElement>, memberId: string) {
+    if (event.ctrlKey) return;
+    if (openMenuId === memberId) {
+      const previous = lastMenuOpen.current;
+      // Touch browsers can report two single clicks for one double tap.
+      const repeatedTap = event.detail > 0 && previous?.memberId === memberId
+        && event.timeStamp - previous.time < REPEATED_TAP_WINDOW_MS;
+      if (event.detail > 1 || repeatedTap) return;
+      setOpenMenuId(null);
+    } else {
+      lastMenuOpen.current = { memberId, time: event.timeStamp };
+      setOpenMenuId(memberId);
+    }
   }
 
   async function load() {
@@ -369,12 +387,16 @@ export default function TeamPage() {
                           </div>
                         </div>
                         <DropdownMenu
+                          modal={false}
                           open={openMenuId === member.user_id}
-                          onOpenChange={(open) => setOpenMenuId(open ? member.user_id : null)}
+                          onOpenChange={open => {
+                            if (open) setOpenMenuId(member.user_id);
+                            else setOpenMenuId(current => current === member.user_id ? null : current);
+                          }}
                         >
                           <DropdownMenuTrigger asChild
                             onPointerDown={(event) => { if (event.button === 0 && !event.ctrlKey) event.preventDefault(); }}
-                            onClick={() => setOpenMenuId(current => current === member.user_id ? null : member.user_id)}
+                            onClick={event => toggleMemberMenu(event, member.user_id)}
                           >
                             <button
                               type="button"
@@ -387,6 +409,12 @@ export default function TeamPage() {
                             </button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-[220px] border-border bg-surface p-1 shadow-lg"
+                            onInteractOutside={event => {
+                              // The trigger handles its own toggle on click, after pointer-down.
+                              if (document.getElementById(`member-actions-${member.user_id}`)?.contains(event.target as Node)) {
+                                event.preventDefault();
+                              }
+                            }}
                             onCloseAutoFocus={(event) => { if (roleTrigger.current) event.preventDefault(); }}>
                             <DropdownMenuItem disabled={!me || me.profile.user_id === member.user_id}
                               onSelect={() => {
