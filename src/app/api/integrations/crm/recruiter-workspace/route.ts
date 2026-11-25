@@ -109,17 +109,24 @@ export async function GET(req: NextRequest) {
       { status: 422, headers: cache }
     );
   }
-  const document = content.header
-    ? normalizeResumeContentForExport(content)
-    : resumifyResumeDataToExportDocument(content);
-  if (!document.header?.fullName?.trim()) {
+  let buffer: ArrayBuffer;
+  try {
+    const document = content.header
+      ? normalizeResumeContentForExport(content)
+      : resumifyResumeDataToExportDocument(content);
+    if (!document.header?.fullName?.trim()) {
+      return NextResponse.json(
+        { error: 'The approved resume has no document header.' },
+        { status: 422, headers: cache }
+      );
+    }
+    buffer = renderResumePdfDoc(document).output('arraybuffer') as ArrayBuffer;
+  } catch {
     return NextResponse.json(
-      { error: 'The approved resume has no document header.' },
+      { error: 'Open this resume in TalentOS to export its file.' },
       { status: 422, headers: cache }
     );
   }
-  // Use the existing TalentOS PDF renderer on stored content. No AI generation.
-  const buffer = renderResumePdfDoc(document).output('arraybuffer') as ArrayBuffer;
   return new Response(buffer, {
     headers: {
       ...cache,
