@@ -2,6 +2,8 @@
 
 import { FormEvent, UIEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ContractSignatureFields, type SignatureFieldsValue } from "@/components/contracts/ContractSignatureFields";
+import { validateContractSigning } from "@/lib/contractSignature";
 import PortalLogo from "../PortalLogo";
 
 interface OnboardingData {
@@ -22,6 +24,8 @@ export default function PortalOnboardingPage() {
   const [dataProcessingConsent, setDataProcessingConsent] = useState(false);
   const [hasSsn, setHasSsn] = useState<boolean | null>(null);
   const [ssnLast4, setSsnLast4] = useState("");
+  const [signing, setSigning] = useState<SignatureFieldsValue>(() => {const now=new Date();const local=new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,10);return {signerName:"",signerEmail:"",signingDate:local,signature:{type:"typed",text:""},signatureConsent:false};});
+  const [completed, setCompleted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -78,6 +82,8 @@ export default function PortalOnboardingPage() {
       return;
     }
 
+    try { validateContractSigning(signing as unknown as Record<string,unknown>); }
+    catch(error) { setError(error instanceof Error ? error.message : "Complete your signature."); return; }
     setSubmitting(true);
     try {
       const response = await fetch("/api/portal/me/onboarding", {
@@ -85,6 +91,7 @@ export default function PortalOnboardingPage() {
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
         body: JSON.stringify({
+          ...signing,
           agreementVersion: data.agreementVersion,
           privacyNoticeVersion: data.privacyNoticeVersion,
           termsAccepted,
@@ -97,8 +104,9 @@ export default function PortalOnboardingPage() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "Could not save your choices.");
       setSsnLast4("");
-      router.replace("/portal");
-      router.refresh();
+      if (payload.alreadyCompleted) {router.replace("/portal");router.refresh();return;}
+      setSigning(current=>({...current,signerEmail:payload.copyEmail||current.signerEmail}));
+      setCompleted(true);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Could not save your choices.");
     } finally {
@@ -111,6 +119,7 @@ export default function PortalOnboardingPage() {
     router.replace("/portal/login");
   }
 
+  if (completed) return <div className="portal-onboarding-page"><section className="portal-onboarding-dialog"><h1>Your signed agreement is saved</h1><p>PDF copies are queued for delivery to {signing.signerEmail} and info@skarion.com. Delivery retries automatically if the email service is unavailable.</p><a className="portal-btn portal-btn-primary" href="/api/portal/me/signed-contract">Download signed PDF</a><button className="portal-btn portal-btn-secondary" onClick={()=>{router.replace('/portal');router.refresh();}}>Continue to portal</button></section></div>;
   if (loading) {
     return <div className="portal-onboarding-gate" role="status">Loading the required agreement…</div>;
   }
@@ -179,15 +188,17 @@ export default function PortalOnboardingPage() {
             <span>I consent to Skarion processing the onboarding information I submit, including the last four SSN digits only if I answered Yes.</span>
           </label>
 
+          <ContractSignatureFields value={signing} onChange={setSigning} disabled={!fullyRead || submitting} />
+
           {error && <p className="portal-error" role="alert">{error}</p>}
           <footer className="portal-onboarding-actions">
             <button type="button" className="portal-btn portal-btn-secondary" onClick={signOut} disabled={submitting}>Sign out</button>
             <button
               type="submit"
               className="portal-btn portal-btn-primary"
-              disabled={!fullyRead || !termsAccepted || !dataProcessingConsent || hasSsn === null || submitting || (hasSsn && ssnLast4.length !== 4)}
+              disabled={!fullyRead || !termsAccepted || !dataProcessingConsent || hasSsn === null || !signing.signatureConsent || submitting || (hasSsn && ssnLast4.length !== 4)}
             >
-              {submitting ? "Saving securely…" : "Agree and continue"}
+              {submitting ? "Creating your signed PDF…" : "Sign agreement and continue"}
             </button>
           </footer>
         </form>

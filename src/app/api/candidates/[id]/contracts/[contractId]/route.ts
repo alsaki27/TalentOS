@@ -1,3 +1,4 @@
+import { sha256Hex } from "@/lib/sha256";
 import { NextResponse } from "next/server";
 import { requireCandidateContractAccess } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
@@ -29,6 +30,14 @@ export async function GET(req: Request, { params }: { params: { id: string; cont
       WHERE f.id = $1 AND f.candidate_id = $2`,
     [params.contractId, params.id],
   );
+  if (!file) {
+    const signed=await queryOne<{pdf_base64:string;pdf_sha256:string}>("SELECT pdf_base64,pdf_sha256 FROM candidate_signed_contracts WHERE id=$1 AND candidate_id=$2",[params.contractId,params.id]);
+    if(signed){
+      const bytes=Buffer.from(signed.pdf_base64,'base64');
+      if(await sha256Hex(bytes)!==signed.pdf_sha256)return NextResponse.json({error:"Document integrity check failed."},{status:503});
+      return new Response(bytes,{headers:{"Content-Type":"application/pdf","Content-Disposition":contentDisposition(new URL(req.url).searchParams.get('view')==='inline'?'inline':'attachment','Skarion-signed-agreement.pdf'),"Cache-Control":"private, no-store","X-Content-Type-Options":"nosniff"}});
+    }
+  }
   if (!file) return NextResponse.json({ error: "Contract file not found." }, { status: 404 });
   if (!isSharePointCandidateContractStorageKey(file.storage_key) && !file.storage_key.startsWith(`candidate-contracts/${params.id}/`)) {
     return NextResponse.json({ error: "Contract file storage reference is invalid." }, { status: 500 });

@@ -1,5 +1,7 @@
 # Candidate contract and portal onboarding
 
+For the electronic signing extension (migration 149, typed/drawn signatures, saved PDFs and email copies), see [Contract signing](CONTRACT_SIGNING.md). The historical setup below describes the original migration 117 rollout.
+
 This feature adds a contract-status field, private contract uploads, and a required agreement/SSN-choice step for candidates marked as having no contract.
 
 ## Before enabling it
