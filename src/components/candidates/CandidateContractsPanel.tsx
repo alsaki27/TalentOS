@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 
 interface ContractFile {
+  delivery_status?: string | null;
   id: string;
   filename: string;
   content_type: string;
@@ -138,7 +139,7 @@ export function CandidateContractsPanel({
         <div>
           <span className="candidate-contract-eyebrow">Candidate documents</span>
           <h2 id="candidate-contract-heading">Contract and agreement</h2>
-          <p className="muted">Agreement files for {candidateName}, saved in the SharePoint contract folder.</p>
+          <p className="muted">Uploaded and electronically signed agreements for {candidateName}.</p>
         </div>
         <span className={`candidate-contract-status-pill ${hasContract ? "is-yes" : "is-no"}`}>
           {hasContract ? "Has contract" : "No contract"}
@@ -166,7 +167,7 @@ export function CandidateContractsPanel({
           </div>
 
           <div className="candidate-contract-file-list" aria-live="polite">
-            <h3>Uploaded agreements</h3>
+            <h3>Agreement documents</h3>
             {loading ? <p className="muted">Loading private files…</p> : files.length === 0 ? <p className="muted">No contract file uploaded yet.</p> : (
               <ul>
                 {files.map((file) => (
@@ -174,6 +175,7 @@ export function CandidateContractsPanel({
                     <div>
                       <strong>{file.filename}</strong>
                       <span>{new Date(file.created_at).toLocaleString()} · {Math.max(1, Math.ceil(file.size_bytes / 1024))} KB</span>
+                      {file.delivery_status && <span>{file.delivery_status}</span>}
                     </div>
                     <button className="candidate-contract-show-button" type="button" onClick={() => void showContract(file)}>
                       Show Contract

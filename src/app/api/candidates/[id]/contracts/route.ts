@@ -31,9 +31,14 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (response) return response;
   try {
     const files = await query<Record<string, unknown>>(
-      `SELECT id, filename, content_type, size_bytes, uploaded_by, created_at
+      `SELECT id, filename, content_type, size_bytes, uploaded_by, created_at, NULL::text AS delivery_status
          FROM candidate_contract_files
         WHERE candidate_id = $1
+        UNION ALL
+       SELECT id, 'Skarion-signed-agreement.pdf' AS filename, 'application/pdf' AS content_type,
+              octet_length(decode(pdf_base64,'base64')) AS size_bytes, NULL::uuid AS uploaded_by, signed_at AS created_at,
+              CASE WHEN EXISTS(SELECT 1 FROM candidate_contract_deliveries d WHERE d.contract_id=candidate_signed_contracts.id AND d.sent_at IS NULL) THEN 'Email delivery pending' ELSE 'Copies accepted by email provider' END AS delivery_status
+         FROM candidate_signed_contracts WHERE candidate_id=$1
         ORDER BY created_at DESC, id DESC`,
       [params.id],
     );

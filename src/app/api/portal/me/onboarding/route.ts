@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import { encryptCandidateSsnLast4 } from "@/server/privacy/candidateSsnCrypto";
-import { queryOne } from "@/server/db/neon";
+import { validateContractSigning } from "@/lib/contractSignature";
+import { saveSignedContract, processContractDeliveries } from "@/server/services/contractSigningService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { CANDIDATE_AGREEMENT_TEXT, CANDIDATE_AGREEMENT_VERSION } from "@/lib/candidatePortalAgreement";
 import { CANDIDATE_PRIVACY_NOTICE_VERSION } from "@/lib/candidatePortalAgreementVersion";
 
@@ -27,10 +29,15 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentCandidate({ allowIncompleteOnboarding: true });
   if (response) return response;
   if (context.candidate.has_contract || context.candidate.onboarding_complete) {
-    return NextResponse.json({ ok: true }, { headers: NO_STORE });
+    return NextResponse.json({ ok: true, alreadyCompleted: true }, { headers: NO_STORE });
   }
 
-  const body = await req.json().catch(() => null);
+  const reader = req.body?.getReader();
+  if (!reader) return NextResponse.json({error:"Submit your signature."},{status:400,headers:NO_STORE});
+  const chunks:Uint8Array[]=[];let size=0;
+  for (;;) { const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>500000){await reader.cancel();return NextResponse.json({error:"Signature is too large."},{status:413,headers:NO_STORE});}chunks.push(value); }
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+  let body;try{body=JSON.parse(new TextDecoder().decode(bytes));}catch{body=null;}
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Submit the required onboarding choices." }, { status: 400, headers: NO_STORE });
   }
@@ -44,6 +51,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Choose Yes or No for the Social Security Number question." }, { status: 400, headers: NO_STORE });
   }
 
+  let signing;
+  try { signing = validateContractSigning(body); }
+  catch(error) { return NextResponse.json({error: error instanceof Error ? error.message : "Complete the signature fields."},{status:400,headers:NO_STORE}); }
   let encryptedLast4: string | null = null;
   if (body.hasSsn) {
     const last4 = typeof body.ssnLast4 === "string" ? body.ssnLast4 : "";
@@ -60,30 +70,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const saved = await queryOne<{ candidate_id: string }>(
-      `WITH accepted AS (
-         INSERT INTO candidate_portal_acceptances (
-           candidate_id, agreement_version, terms_accepted, agreement_scrolled_to_end, privacy_notice_version, data_processing_consent
-         )
-         VALUES ($1, $2, TRUE, TRUE, $3, TRUE)
-         ON CONFLICT (candidate_id, agreement_version, privacy_notice_version)
-         DO UPDATE SET terms_accepted = TRUE, agreement_scrolled_to_end = TRUE, data_processing_consent = TRUE
-         RETURNING candidate_id
-       ), saved_ssn AS (
-         INSERT INTO candidate_ssn_records (candidate_id, has_ssn, last4_ciphertext, privacy_notice_version, captured_at)
-         SELECT candidate_id, $4, $5, $3, NOW() FROM accepted
-         ON CONFLICT (candidate_id)
-         DO UPDATE SET has_ssn = EXCLUDED.has_ssn,
-                       last4_ciphertext = EXCLUDED.last4_ciphertext,
-                       privacy_notice_version = EXCLUDED.privacy_notice_version,
-                       captured_at = NOW()
-         RETURNING candidate_id
-       )
-       SELECT candidate_id FROM saved_ssn`,
-      [context.candidateId, CANDIDATE_AGREEMENT_VERSION, CANDIDATE_PRIVACY_NOTICE_VERSION, body.hasSsn, encryptedLast4],
-    );
-    if (!saved) throw new Error("Onboarding record was not saved.");
-    return NextResponse.json({ ok: true }, { headers: NO_STORE });
+    const saved = await saveSignedContract(context.candidateId, signing, body.hasSsn, encryptedLast4);
+    backgroundDispatch(processContractDeliveries());
+    return NextResponse.json({ ok: true, contractId: saved.id, copyEmail: saved.signer_email, emailDelivery: "queued" }, { headers: NO_STORE });
   } catch {
     return NextResponse.json({ error: "Could not save onboarding. Please try again." }, { status: 500, headers: NO_STORE });
   }

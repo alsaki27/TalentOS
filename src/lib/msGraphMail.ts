@@ -28,6 +28,7 @@ async function getGraphAccessToken(): Promise<string> {
 
   const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
     method: "POST",
+    signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_id: clientId,
@@ -48,6 +49,7 @@ export interface GraphSendMailOptions {
   to: string;
   subject: string;
   html: string;
+  attachments?: { name: string; contentType: string; contentBytes: string }[];
 }
 
 export async function sendGraphMail(opts: GraphSendMailOptions): Promise<{ success: boolean; error?: string }> {
@@ -57,10 +59,12 @@ export async function sendGraphMail(opts: GraphSendMailOptions): Promise<{ succe
 
     const res = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderEmail)}/sendMail`, {
       method: "POST",
+      signal: AbortSignal.timeout(20000),
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         message: {
           subject: opts.subject,
+          attachments: opts.attachments?.map(a => ({ "@odata.type": "#microsoft.graph.fileAttachment", ...a })),
           body: { contentType: "HTML", content: opts.html },
           toRecipients: [{ emailAddress: { address: opts.to } }],
         },

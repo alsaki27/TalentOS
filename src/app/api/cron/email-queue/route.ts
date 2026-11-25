@@ -3,6 +3,7 @@
 // Same CRON_SECRET bearer pattern as other /api/cron/* routes.
 
 import { NextRequest, NextResponse } from "next/server";
+import { processContractDeliveries } from "@/server/services/contractSigningService";
 import { processEmailQueue } from "@/lib/emailQueue";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
@@ -23,10 +24,10 @@ export async function GET(req: NextRequest) {
   await recordJobAttempt("email-queue");
 
   try {
-    const result = await processEmailQueue();
+    const [result, contracts] = await Promise.all([processEmailQueue(), processContractDeliveries()]);
     const durationMs = Date.now() - startedMs;
     await recordJobSuccess("email-queue", durationMs, JSON.stringify(result));
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, ...result, contracts });
   } catch (err: any) {
     const durationMs = Date.now() - startedMs;
     await recordJobFailure("email-queue", err.message ?? "email queue failed", durationMs);
