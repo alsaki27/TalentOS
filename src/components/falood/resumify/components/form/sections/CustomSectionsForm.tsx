@@ -9,10 +9,12 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Switch } from '@/components/ui/switch';
 import { Plus, Trash2, GripVertical } from 'lucide-react';
 import { CustomSection } from '@/components/falood/resumify/types/resume';
+import { customSectionSlot } from '@/lib/falood/resumePresentation';
 
 export const CustomSectionsForm: React.FC = () => {
-  const { state, updateCustomSections } = useResume();
-  const { customSections } = state.resumeData;
+  const { state, updateCustomSections, updateSections } = useResume();
+  const { customSections, sections } = state.resumeData;
+  const group = customSectionSlot(sections);
 
   const addCustomSection = () => {
     const newSection: CustomSection = {
@@ -71,6 +73,14 @@ export const CustomSectionsForm: React.FC = () => {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {!group.visible && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">Custom sections are hidden in Settings.</p>
+            <Button type="button" size="sm" variant="outline" onClick={() =>
+              updateSections(sections.map(section => section === group ? { ...section, visible: true } : section))
+            }>Show custom sections</Button>
+          </div>
+        )}
         {/* Quick Add Common Sections */}
         {customSections.length === 0 && (
           <div className="space-y-4">

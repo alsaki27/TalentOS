@@ -17,18 +17,6 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   const getFontSizePx = () => `${((typeof fontSize === 'number' ? fontSize : 10) * 1.333).toFixed(2)}px`;
 
-  // Get custom sections by type
-  const getCustomSectionsByTitle = (titleMatch: string) => {
-    return customSections.filter(cs => 
-      cs.visible && cs.title.toLowerCase().includes(titleMatch.toLowerCase())
-    );
-  };
-
-  const trainingSections = getCustomSectionsByTitle('training');
-  const languageSections = getCustomSectionsByTitle('language');
-  const certificationSections = getCustomSectionsByTitle('certification');
-  const achievementsSections = getCustomSectionsByTitle('achievement');
-
   return (
     <div 
       className="resume-template resume-template-bjet w-full h-full"
@@ -432,55 +420,7 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
         </div>
       )}
 
-      {/* Training */}
-      {trainingSections.map((section) => (
-        <div key={section.id} className="mb-4 page-break-inside-avoid">
-          <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
-            {section.title}
-          </h2>
-          <div className="whitespace-pre-wrap">{section.content}</div>
-        </div>
-      ))}
-
-      {/* Language Skills */}
-      {languageSections.map((section) => (
-        <div key={section.id} className="mb-4 page-break-inside-avoid">
-          <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
-            {section.title}
-          </h2>
-          <div className="whitespace-pre-wrap">{section.content}</div>
-        </div>
-      ))}
-
-      {/* Professional Certification */}
-      {certificationSections.map((section) => (
-        <div key={section.id} className="mb-4 page-break-inside-avoid">
-          <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
-            {section.title}
-          </h2>
-          <div className="whitespace-pre-wrap">{section.content}</div>
-        </div>
-      ))}
-
-      {/* Special Achievements */}
-      {achievementsSections.map((section) => (
-        <div key={section.id} className="mb-4 page-break-inside-avoid">
-          <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>
-            {section.title}
-          </h2>
-          <div className="whitespace-pre-wrap">{section.content}</div>
-        </div>
-      ))}
-
-      {/* Other Custom Sections */}
-      {customSections
-        .filter(cs => 
-          cs.visible && 
-          !cs.title.toLowerCase().includes('training') &&
-          !cs.title.toLowerCase().includes('language') &&
-          !cs.title.toLowerCase().includes('certification') &&
-          !cs.title.toLowerCase().includes('achievement')
-        )
+      {customSections.filter(section => section.visible)
         .map((section) => (
           <div key={section.id} className="mb-4 page-break-inside-avoid">
             <h2 className="font-bold mb-2" style={{ fontSize: '14px', color: colors.text }}>

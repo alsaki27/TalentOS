@@ -1,5 +1,6 @@
 import React from 'react';
-import { ResumeData, TEMPLATE_CONFIGS } from '@/components/falood/resumify/types/resume';
+import { CUSTOM_SECTION_GROUP, ResumeData, TEMPLATE_CONFIGS } from '@/components/falood/resumify/types/resume';
+import { sectionsForPreview } from '@/lib/falood/resumePresentation';
 import './resumeFonts.css';
 import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
 import { BusinessProfessionalTemplate } from './templates/BusinessProfessionalTemplate';
@@ -26,12 +27,14 @@ const studioFonts: Readonly<Record<string, string>> = {
 
 export const ResumeTemplateSwitch: React.FC<{ data: ResumeData }> = ({ data: resume }) => {
   const font = resume.fontFamily || TEMPLATE_CONFIGS.find((template) => template.id === resume.template)?.fontFamily || 'Inter';
+  const sections = sectionsForPreview(resume.sections);
   const data = {
     ...resume,
+    sections,
     fontFamily: Object.hasOwn(studioFonts, font) ? studioFonts[font] : studioFonts.Inter,
-    customSections: resume.sections.some((section) => section.id === 'custom' && !section.visible)
+    customSections: sections.some((section) => section.id === CUSTOM_SECTION_GROUP.id && !section.visible)
       ? []
-      : [...resume.customSections].sort((a, b) => a.order - b.order),
+      : resume.customSections.filter(section => section.visible !== false && section.content?.trim()).sort((a, b) => a.order - b.order),
   };
   let template: React.ReactNode;
   switch (data.template) {

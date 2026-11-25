@@ -38,6 +38,7 @@ import {
   MIN_TITLE_SPACING,
   MAX_TITLE_SPACING,
   DEFAULT_SECTIONS,
+  CUSTOM_SECTION_GROUP,
   DEFAULT_FONT_SIZE,
 } from "@/components/falood/resumify/types/resume";
 
@@ -125,6 +126,22 @@ function readColors(value: unknown): ResumeColors {
     if (typeof raw[key] === "string" && raw[key]) merged[key] = raw[key] as string;
   }
   return merged;
+}
+
+/** Use the saved group's position and visibility. This only computes layout for display. */
+export function customSectionSlot(sections: ResumeSection[]): ResumeSection {
+  return sections.find(s => s.id === CUSTOM_SECTION_GROUP.id)
+    ?? sections.find(s => s.id === "certifications")
+    ?? { ...CUSTOM_SECTION_GROUP, order: sections.reduce((last, s) => Math.max(last, s.order), 0) + 1 };
+}
+
+export function sectionsForPreview(sections: ResumeSection[]): ResumeSection[] {
+  const slot = customSectionSlot(sections);
+  if (!sections.includes(slot)) return [...sections, slot];
+  return sections.flatMap(section => {
+    if (section === slot) return [slot.id === CUSTOM_SECTION_GROUP.id ? slot : { ...slot, id: CUSTOM_SECTION_GROUP.id }];
+    return section.id === "certifications" || section.id === CUSTOM_SECTION_GROUP.id ? [] : [section];
+  });
 }
 
 function readSections(value: unknown): ResumeSection[] {

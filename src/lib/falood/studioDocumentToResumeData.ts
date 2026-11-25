@@ -61,7 +61,7 @@ export interface StudioDocumentLike {
     bullets?: { text?: string }[] | string[];
   }[];
   education?: { id?: string; degree?: string; school?: string; graduationDate?: string; location?: string; gpa?: string; honors?: string }[];
-  certifications?: { name?: string; issuer?: string; date?: string }[];
+  certifications?: (string | { name?: string; issuer?: string; date?: string })[];
   projects?: {
     id?: string;
     title?: string;
@@ -334,7 +334,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     customSections.push({
       id: uid("cs"),
       title: "Certifications",
-      content: certifications.map((c) => [c?.name, c?.issuer, c?.date].filter(Boolean).join(" — ")).join("\n"),
+      content: certifications.map((c) => typeof c === "string" ? c : [c?.name, c?.issuer, c?.date].filter(Boolean).join(" — ")).join("\n"),
       type: "bullets",
       visible: true,
       order: DEFAULT_SECTIONS.length + 1 + customSections.length,

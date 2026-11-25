@@ -179,13 +179,17 @@ export function getPageSizeCss(pageFormat: ResumeData['pageFormat']) {
   return { width: `${width}${unit}`, height: `${height}${unit}` };
 }
 
+export const CUSTOM_SECTION_GROUP: ResumeSection = {
+  id: 'custom', title: 'Custom Sections', visible: true, order: 6,
+};
+
 export const DEFAULT_SECTIONS: ResumeSection[] = [
   { id: 'summary', title: 'Professional Summary', visible: true, order: 1 },
   { id: 'skills', title: 'Skills', visible: true, order: 2 },
   { id: 'experience', title: 'Experience', visible: true, order: 3 },
   { id: 'projects', title: 'Projects', visible: true, order: 4 },
   { id: 'education', title: 'Education', visible: true, order: 5 },
-  { id: 'custom', title: 'Custom Sections', visible: true, order: 6 }
+  CUSTOM_SECTION_GROUP,
 ];
 
 export const TEMPLATE_CONFIGS: TemplateConfig[] = [

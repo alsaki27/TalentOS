@@ -166,17 +166,17 @@ function mapSkills(skills: FinalResumeV1["skills"], baseSkills: Skills) {
 }
 
 function mapCertifications(certs: any[], baseContent: any) {
-  const baseCerts: any[] = Array.isArray(baseContent?.certifications) ? baseContent.certifications : [];
+  // A stored credential list is authoritative, even if an older model response omitted an entry.
+  const source: any[] = Array.isArray(baseContent?.certifications) ? baseContent.certifications : certs;
   const out: { id: string; name: string; issuer?: string; date?: string }[] = [];
-  for (const cert of certs) {
+  for (const cert of source) {
     const c = typeof cert === 'string' ? cert : (cert && cert.name ? String(cert.name) : "");
     if (!c) continue;
-    const match = baseCerts.find((b) => b?.name && typeof b.name === 'string' && b.name.toLowerCase() === c.toLowerCase());
     out.push({
-      id: uid("cert"),
+      id: cert?.id || uid("cert"),
       name: c,
-      issuer: match?.issuer ?? undefined,
-      date: match?.date ?? undefined,
+      issuer: cert?.issuer ?? undefined,
+      date: cert?.date ?? undefined,
     });
   }
   return out;

@@ -7,6 +7,10 @@ import {
   type ResumeData,
 } from "@/components/falood/resumify/types/resume";
 import { ResumeTemplateSwitch } from "@/components/falood/resumify/components/preview/ResumeTemplateSwitch";
+import { finalResumeToStudioDocument } from "@/lib/ai/application-agents/finalResumeToStudioDocument";
+import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
+import { mergeResumifyEditorIntoBaseResume } from "@/lib/falood/resumeDocumentAdapters";
+import { sectionsForPreview } from "@/lib/falood/resumePresentation";
 import {
   getResumeProjectTitle,
   ResumeContactLine,
@@ -46,6 +50,40 @@ const templateFixture: ResumeData = {
 };
 
 describe.each(TEMPLATE_CONFIGS)("Resume template: $name", (template) => {
+  it("shows visible custom content exactly once across older base and tailored layouts", () => {
+    const certifications = { id: "certs", title: "Training and Certifications", type: "bullets" as const,
+      content: "Credential One\nCredential Two", placement: "left" as const, visible: true, order: 1 };
+    const customSections = [certifications,
+      { ...certifications, id: "note", title: "Notes", type: "paragraph" as const, placement: "right" as const, content: "Reviewer-entered note" },
+      { ...certifications, id: "hidden", title: "Hidden section", content: "Private draft entry", visible: false },
+      { ...certifications, id: "empty", title: "Empty placeholder", content: " " },
+    ];
+    const legacy = { id: "certifications", title: "Certifications", order: 3, visible: true };
+    const current = { id: "custom", title: "Custom Sections", order: 4, visible: true };
+    for (const slots of [[], [legacy], [current], [legacy, current]]) {
+      const original = { ...templateFixture, template: template.id, sections: [...templateFixture.sections, ...slots], customSections };
+      const before = JSON.stringify(original);
+      const editor = studioDocumentToResumeData(original);
+      const saved = mergeResumifyEditorIntoBaseResume(original, editor);
+      const tailored = finalResumeToStudioDocument({ summary: null, experience: [], education: [], skills: [], projects: [], certifications: [] }, saved);
+      for (const data of [editor, studioDocumentToResumeData(saved), studioDocumentToResumeData(tailored)]) {
+        const html = renderToStaticMarkup(createElement(ResumeTemplateSwitch, { data }));
+        for (const label of ["Credential One", "Credential Two", "Reviewer-entered note"]) {
+          expect(html.split(label)).toHaveLength(2);
+        }
+        expect(html).not.toMatch(/Private draft entry|Empty placeholder/i);
+      }
+      expect(saved.customSections).toEqual(customSections);
+      expect(saved.sections).toEqual(original.sections);
+      expect(JSON.stringify(original)).toBe(before);
+    }
+    for (const id of ["custom", "certifications"]) {
+      const data = { ...templateFixture, template: template.id, sections: [{ ...legacy, id, visible: false }], customSections };
+      expect(renderToStaticMarkup(createElement(ResumeTemplateSwitch, { data }))).not.toContain("Credential One");
+      expect(data.customSections).toEqual(customSections);
+    }
+  });
+
   it("renders each supplied profile link and the project title", () => {
     const markup = renderToStaticMarkup(createElement(ResumeTemplateSwitch, {
       data: { ...templateFixture, template: template.id },
@@ -89,6 +127,14 @@ describe("Creative Modern project links", () => {
 });
 
 describe("shared resume template parts", () => {
+  it("keeps the saved group position and gives explicit custom-group settings priority over the legacy slot", () => {
+    const legacy = { id: "certifications", visible: true, title: "Certifications", order: 2 };
+    const current = { id: "custom", visible: false, title: "Custom Sections", order: 4 };
+    const other = { id: "education", visible: true, title: "Education", order: 8 };
+    expect(sectionsForPreview([legacy, other])).toEqual([{ ...legacy, id: "custom" }, other]);
+    expect(sectionsForPreview([legacy, other, current])).toEqual([other, current]);
+    expect(sectionsForPreview([other])[1]).toMatchObject({ id: "custom", order: 9, visible: true });
+  });
   it("places separators only between the available contact details", () => {
     const markup = renderToStaticMarkup(createElement(ResumeContactLine, {
       personalInfo: {

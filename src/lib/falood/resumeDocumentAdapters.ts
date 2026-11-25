@@ -18,7 +18,7 @@
 
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 import { currentExperienceIndex, isPresentEndDate } from "@/lib/falood/currentEmployment";
-import { pickResumePresentation } from "@/lib/falood/resumePresentation";
+import { customSectionSlot, pickResumePresentation, readResumePresentation } from "@/lib/falood/resumePresentation";
 
 export const DEFAULT_FORMATTING: ResumeFormatting = {
   styleId: "default",
@@ -47,6 +47,24 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
       name: p.name ?? p.title ?? "",
     })),
   };
+}
+
+/** Prepare visible text for file rendering without modifying the stored document. */
+export function visibleDocumentExtras(content: ResumeDocument) {
+  if (!customSectionSlot(readResumePresentation(content).sections).visible) {
+    return { certifications: [], customSections: [] };
+  }
+  const customSections = (content.customSections ?? []).filter(section => section && section.visible !== false)
+    .flatMap(section => {
+      const lines = typeof section.content === "string"
+        ? (section.type === "paragraph" ? [section.content] : section.content.split(/\r?\n/))
+        : (section.bullets ?? []).map(bullet => typeof bullet === "string" ? bullet : bullet?.text);
+      const text = lines.filter(line => line?.trim());
+      return text.length ? [{ title: section.title, type: section.type, lines: text }] : [];
+    });
+  const certifications: { name: string; issuer?: string; date?: string }[] =
+    (content.certifications ?? []).map(cert => typeof cert === "string" ? { name: cert } : cert);
+  return { certifications, customSections };
 }
 
 /** Converts the legacy Resumify editor shape into the canonical PDF document shape. */
@@ -116,9 +134,13 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
       startDate: entry?.startDate,
       endDate: entry?.endDate,
     })) : [],
+    ...(Array.isArray(data?.sections) ? { sections: data.sections } : {}),
     customSections: Array.isArray(data?.customSections) ? data.customSections.map((section: any, index: number) => ({
       id: section?.id || `custom-${index}`,
       title: section?.title || "Additional Information",
+      visible: section?.visible !== false,
+      type: section?.type,
+      content: section?.content,
       bullets: String(section?.content || "").split(/\r?\n/).filter(Boolean).map((text, bulletIndex) => ({
         id: `custom-${index}-bullet-${bulletIndex}`,
         text,

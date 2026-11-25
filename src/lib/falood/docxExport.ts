@@ -10,6 +10,7 @@
 
 import { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from "docx";
 import { ResumeDocument } from "@/lib/falood/types";
+import { visibleDocumentExtras } from "@/lib/falood/resumeDocumentAdapters";
 
 function contactLine(content: ResumeDocument): string {
   return [
@@ -99,16 +100,17 @@ export function buildResumeDocxDocument(content: ResumeDocument): Document {
     }
   }
 
-  if (content.certifications && content.certifications.length > 0) {
+  const extras = visibleDocumentExtras(content);
+  if (extras.certifications.length > 0) {
     children.push(sectionHeading("Certifications"));
-    for (const c of content.certifications) {
+    for (const c of extras.certifications) {
       children.push(new Paragraph({ text: `${c.name}${c.issuer ? ` — ${c.issuer}` : ""}${c.date ? ` (${c.date})` : ""}` }));
     }
   }
 
-  for (const section of content.customSections ?? []) {
+  for (const section of extras.customSections) {
     children.push(sectionHeading(section.title));
-    for (const b of section.bullets) children.push(bulletParagraph(b.text));
+    for (const line of section.lines) children.push(section.type === "paragraph" ? new Paragraph(line) : bulletParagraph(line));
   }
 
   return new Document({

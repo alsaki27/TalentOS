@@ -6,10 +6,13 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { GripVertical, Eye, EyeOff, Settings } from 'lucide-react';
+import { customSectionSlot } from '@/lib/falood/resumePresentation';
 
 export const SectionManager: React.FC = () => {
   const { state, updateSections, updatePageFormat } = useResume();
-  const { sections, pageFormat } = state.resumeData;
+  const { sections: savedSections, pageFormat } = state.resumeData;
+  const group = customSectionSlot(savedSections);
+  const sections = savedSections.includes(group) ? savedSections : [...savedSections, group];
   const orderedSections = [...sections].sort((a, b) => a.order - b.order);
 
   const toggleSectionVisibility = (sectionId: string) => {

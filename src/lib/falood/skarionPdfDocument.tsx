@@ -28,6 +28,7 @@
 
 import { jsPDF } from "jspdf";
 import { ResumeDocument } from "@/lib/falood/types";
+import { visibleDocumentExtras } from "@/lib/falood/resumeDocumentAdapters";
 import { READABILITY_FLOOR_FONT_SIZE } from "@/lib/falood/pageFitThresholds";
 export { READABILITY_FLOOR_FONT_SIZE } from "@/lib/falood/pageFitThresholds";
 
@@ -228,9 +229,10 @@ function renderInternal(content: ResumeDocument): RenderResult {
     bumpY(sectionSpacing * 0.5);
   }
 
-  if (content.certifications && content.certifications.length > 0) {
+  const extras = visibleDocumentExtras(content);
+  if (extras.certifications.length > 0) {
     sectionTitle("Certifications");
-    for (const c of content.certifications) {
+    for (const c of extras.certifications) {
       writeWrapped(
         `${c.name}${c.issuer ? ` — ${c.issuer}` : ""}${c.date ? ` (${c.date})` : ""}`,
         marginLeft,
@@ -241,9 +243,12 @@ function renderInternal(content: ResumeDocument): RenderResult {
     bumpY(sectionSpacing * 0.5);
   }
 
-  for (const section of content.customSections ?? []) {
+  for (const section of extras.customSections) {
     sectionTitle(section.title);
-    for (const b of section.bullets) bullet(b.text);
+    for (const line of section.lines) {
+      if (section.type === "paragraph") writeWrapped(line, marginLeft, contentWidth, baseFontSize - 0.5);
+      else bullet(line);
+    }
   }
 
   return { doc, maxYPerPage, baseFontSize, pageHeight, marginTop, marginBottom, horizontalOverflow };

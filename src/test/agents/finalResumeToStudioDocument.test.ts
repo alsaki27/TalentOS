@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { finalResumeToStudioDocument, type RenderableResumeContent } from "@/lib/ai/application-agents/finalResumeToStudioDocument";
 import { mergeResumifyEditorIntoBaseResume } from "@/lib/falood/resumeDocumentAdapters";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
+import { renderEvidenceReleasePdf } from "@/lib/ai/application-agents/resumeReleasePdf";
 
 const minimalFinal: RenderableResumeContent = {
   summary: "Tailored summary.",
@@ -38,6 +39,32 @@ it("carries saved base formatting and education through the generated Studio doc
 });
 
 describe("finalResumeToStudioDocument custom sections pass-through", () => {
+  it.each([true, false])("respects saved certification visibility (%s) in the generated document and release PDF", async (visible) => {
+    const base = {
+      header: { fullName: "Test Candidate" },
+      sections: [{ id: "certifications", title: "Certifications", visible, order: 1 }],
+      certifications: ["LegacyCredential", { id: "cert-2", name: "StoredCredential", issuer: "Example", date: "2024" }],
+      customSections: [
+        { id: "award", title: "Awards", type: "paragraph", content: "SavedAward", visible: true },
+        { id: "private", title: "Hidden", type: "bullets", content: "HiddenAward", visible: false },
+      ],
+    };
+    const before = JSON.stringify(base);
+    const final = finalResumeToStudioDocument({ ...minimalFinal, certifications: [] }, base);
+    expect(final.certifications).toEqual([
+      expect.objectContaining({ name: "LegacyCredential" }),
+      { id: "cert-2", name: "StoredCredential", issuer: "Example", date: "2024" },
+    ]);
+    expect(studioDocumentToResumeData(final).customSections.map(s => s.content))
+      .toEqual(studioDocumentToResumeData(base).customSections.filter(s => s.visible).map(s => s.content));
+    const pdf = new TextDecoder().decode((await renderEvidenceReleasePdf(final, 2)).bytes);
+    for (const text of ["LegacyCredential", "StoredCredential", "SavedAward"]) {
+      expect(pdf.includes(text)).toBe(visible);
+    }
+    expect(pdf).not.toContain("HiddenAward");
+    expect(JSON.stringify(base)).toBe(before);
+  });
+
   it("carries Resumify-native shaped custom sections (content string) through unchanged", () => {
     const baseContent = {
       customSections: [
