@@ -16,6 +16,20 @@ import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 
+const profileFields = [
+  "name", "email", "phone", "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
+  "linkedin_url", "github_url", "portfolio_url", "visa_status", "target_industries", "current_location",
+  "location_preference", "work_mode_preference", "available_start_date", "verified_skills",
+  "eeo_gender", "eeo_race", "eeo_veteran", "eeo_disability",
+];
+
+const managerFields = [
+  "status", "pipeline_stage", "target_tier", "notes", "resume_url", "resume_filename",
+  "portal_token_expires_at", "portal_token_revoked_at", "home_address", "birth_date", "open_to_relocation",
+  "driving_license", "driving_license_state", "driving_license_expiry", "pe_license_il", "education_gpa",
+  "education_gpa_year",
+];
+
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const candidate = await queryOne<Record<string, any>>('SELECT * FROM candidates WHERE id = $1', [params.id]);
@@ -52,10 +66,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return NextResponse.json({ error: "Expected candidate fields" }, { status: 400 });
+  }
+  if (!MASTER_DATA_MANAGER_ROLES.includes(context.profile.role) && managerFields.some((field) => field in body)) {
+    return NextResponse.json({ error: "Permission denied" }, { status: 403 });
+  }
 
   if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
     return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
@@ -67,20 +87,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "Permission denied" }, { status: 403 });
   }
 
-  const allowedFields = [
-    "name", "email", "phone", "status", "pipeline_stage", "target_tier",
-    "notes", "resume_url", "resume_filename",
-    "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
-    "linkedin_url", "github_url", "portfolio_url", "visa_status",
-    "target_industries", "current_location", "location_preference", "work_mode_preference", "available_start_date",
-    "portal_token_expires_at", "portal_token_revoked_at", "verified_skills",
-    "eeo_gender", "eeo_race", "eeo_veteran", "eeo_disability",
-    "home_address", "birth_date", "open_to_relocation",
-    "driving_license", "driving_license_state", "driving_license_expiry",
-    "pe_license_il", "education_gpa", "education_gpa_year", "has_contract",
-  ];
   const updates: Record<string, unknown> = {};
-  for (const f of allowedFields) {
+  for (const f of [...profileFields, ...managerFields, "has_contract"]) {
     if (f in body) updates[f] = body[f];
   }
 
@@ -103,6 +111,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const sql = `UPDATE candidates SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
     const data = await queryOne<Record<string, any>>(sql, values);
     if (!data) throw new Error("Update failed");
+    delete data.password_hash;
 
     if (context && data) {
       backgroundDispatch(logActivity({
