@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTeamRoleStorage, isTeamRoleKey, publicUserProfile, requireCurrentUser } from "@/lib/auth";
+import { getTeamRoleStorage, publicUserProfile, requireCurrentUser } from "@/lib/auth";
+import { isAssignableTeamRole } from "@/lib/auth-edge";
 import { hashPassword } from "@/server/auth/crypto";
 import { queryOne } from "@/server/db/neon";
 import { listAllProfiles, listActiveProfiles, upsertProfile } from "@/server/repositories/profilesRepository";
@@ -32,8 +33,8 @@ export async function POST(req: NextRequest) {
   if (password.length < 8) {
     return NextResponse.json({ error: "Temporary password must be at least 8 characters." }, { status: 400 });
   }
-  if (!isTeamRoleKey(role)) {
-    return NextResponse.json({ error: "Invalid role." }, { status: 400 });
+  if (!isAssignableTeamRole(role)) {
+    return NextResponse.json({ error: "Choose an available team role." }, { status: 400 });
   }
   const storedRole = getTeamRoleStorage(role);
 

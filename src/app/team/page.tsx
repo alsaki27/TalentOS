@@ -19,12 +19,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "../../lib/utils";
-import { TEAM_ROLE_DEFINITIONS, TEAM_ROLE_KEYS } from "@/lib/auth-edge";
+import { isAssignableTeamRole, TEAM_ROLE_DEFINITIONS, TEAM_ROLE_KEYS } from "@/lib/auth-edge";
 import { matchesTeamMemberFilters, type TeamRoleGroupFilter, type TeamStatusFilter } from "@/lib/teamMemberFilters";
 import styles from "./team.module.css";
 
@@ -52,6 +53,7 @@ const roleOptions = TEAM_ROLE_KEYS.map((value) => {
 });
 
 const REPEATED_TAP_WINDOW_MS = 500;
+const assignableRoleOptions = roleOptions.filter(option => isAssignableTeamRole(option.value));
 
 function roleLabel(role: string) {
   return roleOptions.find((r) => r.value === role)?.label || role;
@@ -85,7 +87,7 @@ export default function TeamPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("application_engineer");
+  const [role, setRole] = useState("");
   const [formError, setFormError] = useState("");
   const [formSaving, setFormSaving] = useState(false);
   const [actionId, setActionId] = useState("");
@@ -95,8 +97,7 @@ export default function TeamPage() {
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const lastMenuOpen = useRef<{ memberId: string; time: number } | null>(null);
-  const [roleMember, setRoleMember] = useState<TeamMember | null>(null);
-  const [selectedRole, setSelectedRole] = useState("");
+  const [pendingRole, setPendingRole] = useState<{ member: TeamMember; newRole: string } | null>(null);
   const [roleError, setRoleError] = useState("");
   const roleTrigger = useRef<HTMLButtonElement | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
@@ -204,29 +205,37 @@ export default function TeamPage() {
     setName("");
     setEmail("");
     setPassword("");
-    setRole("application_engineer");
+    setRole("");
     setModalOpen(false);
     setFeedback({ kind: "success", text: "User created." });
   }
 
-  async function saveRole() {
-    if (!roleMember || actionId || selectedRole === (roleMember.role_key ?? roleMember.role)) return;
-    setActionId(roleMember.user_id);
+  function selectRole(member: TeamMember, newRole: string) {
+    if (newRole === (member.role_key ?? member.role)) return;
+    roleTrigger.current = document.getElementById(`member-actions-${member.user_id}`) as HTMLButtonElement | null;
+    setRoleError("");
+    setPendingRole({ member, newRole });
+  }
+
+  async function confirmRoleChange() {
+    if (!pendingRole || actionId) return;
+    const { member, newRole } = pendingRole;
+    setActionId(member.user_id);
     setRoleError("");
     setFeedback(null);
     try {
-      const res = await fetch(`/api/users/${roleMember.user_id}`, {
+      const res = await fetch(`/api/users/${member.user_id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: selectedRole }),
+        body: JSON.stringify({ role: newRole }),
       });
-      const updated = await res.json();
-      if (!res.ok || updated?.user_id !== roleMember.user_id) {
+      const updated = await res.json().catch(() => null);
+      if (!res.ok || updated?.user_id !== member.user_id) {
         throw new Error(updated?.error || "Could not update role. Refresh the team list and try again.");
       }
       setMembers((current) => current.map((m) => m.user_id === updated.user_id ? updated : m));
-      setFeedback({ kind: "success", text: `Updated ${updated.display_name} to ${updated.role_label || roleLabel(selectedRole)}.` });
-      setRoleMember(null);
+      setFeedback({ kind: "success", text: `Updated ${updated.display_name} to ${updated.role_label || roleLabel(newRole)}.` });
+      setPendingRole(null);
     } catch (error) {
       setRoleError(error instanceof Error ? error.message : "Could not update role.");
     } finally {
@@ -408,23 +417,28 @@ export default function TeamPage() {
                               <MoreHorizontal size={18} />
                             </button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="min-w-[220px] border-border bg-surface p-1 shadow-lg"
+                          <DropdownMenuContent align="end" className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[220px] overflow-y-auto border-border bg-surface p-1 shadow-lg"
                             onInteractOutside={event => {
                               // The trigger handles its own toggle on click, after pointer-down.
                               if (document.getElementById(`member-actions-${member.user_id}`)?.contains(event.target as Node)) {
                                 event.preventDefault();
                               }
                             }}
-                            onCloseAutoFocus={(event) => { if (roleTrigger.current) event.preventDefault(); }}>
-                            <DropdownMenuItem disabled={!me || me.profile.user_id === member.user_id}
-                              onSelect={() => {
-                                roleTrigger.current = document.getElementById(`member-actions-${member.user_id}`) as HTMLButtonElement;
-                                setRoleError("");
-                                setSelectedRole(memberRoleKey);
-                                setRoleMember(member);
-                              }}>
-                              Change role…
-                            </DropdownMenuItem>
+                            onCloseAutoFocus={event => { if (roleTrigger.current) event.preventDefault(); }}>
+                            <DropdownMenuLabel className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">Change Role</DropdownMenuLabel>
+                            {assignableRoleOptions.map(roleOption => (
+                              <DropdownMenuItem
+                                key={roleOption.value}
+                                className={cn(
+                                  "cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink",
+                                  memberRoleKey === roleOption.value && "bg-accent-soft text-accent focus:bg-accent-soft focus:text-accent"
+                                )}
+                                disabled={!me || me.profile.user_id === member.user_id || !!actionId}
+                                onSelect={() => selectRole(member, roleOption.value)}
+                              >
+                                <roleOption.icon className="h-3.5 w-3.5" />{roleOption.label}
+                              </DropdownMenuItem>
+                            ))}
                             <DropdownMenuSeparator className="my-1 bg-border" />
                             <DropdownMenuItem className="cursor-pointer rounded-md px-2 py-1.5 text-sm text-ink focus:bg-bg focus:text-ink" onSelect={() => toggleStatus(member.user_id)}>
                               {member.is_active ? "Deactivate" : "Activate"}
@@ -453,29 +467,28 @@ export default function TeamPage() {
         )}
       </section>
 
-      <Dialog open={!!roleMember} onOpenChange={open => { if (!open && !actionId) setRoleMember(null); }}>
-        {roleMember && <DialogContent className="bg-surface text-ink" onCloseAutoFocus={event => {
-          event.preventDefault();
-          roleTrigger.current?.focus();
-          roleTrigger.current = null;
-        }}>
-          <DialogTitle>Change role</DialogTitle>
-          <DialogDescription>{roleMember.display_name} · Current role: {roleMember.role_label || roleLabel(roleMember.role_key ?? roleMember.role)}</DialogDescription>
-          <label className="field-group">
-            Team role
-            <select value={selectedRole} onChange={event => { setSelectedRole(event.target.value); setRoleError(""); }} disabled={!!actionId}>
-              {roleOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
-          </label>
-          {roleError && <p role="alert" className="text-danger">{roleError}</p>}
-          <div className="modal-actions">
-            <button type="button" disabled={!!actionId} onClick={() => setRoleMember(null)}>Cancel</button>
-            <button type="button" className="btn-primary" onClick={saveRole}
-              disabled={!!actionId || selectedRole === (roleMember.role_key ?? roleMember.role)}>
-              {actionId ? "Saving…" : "Save role"}
-            </button>
-          </div>
-        </DialogContent>}
+      <Dialog open={!!pendingRole} onOpenChange={open => { if (!open && !actionId) setPendingRole(null); }}>
+        {pendingRole && (
+          <DialogContent className="bg-surface text-ink" onCloseAutoFocus={event => {
+            event.preventDefault();
+            roleTrigger.current?.focus({ preventScroll: true });
+            roleTrigger.current = null;
+          }}>
+            <DialogTitle>Confirm role change</DialogTitle>
+            <DialogDescription>
+              Change <strong>{pendingRole.member.display_name || pendingRole.member.email}</strong> from{" "}
+              <strong>{pendingRole.member.role_label || roleLabel(pendingRole.member.role_key ?? pendingRole.member.role)}</strong> to{" "}
+              <strong>{roleLabel(pendingRole.newRole)}</strong>?
+            </DialogDescription>
+            {roleError && <p role="alert" className="text-danger">{roleError}</p>}
+            <div className="modal-actions">
+              <button type="button" disabled={!!actionId} onClick={() => setPendingRole(null)}>Cancel</button>
+              <button type="button" className="btn-primary" disabled={!!actionId} onClick={confirmRoleChange}>
+                {actionId ? "Saving…" : "Confirm change"}
+              </button>
+            </div>
+          </DialogContent>
+        )}
       </Dialog>
 
       {modalOpen && (
@@ -533,12 +546,15 @@ export default function TeamPage() {
             </div>
 
             <div className="field-group">
-              <label>Role *</label>
+              <label htmlFor="create-member-role">Role *</label>
               <select
+                id="create-member-role"
+                required
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
               >
-                {roleOptions.map((roleOption) => (
+                <option value="" disabled>Select a role</option>
+                {assignableRoleOptions.map((roleOption) => (
                   <option key={roleOption.value} value={roleOption.value}>
                     {roleOption.label}
                   </option>

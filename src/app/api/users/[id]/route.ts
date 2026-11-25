@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTeamRoleStorage, isTeamRoleKey, publicUserProfile, requireCurrentUser } from "@/lib/auth";
+import { getTeamRoleStorage, publicUserProfile, requireCurrentUser } from "@/lib/auth";
+import { isAssignableTeamRole } from "@/lib/auth-edge";
 import { queryOne, sql } from "@/server/db/neon";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -12,9 +13,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if ("display_name" in body) updates.display_name = String(body.display_name ?? "").trim();
   if ("email" in body) updates.email = body.email ? String(body.email).trim() : null;
   if ("is_active" in body) updates.is_active = Boolean(body.is_active);
-  if ("role" in body) {
-    if (!isTeamRoleKey(body.role)) {
-      return NextResponse.json({ error: "Invalid role." }, { status: 400 });
+  const keepingPlainAE = body.role === "application_engineer";
+  if ("role" in body && !keepingPlainAE) {
+    if (!isAssignableTeamRole(body.role)) {
+      return NextResponse.json({ error: "Choose an available team role." }, { status: 400 });
     }
     Object.assign(updates, getTeamRoleStorage(body.role));
   }
@@ -23,7 +25,17 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
   const sqlParams = entries.map(([, val]) => val);
   sqlParams.push(params.id);
-  const data = await queryOne<any>(`UPDATE profiles SET ${setClauses.join(", ")} WHERE user_id = $${sqlParams.length} RETURNING user_id, email, display_name, role, role_variant, is_active`, sqlParams);
+  let where = `user_id = $${sqlParams.length}`;
+  if (keepingPlainAE) {
+    // Older clients can resubmit the current title along with unrelated edits.
+    // Match it atomically without overwriting a concurrently changed role or variant.
+    sqlParams.push(body.role);
+    where += ` AND role = $${sqlParams.length} AND role_variant IS NULL`;
+  }
+  const data = await queryOne<any>(`UPDATE profiles SET ${setClauses.join(", ")} WHERE ${where} RETURNING user_id, email, display_name, role, role_variant, is_active`, sqlParams);
+  if (keepingPlainAE && !data) {
+    return NextResponse.json({ error: "Application Engineer can only be kept by an existing holder. Choose another role." }, { status: 400 });
+  }
   return NextResponse.json(data ? publicUserProfile(data as any) : null);
 }
 

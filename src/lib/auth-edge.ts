@@ -60,6 +60,11 @@ export function isTeamRoleKey(role: unknown): role is TeamRoleKey {
   return typeof role === "string" && Object.prototype.hasOwnProperty.call(TEAM_ROLE_DEFINITIONS, role);
 }
 
+// The plain AE title is retained for existing profiles and is still the access role for AE variants.
+export function isAssignableTeamRole(role: unknown): role is Exclude<TeamRoleKey, "application_engineer"> {
+  return isTeamRoleKey(role) && role !== "application_engineer";
+}
+
 export function getTeamRoleStorage(role: TeamRoleKey) {
   const definition = TEAM_ROLE_DEFINITIONS[role];
   return { role: definition.accessRole, role_variant: definition.roleVariant };
