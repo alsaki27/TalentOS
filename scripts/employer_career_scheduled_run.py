@@ -328,8 +328,13 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if args.ingest:
             command.append("--ingest")
+        child_env = os.environ.copy()
+        if not child_env.get("TALENTOS_JOBVITE_CALL_BUDGET_DB", "").strip():
+            child_env["TALENTOS_JOBVITE_CALL_BUDGET_DB"] = str(
+                output_dir / "crawl_state" / "jobvite_api_call_budget.sqlite3"
+            )
         with log_path.open("w", encoding="utf-8") as log:
-            completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False)
+            completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False, env=child_env)
         crawler_summary_path = output_dir / "crawl_state" / "run_summary.json"
         crawler_summary = _current_crawler_summary(crawler_summary_path, filtered_tracker, started)
         summary_valid = crawler_summary is not None

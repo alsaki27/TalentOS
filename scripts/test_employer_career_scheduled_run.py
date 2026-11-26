@@ -178,9 +178,14 @@ class ScheduledEmployerCareerRunTests(unittest.TestCase):
             ) as run:
                 self.assertEqual(scheduled.main(), 0)
             command = run.call_args.args[0]
+            child_env = run.call_args.kwargs["env"]
             summary = json.loads((output / "scheduled_run_summary.json").read_text(encoding="utf-8"))
         self.assertIn("--refresh-completed-after-hours", command)
         self.assertNotIn("--ingest", command)
+        expected_budget_path = os.environ.get("TALENTOS_JOBVITE_CALL_BUDGET_DB") or str(
+            output / "crawl_state" / "jobvite_api_call_budget.sqlite3"
+        )
+        self.assertEqual(Path(child_env["TALENTOS_JOBVITE_CALL_BUDGET_DB"]).resolve(), Path(expected_budget_path).resolve())
         self.assertTrue(summary["crawler_invoked"])
         self.assertTrue(summary["crawler_summary_valid"])
         self.assertTrue(summary["content_fetch_started"])

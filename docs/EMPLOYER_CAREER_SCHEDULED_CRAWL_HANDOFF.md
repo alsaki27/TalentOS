@@ -21,56 +21,170 @@ repository.
   when the child summary matches the current adapter version and filtered
   tracker hash.
 - TalentOS staging remains off unless the operator supplies `--ingest` and
-  `INGEST_SECRET`.
+  `INGEST_SECRET`. Only the scheduled wrapper applies the private permission
+  manifest; invoking the crawler CLI directly does not enforce that manifest.
 
 ## What is not ready to enable across all sources
 
-The latest frozen inventory contains 9,919 source groups across 10,718
-employer keys. Its v26 robots-only audit found 5,932 source URLs allowed, 69
-disallowed, and 3,918 unresolved. Robots allowance does not establish the
-right to collect and reuse jobs. The reviewed vendor terms did not establish a
-vendor-wide TalentOS reuse grant, and the tracker currently has no per-source
-permission approvals. Therefore the scheduled runner will make no content
-requests until the permission manifest is populated with reviewed evidence.
+The tracker snapshot contains 9,919 verified source groups across 10,718
+verified employer keys. The latest full-denominator report in this checkout is
+an offline reconciliation dated 2026-11-26 of saved crawl attempts through
+2026-11-14. It selects historical adapter results v11-v25 and records 1,477
+complete groups (1,194 with jobs, 283 confirmed empty) and 8,442 incomplete
+groups (6,323 partial, 1,406 errors, 649 blocked, 56 needing revalidation, six
+held, and two payload-count mismatches). It contains 117,738 unique payloads
+from complete groups, of which 117,135 passed integration-readiness checks;
+`live_ingest_performed` is false. Fifty-four result URLs outside the current
+tracker were excluded from the denominator and payload output.
 
-The scraper's current URL patterns recognize 427 direct ATS routes in that
-inventory. The other 9,492 do not match a known pattern; this includes both
-employer-hosted sources and ATS hosts the scraper does not recognize. A generic
-fallback may extract some of these, but the route inventory does not prove full
-adapter coverage. Treat a source as ready only after the result is complete and
-the visible job count/detail checks pass.
+The folder name `v28-overall-readiness-frozen` is a cohort label: its original
+report selected historical results only through v23. The new offline report
+adds saved Nov 13-14 attempts through v25, but the checked-in crawler is now
+v29; none of these counts proves a full crawl with the current adapter code.
+The latest saved scheduler validation, dated 2026-11-14, had zero permission
+rows, selected zero sources, started no content fetch, and invoked no
+TalentOS ingest.
 
-An offline v28 history snapshot for those 9,492 routes recorded 838 `scraped`,
-215 `no_jobs`, 5,649 `partial`, 2,141 `error`, 587 `blocked`, 56
-`needs_revalidation`, five `held`, and one `payload_count_mismatch`. These are
-historical outcomes, not current readiness or permission. Of 9,074 hosts, 8,834
-occur only once, so the remaining adapter work is mostly a long tail of custom
-employer pages. The largest recognizable unclassified host groups were
-GovernmentJobs (69), ADP (25), UKG/UltiPro (27), Paycom (22), and Jobvite (7);
-these should stay held under the source policy. Smaller technical candidates
-for evidence-backed adapter work include Dayforce (5), Taleo Business Edition
-(5), AppliTrack (4), USAJobs (3), and JobDiva (3). Host-pattern counts do not
-prove that each source is the named vendor or that collection is authorized.
+The v26 robots audit recorded 5,932 source URLs allowed, 69 disallowed, and
+3,918 unresolved. Later November 14 retries covered only subsets and did not
+produce a new full-denominator audit. Robots allowance does not establish the
+right to collect and reuse jobs. The private per-source permission manifest
+is absent from this checkout; its template is blank. The scheduled runner
+therefore has no recorded approved sources and must make no content requests
+until the private manifest is populated with reviewed evidence.
+This leaves zero source groups cleared for scheduled content collection in the
+saved operational checkpoint, even though the code can schedule an approved
+subset once the private inputs are supplied.
+
+The current crawler recognizes 480 direct ATS/API routes in the tracker; the
+other 9,439 use generic discovery. For those generic routes, the offline
+consolidation records 923 `scraped`, 232 `no_jobs`, 6,235 `partial`, 1,387
+`error`, 600 `blocked`, 56 `needs_revalidation`, five `held`, and one
+`payload_count_mismatch`. These are historical outcomes through v25, not
+current-code validation or permission. The 9,074-host route audit found 8,834
+hosts represented once, so much of the remaining adapter work is a long tail of
+custom employer pages. Current exact-route cohorts identified in the audit
+include GovernmentJobs / SchoolJobs (69), ADP Workforce Now (23), UKG / UltiPro
+(27), Paycom (22), Jobvite (7), Dayforce (9), USAJOBS (7), and Taleo Business
+Edition (7). The route match
+alone does not prove vendor identity or collection rights.
 
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
-ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo.
-The v28 Dayforce adapter calls the customer `GET JobFeeds` API for the five
-identified routes, but remains held until each employer provides its authorized
-tenant configuration and the source has an approved permission-manifest row.
-The v27 USAJOBS adapter uses the official Search API, but it stays held until
-the private runner has a registered API key, API email, and exact URL-or-host-
-to-organization-code map.
+ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo
+Enterprise. ADP Workforce Now now has a strict customer API adapter in
+`scripts/adp_wfn_adapter.py`. It requires an exact source/employer mapping,
+written authorization evidence, provisioned read scope, confirmed response
+fields, mutual-TLS credentials, and an operator-verified exact candidate-host
+allowlist. During setup, the operator must verify that each host belongs to the
+employer's candidate-facing flow; the adapter validates syntax and exact
+membership but cannot verify ownership. It uses the documented 20-item pages
+and marks the source incomplete if the total, public job URL, or full
+description cannot be verified. ADP sources remain held without that exact
+private configuration.
+
+Store ADP settings in `TALENTOS_ADP_WFN_CONFIG_JSON`, keyed by the exact
+normalized Workforce Now recruitment URL. The config must list the exact
+canonical scope
+`/staffing/staffingManagement/workFulfillmentManagement/jobRequisitionsManagement/jobRequisition.read`, employer keys, tenant client code,
+client credentials, certificate/key paths, and candidate-host allowlist. The
+public ADP sample does not establish that a full description is present on an
+external posting instruction, so an authorized sanitized tenant sample must
+confirm the description field before configuring that source. Credentials and
+sample evidence stay in private storage.
+
+The Dayforce adapter calls the customer `GET JobFeeds` API for nine mapped
+routes, but each source stays held until the employer provides tenant
+configuration and an approved permission-manifest row. The USAJOBS adapter
+uses the official Search API for seven mapped routes, but they stay held until
+the private runner has an API key, API email, and exact URL-or-host-to-
+organization-code map.
+
+For Jobvite, store `TALENTOS_JOBVITE_FEED_CONFIG_JSON` in the private secret
+store, keyed by the exact normalized career-source URL. Each entry must match
+the career-site slug and employer-key set, provide the customer API key/secret,
+and cite the paid-feed contract, the TalentOS reuse grant, the single-response
+coverage confirmation, and the full-description field confirmation. The
+official guide does not document pagination, so the adapter makes one request
+per board and requires explicit proof that the response contains all matching
+jobs and complete descriptions. The documented limit is 500 calls per
+credential per UTC day. The scheduler stores call counts in
+`<private-output-dir>/crawl_state/jobvite_api_call_budget.sqlite3`; set
+`TALENTOS_JOBVITE_CALL_BUDGET_DB` to one shared persistent path if multiple
+runner processes use the same credentials. See Jobvite's [Job Feed API
+guide](https://careers.jobvite.com/careersite/job_feed_api.html) and
+[Terms of Use](https://www.jobvite.com/terms-of-use).
+
+Taleo Business Edition is separate from the existing Taleo Enterprise
+CareerSection adapter. Its RSS adapter is wired into crawler dispatch and
+uses `TALENTOS_TALEO_TBE_CONFIG_JSON`, keyed by the exact normalized source URL.
+Each entry requires the exact employer-key set, a customer-provided feed URL,
+approved job-link hosts, written third-party aggregation authorization, and an
+explicit `feed_coverage_confirmed=true` setting before a source can be
+complete. The adapter checks robots for the feed host, follows redirects only
+within that exact host, and never opens posting links. Missing feed coverage
+confirmation leaves the source partial.
+
+The remaining vendor cohorts stay held pending their missing interface or
+rights evidence. Jobvite's public site is not an authorized feed; its paid
+customer Job Feed API requires a customer key/secret and a TalentOS reuse grant.
+UKG's [developer policy](https://developer.ukg.com/proplatform/docs/developer-policy)
+requires provisioned interfaces and customer consent, and no public read-only
+job feed schema was found. [Paycom's site terms](https://www.paycom.com/terms-of-use/)
+and [customer API terms](https://cdn.paycom.com/mkon/www/media/resources-content/General_Terms_and_Conditions.pdf)
+restrict automated extraction and third-party reuse without written
+authorization. NEOGOV's [customer RSS notice](https://success.neogov.com/insight-product-updates-112/insight-summer-2025-release-notes-15859)
+documents feed URL templates but no item schema, full-description guarantee,
+or completeness semantics. Frontline / AppliTrack has no reviewed public feed
+schema; JobDiva's API listing endpoint and third-party vacancy rights are also
+unverified. Do not activate these cohorts until the vendor and employer supply
+the documented interface and written permission covering TalentOS collection
+and reuse.
+
 The generic page discovery path also recognizes linked TalentBrew and SAP
 SuccessFactors boards. This is the current code surface, not a claim that every
 tenant layout has been validated. Built-in holds for NEOGOV GovernmentJobs /
-SchoolJobs, Jobvite, Paycom, UKG, UKG Ready, iSolved, and ADP remain in force
-even if an entry is mistakenly marked approved in the ledger. NEOGOV's terms
-prohibit automated page scraping and competitive-product use of its public
-career pages; its RSS documentation describes customer integrations, not a
-blanket third-party TalentOS grant. Keep the cohort held until a suitable
-authorized feed agreement exists. See [NEOGOV terms](https://www.neogov.com/terms-of-use)
-and its [RSS feed customer notice](https://success.neogov.com/insight-product-updates-112/insight-summer-2025-release-notes-15859).
+SchoolJobs, Paycom, UKG, UKG Ready, and iSolved remain in force even if an entry
+is mistakenly marked approved in the ledger. ADP and Jobvite can run only when
+their strict customer API config validates in addition to the permission row.
+NEOGOV's [terms](https://www.neogov.com/terms-of-use)
+prohibit automated page scraping and competitive-product use of public career
+pages; the RSS notice does not grant TalentOS reuse rights.
+
+## Work plan to close the inventory
+
+Keep the 9,919 normalized source groups as the denominator. Run these tracks
+in parallel, then reconcile their source-level results in one private
+checkpoint:
+
+1. **Adapter cohorts:** fix partial/error groups only when a representative
+   saved fixture or official API contract supports the change. Start with the
+   480 direct ATS/API routes and the largest technically actionable vendor groups.
+   Do not mark a route complete from host recognition or a successful HTTP
+   response alone.
+2. **Failure cohorts:** separate parser gaps from DNS, rate limits, server
+   failures, robots denials, terms restrictions, and missing customer access.
+   Retry only transient failures; keep blocked sources held with their reason.
+3. **Long-tail pages:** use the generic structured-data/sitemap path where it
+   can verify listing counts and details. Add a site-specific adapter only
+   with saved page evidence and a completeness check. Most hosts in the
+   inventory are singletons, so a generic “success” flag cannot stand in for
+   source-specific validation.
+4. **Permission and credentials:** maintain the per-URL permission manifest
+   and vendor credentials in the private runner. Public visibility, robots
+   allowance, or an API endpoint does not grant TalentOS collection and reuse
+   rights. Sources lacking required approval, customer configuration, or API
+   credentials stay held.
+5. **Full checkpoint and handoff:** rerun the full tracker with the current
+   adapter version, merge shards by normalized URL and attempt lineage, and
+   generate the readiness report. The scheduled handoff is ready for a source
+   only when the crawl is complete and its permission record is approved.
+
+For each source group, record one verifiable outcome: complete with jobs,
+complete and confirmed empty, partial with a specific gap, transient failure
+with a retry condition, or a documented policy/permission hold. The overall
+goal remains open until all 9,919 groups have a current disposition and every
+source called schedulable passes the permission gate.
 
 ## Private inputs
 
@@ -181,11 +295,18 @@ $trigger = New-ScheduledTaskTrigger -Daily -At '4:00AM'
 Register-ScheduledTask -TaskName 'TalentOS Employer Career Crawl' -Action $action -Trigger $trigger -Description 'Policy-gated dry-run employer career crawl'
 ```
 
-To stage only complete, validated source results through TalentOS' existing
-Job CEO pipeline, configure `BASE_URL` and `INGEST_SECRET` in the runner's
-secret store, then add `--ingest` to the scheduled command. The crawler still
-builds a readiness report and posts only the current adapter's complete
-payloads. Do not put secrets in command-line arguments or logs.
+Automatic production import is not ready. Do not add `--ingest` to the
+recurring command: that flag does not provide the combined version-aware,
+incremental upload and stable retry state required for a schedule. The next
+developer step is an uploader from the combined readiness selection that sends
+only new or changed jobs with stable source/job IDs, preserves employer-key
+mapping, and records which staged items reached `jobs`. The CLI `--ingest`
+option is only a manual staging path after a separate reviewed approval. The
+crawler CLI does not check the scheduler's permission manifest: a direct
+`--ingest` invocation can stage sources that the scheduler would filter out.
+Any manual staging run must therefore use an independently reviewed,
+permission-filtered input file. Keep `BASE_URL` and `INGEST_SECRET` in the
+private secret store and out of logs.
 
 ## Adapter gap work
 
@@ -199,8 +320,12 @@ outputs from the current audit, not part of this public handoff.
 
 ## Operational review files
 
-The current local audit report is saved at
-`outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`
-and remains gitignored. It contains the source-to-key map, robots outcome,
-vendor route inventory, and current terms review for the developer to review
-through the approved private channel.
+The current local offline readiness reconciliation is saved at
+`outputs/employer-career-ingest-run-2026-11-26-offline-checkpoint-consolidation-through-2026-11-14/`.
+It contains the full 9,919-row source disposition export and integration-ready
+payload snapshot, uses saved attempts through Nov 14, and remains gitignored.
+The Nov 14 audit report remains at
+`outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`;
+it contains the source-to-key map, robots outcomes, vendor route inventory,
+and terms review. Keep both artifacts in the private workspace and share them
+only through the approved private channel.

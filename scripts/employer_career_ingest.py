@@ -41,11 +41,19 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import requests
+from adp_wfn_adapter import fetch_jobs as fetch_adp_wfn_jobs, is_wfn_source_url, load_source_config as load_adp_wfn_source_config
+from jobvite_customer_feed import fetch_jobs as fetch_jobvite_customer_jobs, is_jobvite_host, load_source_config as load_jobvite_source_config
 from jazzhr_public_board import board_url_for, parse_board_listing
 from open_position_links import detail_matches_open_position, discover_open_position_links
 from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
 from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail_html as validate_successfactors_detail
 from talentbrew_public_board import discover_same_host_search_links, enumerate_search_pages, parse_search_page
+from taleo_business_edition_rss import (
+    TaleoBusinessEditionConfigError,
+    TaleoBusinessEditionRSSConfig,
+    load_taleo_business_edition_source_config,
+    parse_taleo_business_edition_rss,
+)
 from talentbrew_public_detail import (
     parse_public_detail as parse_talentbrew_public_detail,
     public_job_identity as _talentbrew_public_job_identity,
@@ -55,7 +63,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v28"
+ADAPTER_VERSION = "employer-career-ingest-v29"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -278,6 +286,13 @@ def _minimum_host_gap(rules: urllib.robotparser.RobotFileParser | None, *, user_
     return max(1.0, delay)
 
 
+def _record_content_request() -> None:
+    """Count an actual source-data HTTP request, excluding robots/token checks."""
+    global _content_request_count
+    with _content_request_counter_lock:
+        _content_request_count += 1
+
+
 def _request(
     url: str,
     *,
@@ -287,9 +302,10 @@ def _request(
     headers: dict[str, str] | None = None,
     auth: tuple[str, str] | None = None,
     allowed_hosts: set[str] | None = None,
+    count_content_request: bool | None = None,
 ) -> requests.Response:
-    global _content_request_count
     current = url
+    should_count_content = check_robots if count_content_request is None else count_content_request
     allowed_hostnames = {host.lower().rstrip(".") for host in allowed_hosts} if allowed_hosts is not None else None
     for _ in range(6):
         if _application_form_target(current):
@@ -317,10 +333,8 @@ def _request(
                 with lock:
                     requester = session if session is not None else _thread_session()
                     def send() -> requests.Response:
-                        global _content_request_count
-                        if check_robots:
-                            with _content_request_counter_lock:
-                                _content_request_count += 1
+                        if should_count_content:
+                            _record_content_request()
                         request_headers = {"User-Agent": UA, "Accept": "text/html,application/json,application/xml,text/xml,*/*;q=0.5"}
                         request_headers.update(headers or {})
                         request_kwargs: dict[str, Any] = {
@@ -619,10 +633,21 @@ def _job_dedupe_key(job: dict[str, Any]) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _is_taleo_business_edition_host(host: str) -> bool:
+    normalized = host.lower().rstrip(".")
+    return normalized == "tbe.taleo.net" or normalized.endswith(".tbe.taleo.net")
+
+
 def _platform(url: str) -> tuple[str, str] | None:
     p = urllib.parse.urlparse(url)
     host = (p.hostname or "").lower()
     parts = [urllib.parse.unquote(x) for x in p.path.split("/") if x]
+    if _is_taleo_business_edition_host(host):
+        return "taleo_tbe", normalize_source_url(url)
+    if is_wfn_source_url(url):
+        return "adp_wfn", normalize_source_url(url)
+    if host == "jobs.jobvite.com":
+        return "jobvite", normalize_source_url(url)
     if host == "usajobs.gov" or host.endswith(".usajobs.gov"):
         return "usajobs", host
     if host == "dayforcehcm.com" or host.endswith(".dayforcehcm.com"):
@@ -1818,7 +1843,6 @@ def _workday_jobs(url: str, token: str, employer: str) -> tuple[list[dict[str, A
 
 def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Response:
     """POST a read-only Workday search request after the same host/robots checks."""
-    global _content_request_count
     parsed = _public_https_url(url)
     root = f"https://{parsed.netloc}"
     rp = _robots_parser(root)
@@ -1828,9 +1852,7 @@ def _request_post(url: str, body: str, *, timeout: int = 15) -> requests.Respons
         for attempt in range(3):
             try:
                 def send() -> requests.Response:
-                    global _content_request_count
-                    with _content_request_counter_lock:
-                        _content_request_count += 1
+                    _record_content_request()
                     return requests.post(url, data=body, headers={"User-Agent": UA, "Accept": "application/json", "Content-Type": "application/json"}, timeout=timeout, allow_redirects=False)
                 if _shared_host_rate_dir is not None:
                     response = _shared_host_request(parsed.hostname or "", rp, send)
@@ -3069,6 +3091,7 @@ def _dayforce_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool,
     response = _request(
         api_url,
         timeout=30,
+        count_content_request=True,
         headers={"Accept": "application/json"},
         auth=(username, password),
         allowed_hosts={api_host},
@@ -3187,6 +3210,7 @@ def _usajobs_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool, 
         response = _request(
             f"{base}?{query}",
             timeout=30,
+            count_content_request=True,
             headers=headers,
             allowed_hosts={"data.usajobs.gov"},
         )
@@ -3320,9 +3344,87 @@ def _usajobs_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool, 
     return jobs, complete, list(dict.fromkeys(notes))
 
 
-def _source_policy_hold(host: str, url: str = "") -> tuple[str, str] | None:
+def _adp_wfn_api_config(url: str, employer_keys: list[str] | None = None) -> dict[str, Any] | None:
+    """Return a strict, exact-source ADP Workforce Now authorization config."""
+    if not is_wfn_source_url(url):
+        return None
+    return load_adp_wfn_source_config(
+        normalize_source_url(url),
+        employer_keys or [],
+    )
+
+
+def _jobvite_api_config(url: str, employer_keys: list[str] | None = None) -> dict[str, Any] | None:
+    """Return exact-source paid-feed credentials only with explicit reuse grants."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if not is_jobvite_host(host):
+        return None
+    return load_jobvite_source_config(normalize_source_url(url), employer_keys or [])
+
+
+def _taleo_business_edition_config(
+    url: str,
+    employer_keys: list[str] | None = None,
+) -> TaleoBusinessEditionRSSConfig | None:
+    """Load one exact TBE source mapping; never include mapping data in errors."""
+    host = (urllib.parse.urlparse(url).hostname or "").lower().rstrip(".")
+    if not _is_taleo_business_edition_host(host):
+        return None
+    try:
+        return load_taleo_business_edition_source_config(
+            normalize_source_url(url),
+            employer_keys or [],
+        )
+    except (TaleoBusinessEditionConfigError, ValueError, TypeError):
+        return None
+
+
+def _taleo_business_edition_jobs(
+    url: str,
+    employer_keys: list[str],
+) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Fetch one configured TBE RSS URL, with robots and exact-host redirects."""
+    config = _taleo_business_edition_config(url, employer_keys)
+    if config is None:
+        raise ScrapeFailure("Taleo Business Edition requires an exact authorized customer feed configuration")
+    feed_host = (urllib.parse.urlparse(config.feed_url).hostname or "").lower().rstrip(".")
+    if not feed_host:
+        raise ScrapeFailure("Taleo Business Edition feed configuration is invalid")
+    try:
+        response = _request(
+            config.feed_url,
+            check_robots=True,
+            headers={"Accept": "application/rss+xml, application/xml, text/xml"},
+            allowed_hosts={feed_host},
+        )
+    except RobotsFetchFailure:
+        raise RobotsFetchFailure("Taleo Business Edition RSS robots policy could not be checked") from None
+    except ScrapeFailure as exc:
+        if "robots.txt disallows" in str(exc).lower():
+            raise ScrapeFailure("Taleo Business Edition RSS access is disallowed by robots policy") from None
+        raise ScrapeFailure("Taleo Business Edition RSS request failed") from None
+    except Exception:
+        # requests exceptions can embed the full feed URL; keep them out of
+        # source result files, logs, and terminal summaries.
+        raise ScrapeFailure("Taleo Business Edition RSS request failed") from None
+    if response.status_code != 200:
+        raise ScrapeFailure(f"Taleo Business Edition RSS request returned HTTP {response.status_code}")
+    try:
+        parsed = parse_taleo_business_edition_rss(response.content, config)
+    except Exception:
+        raise ScrapeFailure("Taleo Business Edition RSS parser failed") from None
+    return parsed.jobs, parsed.complete, parsed.notes
+
+
+def _source_policy_hold(host: str, url: str = "", employer_keys: list[str] | None = None) -> tuple[str, str] | None:
     """Return a policy reason for sources that must not be crawled anonymously."""
     host = host.lower().rstrip(".")
+    if _is_taleo_business_edition_host(host) and _taleo_business_edition_config(url, employer_keys) is None:
+        return "Taleo Business Edition requires an exact source mapping and explicit customer authorization", "Taleo Business Edition source held until its exact customer feed and authorization are configured"
     if host == "governmentjobs.com" or host.endswith(".governmentjobs.com") or host == "schooljobs.com" or host.endswith(".schooljobs.com"):
         return "NEOGOV terms prohibit automated scraping and competitive-product use of public career pages", "NEOGOV GovernmentJobs/SchoolJobs source held pending an authorized feed agreement"
     if _is_usajobs_host(host) and _usajobs_api_config(url) is None:
@@ -3330,7 +3432,8 @@ def _source_policy_hold(host: str, url: str = "") -> tuple[str, str] | None:
     if _is_dayforce_host(host) and _dayforce_api_config(url) is None:
         return "Dayforce requires employer-authorized JobFeeds access and tenant credentials", "Dayforce source held until an authorized tenant configuration is supplied"
     if host == "jobvite.com" or host.endswith(".jobvite.com"):
-        return "Jobvite terms prohibit automated scraping and commercial reuse of postings", "Jobvite terms prohibit automated scraping; source held for authorized integration"
+        if _jobvite_api_config(url, employer_keys) is None:
+            return "Jobvite public-site terms prohibit commercial scraping; paid feed access and TalentOS reuse authorization are required", "Jobvite source held until an exact customer feed contract and TalentOS reuse grant are configured"
     if host == "paycom.com" or host.endswith(".paycom.com") or host == "paycomonline.net" or host.endswith(".paycomonline.net"):
         return "Paycom terms prohibit automated extraction without written authorization", "Paycom source held pending written authorization"
     if host == "ultipro.com" or host.endswith(".ultipro.com") or host == "ukg.net" or host.endswith(".ukg.net"):
@@ -3340,7 +3443,8 @@ def _source_policy_hold(host: str, url: str = "") -> tuple[str, str] | None:
     if host == "isolvedhire.com" or host.endswith(".isolvedhire.com"):
         return "iSolved terms reserve copying or exploitation without prior written permission", "iSolved source held pending terms clearance or written permission"
     if host == "adp.com" or host.endswith(".adp.com"):
-        return "ADP job access requires an authorized customer or partner integration", "ADP source held pending authorized API access"
+        if _adp_wfn_api_config(url, employer_keys) is None:
+            return "ADP job access requires an exact, authorized customer or partner API integration", "ADP source held pending source-specific API authorization and configuration"
     return None
 
 
@@ -3348,7 +3452,8 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
     url = source["url"]
     employer = source["employers"][0] if source["employers"] else "Unknown employer"
     host = (urllib.parse.urlparse(url).hostname or "").lower()
-    policy_hold = _source_policy_hold(host, url)
+    employer_keys = source.get("employer_keys") if isinstance(source.get("employer_keys"), list) else []
+    policy_hold = _source_policy_hold(host, url, employer_keys)
     if policy_hold:
         error, note = policy_hold
         return {
@@ -3370,7 +3475,31 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
     try:
         p = _platform(url)
         if p:
-            if p[0] == "usajobs":
+            if p[0] == "jobvite":
+                config = _jobvite_api_config(url, employer_keys)
+                if config is None:
+                    raise ScrapeFailure("Jobvite requires an exact source, paid feed contract, TalentOS reuse grant, and persistent call budget")
+                jobs, complete, notes = fetch_jobvite_customer_jobs(
+                    url,
+                    employer,
+                    config,
+                    clean_description=_clean_description,
+                    record_content_request=_record_content_request,
+                )
+                method = "authorized_customer_api:jobvite-job-feed-v2"
+            elif p[0] == "adp_wfn":
+                config = _adp_wfn_api_config(url, employer_keys)
+                if config is None:
+                    raise ScrapeFailure("ADP Workforce Now requires exact employer mapping, customer authorization, and mTLS API configuration")
+                jobs, complete, notes = fetch_adp_wfn_jobs(
+                    url,
+                    employer,
+                    config,
+                    request_get=_request,
+                    clean_description=_clean_description,
+                )
+                method = "authorized_customer_api:adp-wfn-job-requisitions-v1"
+            elif p[0] == "usajobs":
                 jobs, complete, notes = _usajobs_jobs(url, employer)
                 method = "official_search_api:usajobs-v1"
             elif p[0] == "dayforce":
@@ -3414,6 +3543,9 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
             elif p[0] == "jazzhr":
                 jobs, complete, notes = _jazzhr_jobs(url, p[1], employer)
                 method = "public_board_listing:jazzhr-v1"
+            elif p[0] == "taleo_tbe":
+                jobs, complete, notes = _taleo_business_edition_jobs(url, employer_keys)
+                method = "authorized_customer_rss:taleo-business-edition-v1"
             elif p[0] == "taleo":
                 jobs, complete, notes = _taleo_jobs(url, p[1], employer)
                 method = "public_career_section_sitemap:taleo-enterprise-v1"
@@ -3440,8 +3572,15 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
         status = ("scraped" if jobs else "no_jobs") if complete else "partial"
         return {"url": url, "normalized_url": source["normalized_url"], "source_urls": source["source_urls"], "evidence_urls": source["evidence_urls"], "employers": source["employers"], "employer_keys": source["employer_keys"], "adapter_version": ADAPTER_VERSION, "status": status, "method": method, "complete": complete, "notes": notes, "jobs": jobs, "job_count": len(jobs), "error": None}
     except Exception as exc:
-        msg = str(exc)
-        status = "error" if isinstance(exc, RobotsFetchFailure) else ("held" if "career source must be an https url" in msg.lower() else ("blocked" if any(term in msg.lower() for term in ("robots", "disallows", "access denied", "http 401", "http 403")) else "error"))
+        raw_msg = str(exc)
+        status = "error" if isinstance(exc, RobotsFetchFailure) else ("held" if "career source must be an https url" in raw_msg.lower() else ("blocked" if any(term in raw_msg.lower() for term in ("robots", "disallows", "access denied", "http 401", "http 403")) else "error"))
+        msg = raw_msg
+        if _is_taleo_business_edition_host(host):
+            msg = (
+                "Taleo Business Edition RSS robots policy could not be checked"
+                if isinstance(exc, RobotsFetchFailure)
+                else ("Taleo Business Edition RSS request was blocked by robots policy" if "robots" in raw_msg.lower() or "disallows" in raw_msg.lower() else "Taleo Business Edition RSS request failed")
+            )
         return {"url": url, "normalized_url": source["normalized_url"], "source_urls": source["source_urls"], "evidence_urls": source["evidence_urls"], "employers": source["employers"], "employer_keys": source["employer_keys"], "adapter_version": ADAPTER_VERSION, "status": status, "method": "failed", "complete": False, "notes": [], "jobs": [], "job_count": 0, "error": msg[:500]}
 
 

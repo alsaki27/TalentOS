@@ -1,6 +1,7 @@
 """Offline regressions for crawl-attempt provenance in readiness handoffs."""
 
 import json
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -94,6 +95,40 @@ class CrawlAttemptLineageTests(unittest.TestCase):
             self.assertEqual(summary["source_groups_with_ambiguous_legacy_attempts"], 1)
             self.assertEqual(summary["lineage_hold_counts_by_reason"], {"ambiguous_legacy_crawl_attempt": 2})
             self.assertEqual(summary["unique_integration_ready_job_payloads"], 0)
+
+    def test_report_ignores_results_and_payloads_outside_current_tracker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = self._tracker(root)
+            results = root / "source_results.jsonl"
+            jobs = root / "jobs.jsonl"
+            results.write_text("".join(json.dumps(row) + "\n" for row in (
+                {
+                    "url": "https://example.com/careers", "adapter_version": "v15",
+                    "status": "scraped", "complete": True, "method": "fixture", "job_count": 1,
+                },
+                {
+                    "url": "https://stale.example/careers", "adapter_version": "v15",
+                    "status": "scraped", "complete": True, "method": "fixture", "job_count": 1,
+                },
+            )), encoding="utf-8")
+            current_job = self._job("Current source", "Current description. " * 20, version="v15")
+            stale_job = self._job("Stale source", "Stale description. " * 20, version="v15")
+            stale_job["raw"]["career_source_url"] = "https://stale.example/careers"
+            jobs.write_text("".join(json.dumps(row) + "\n" for row in (current_job, stale_job)), encoding="utf-8")
+
+            summary = reporter.build_report(tracker, results, jobs, root / "readiness", "v15")
+            ready = [json.loads(line) for line in Path(summary["ready_jobs_path"]).read_text(encoding="utf-8").splitlines()]
+            with Path(summary["source_dispositions_path"]).open(encoding="utf-8-sig", newline="") as stream:
+                dispositions = list(csv.DictReader(stream))
+
+        self.assertEqual(summary["unique_source_groups_with_result"], 1)
+        self.assertEqual(summary["result_source_groups_outside_tracker"], 1)
+        self.assertEqual(summary["not_started_source_groups"], 0)
+        self.assertEqual(summary["status_counts_by_source_group"], {"scraped": 1})
+        self.assertEqual(summary["complete_source_groups"], 1)
+        self.assertEqual([job["title"] for job in ready], ["Current source"])
+        self.assertEqual(len(dispositions), 1)
 
     def test_tagged_payload_from_another_run_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:

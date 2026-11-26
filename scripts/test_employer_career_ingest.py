@@ -98,7 +98,10 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(_platform("https://drhorton.taleo.net/careersection/2/jobdetail.ftl?job=267161"), ("taleo", "2"))
         self.assertEqual(_platform("https://macecareers.taleo.net/careersection/careersection/ex/jobsearch.ftl"), ("taleo", "ex"))
         self.assertEqual(_platform("https://cu.taleo.net/careersection/cu_mob_sys/moresearch.ftl"), ("taleo", "MOB"))
-        self.assertIsNone(_platform("https://phh.tbe.taleo.net/phh04/ats/careers/v2/searchResults?org=PCG"))
+        self.assertEqual(
+            _platform("https://phh.tbe.taleo.net/phh04/ats/careers/v2/searchResults?org=PCG"),
+            ("taleo_tbe", "https://phh.tbe.taleo.net/phh04/ats/careers/v2/searchResults?org=PCG"),
+        )
 
     def test_discovers_supported_ats_links_on_employer_career_pages(self):
         html = '''<a href="https://jobs.lever.co/acme">View openings</a>

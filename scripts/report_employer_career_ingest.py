@@ -115,6 +115,7 @@ def build_report(
     if len(_paths(results_path)) != len(_paths(jobs_path)):
         raise ValueError("results and jobs paths must be paired in the same order")
     sources = load_sources(tracker_path)
+    tracker_keys = {source["normalized_url"] for source in sources}
     platform_counts = Counter(
         (_platform(source["url"]) or ("generic", ""))[0] for source in sources
     )
@@ -122,8 +123,17 @@ def build_report(
     adapter_versions = set(versions)
     if min_sitemap_adapter_version and min_sitemap_adapter_version not in adapter_versions:
         raise ValueError("--min-sitemap-adapter-version must be included in --adapter-version")
-    by_url = _read_results(results_path, adapter_version)
-    attempts = _result_attempts(results_path)
+    all_results_by_url = _read_results(results_path, adapter_version)
+    result_source_groups_outside_tracker = len(set(all_results_by_url) - tracker_keys)
+    by_url = {
+        key: item for key, item in all_results_by_url.items()
+        if key in tracker_keys
+    }
+    all_attempts = _result_attempts(results_path)
+    attempts = {
+        key: source_attempts for key, source_attempts in all_attempts.items()
+        if key[0] in tracker_keys
+    }
     complete = {
         key
         for key, item in by_url.items()
@@ -133,7 +143,6 @@ def build_report(
     if min_sitemap_adapter_version:
         minimum_rank = versions.index(min_sitemap_adapter_version)
         older_versions = set(versions[:minimum_rank])
-        tracker_keys = {source["normalized_url"] for source in sources}
         legacy_complete = _legacy_sitemap_complete_keys(results_path, older_versions)
         needs_revalidation = {
             key for key in legacy_complete & tracker_keys
@@ -232,6 +241,10 @@ def build_report(
         statuses["payload_count_mismatch"] += len(payload_count_mismatch_sources)
         complete.difference_update(payload_count_mismatch_sources)
         eligible_payload_rows -= sum(matched_rows_by_source[key] for key in payload_count_mismatch_sources)
+
+    not_started_source_groups = len(sources) - len(by_url)
+    if sum(statuses.values()) + not_started_source_groups != len(sources):
+        raise ValueError("source status counts do not reconcile to the tracker denominator")
     candidate_jobs: dict[tuple[str, str], dict[str, Any]] = {}
     for (source_key, external_id, source_url), job in source_candidates.items():
         if source_key in payload_count_mismatch_sources:
@@ -311,7 +324,8 @@ def build_report(
         "source_groups_by_direct_adapter": dict(sorted(platform_counts.items())),
         "source_groups_without_direct_ats_adapter": platform_counts.get("generic", 0),
         "unique_source_groups_with_result": len(by_url),
-        "not_started_source_groups": max(0, len(sources) - len(by_url)),
+        "result_source_groups_outside_tracker": result_source_groups_outside_tracker,
+        "not_started_source_groups": not_started_source_groups,
         "complete_source_groups": len(complete),
         "complete_source_groups_with_jobs": sum(
             1 for key in complete if by_url[key].get("status") == "scraped"
