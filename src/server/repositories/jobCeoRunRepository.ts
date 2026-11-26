@@ -165,7 +165,7 @@ export async function getRunStats(): Promise<JobCeoRunStats> {
   }>(
     `SELECT
        COUNT(*)::int AS total_runs,
-       COUNT(*) FILTER (WHERE status IN ('ingesting','qa','deep_fetch','matchmaking'))::int AS active_runs,
+       COUNT(*) FILTER (WHERE status IN ('staging','ingesting','qa','deep_fetch','matchmaking'))::int AS active_runs,
        COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_runs,
        COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_runs,
        COALESCE(SUM(logged_count), 0)::int AS total_logged

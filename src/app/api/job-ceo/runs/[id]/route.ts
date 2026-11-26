@@ -45,7 +45,7 @@ export async function DELETE(
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
     // Safety guard: never delete an in-progress run
-    const activeStatuses = ["ingesting", "qa", "deep_fetch", "matchmaking"];
+    const activeStatuses = ["staging", "ingesting", "qa", "deep_fetch", "matchmaking"];
     if (activeStatuses.includes(run.status)) {
       return NextResponse.json(
         { error: "Cannot delete an active run. Cancel it first." },

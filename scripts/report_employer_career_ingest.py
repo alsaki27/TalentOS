@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 import urllib.parse
 from collections import Counter
@@ -21,6 +22,57 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from employer_career_ingest import ADAPTER_VERSION, _application_form_target, _platform, load_sources, normalize_source_url
 
 MIN_READY_DESCRIPTION_CHARS = 201  # Job CEO skips URL deep-fetch only when existing description length > 200.
+
+
+def _failure_reason_category(item: dict[str, Any]) -> str:
+    """Map a source result to a privacy-safe, fixed failure-reason category."""
+    status = str(item.get("status") or "").lower()
+    if status == "needs_revalidation":
+        return "revalidation_required"
+    if status == "payload_count_mismatch":
+        return "payload_count_mismatch"
+
+    details = [str(item.get("error") or "")]
+    notes = item.get("notes")
+    if isinstance(notes, list):
+        details.extend(str(note) for note in notes if note is not None)
+    elif notes:
+        details.append(str(notes))
+    method = str(item.get("method") or "").lower()
+    text = " ".join((method, *details)).lower()
+
+    if any(term in text for term in ("dns lookup failed", "name resolution", "getaddrinfo failed")):
+        return "dns"
+    if any(term in text for term in (
+        "robots.txt disallows", "robots disallow", "robots policy disallows",
+    )):
+        return "robots_denied"
+    if any(term in text for term in (
+        "robots.txt fetch failed", "robots policy could not be checked", "robots.txt returned",
+    )):
+        return "robots_transport_or_unavailable"
+    if any(term in text for term in (
+        "terms prohibit", "terms reserve", "permission", "authorization", "authorized",
+        "reuse right", "reuse grant", "vendor contract", "source held", "policy_hold",
+        "policy hold", "no documented anonymous public job-feed",
+    )):
+        return "vendor_or_authorization_hold"
+    if (
+        re.search(r"\bhttp(?:/[0-9.]+)?[ :]+[1-5][0-9]{2}\b", text)
+        or any(term in text for term in ("access denied", "forbidden", "unauthorized", "http error"))
+    ):
+        return "http_or_access"
+    if any(term in text for term in (
+        "timed out", "timeout", "sslerror", "ssl error", "tls", "connection reset",
+        "connection aborted", "connection error",
+    )):
+        return "transport_or_timeout"
+    if any(term in text for term in (
+        "sitemap", "jobposting", "structured_data", "json-ld", "extractable",
+        "pagination", "detail page", "candidate page", "parser",
+    )):
+        return "parser_or_extraction"
+    return "other"
 
 
 def _paths(value: Path | list[Path]) -> list[Path]:
@@ -245,6 +297,22 @@ def build_report(
     not_started_source_groups = len(sources) - len(by_url)
     if sum(statuses.values()) + not_started_source_groups != len(sources):
         raise ValueError("source status counts do not reconcile to the tracker denominator")
+    failure_reason_counts = Counter()
+    for source in sources:
+        source_key = source["normalized_url"]
+        if source_key in complete:
+            continue
+        item = by_url.get(source_key)
+        if item is None:
+            failure_reason_counts["not_started"] += 1
+            continue
+        if source_key in needs_revalidation:
+            item = {**item, "status": "needs_revalidation"}
+        elif source_key in payload_count_mismatch_sources:
+            item = {**item, "status": "payload_count_mismatch"}
+        failure_reason_counts[_failure_reason_category(item)] += 1
+    if sum(failure_reason_counts.values()) != len(sources) - len(complete):
+        raise ValueError("failure-reason counts do not reconcile to incomplete source groups")
     candidate_jobs: dict[tuple[str, str], dict[str, Any]] = {}
     for (source_key, external_id, source_url), job in source_candidates.items():
         if source_key in payload_count_mismatch_sources:
@@ -334,6 +402,7 @@ def build_report(
             1 for key in complete if by_url[key].get("status") == "no_jobs"
         ),
         "status_counts_by_source_group": dict(sorted(statuses.items())),
+        "failure_reason_counts_by_source_group": dict(sorted(failure_reason_counts.items())),
         "source_reported_job_count_for_complete_groups": sum(
             int(by_url[key].get("job_count") or 0) for key in complete
         ),

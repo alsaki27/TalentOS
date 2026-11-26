@@ -9,7 +9,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createRun: vi.fn(),
+  findRunById: vi.fn(),
   bumpRunCounts: vi.fn().mockResolvedValue(undefined),
+  stageDeferredJobs: vi.fn(),
   insertStaged: vi.fn(),
   checkAndRecordDedup: vi.fn(),
   backgroundDispatch: vi.fn(),
@@ -17,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/server/repositories/jobCeoRunRepository", () => ({
   createRun: mocks.createRun,
+  findRunById: mocks.findRunById,
   bumpRunCounts: mocks.bumpRunCounts,
 }));
 vi.mock("@/server/lib/waitUntil", () => ({
@@ -31,6 +34,7 @@ vi.mock("@/server/repositories/jobCeoStagingRepository", async () => {
   );
   return {
     ...actual,
+    stageDeferredJobs: mocks.stageDeferredJobs,
     insertStaged: mocks.insertStaged,
     checkAndRecordDedup: mocks.checkAndRecordDedup,
   };
@@ -61,12 +65,21 @@ const ACTALENT_GIS_2 = {
   source_url: "https://careers.actalentservices.com/us/en/job/JP-006274238/Remote-GIS-Analyst",
   external_job_id: "JP-006274238",
 };
+const STAGING_RUN_ID = "6bbcb726-cc70-4a2b-8b7e-3b3fd728cd14";
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200 })));
   process.env.JOB_CEO_INGEST_SECRET = "test-secret";
   mocks.createRun.mockResolvedValue({ id: "run-1" });
+  mocks.stageDeferredJobs.mockImplementation(async (runId: string | undefined) => ({
+    runId: runId ?? STAGING_RUN_ID,
+    status: "staging",
+    source: "actalentservices",
+    accepted: true,
+    staged: 1,
+    skipped: 0,
+  }));
   mocks.insertStaged.mockImplementation(async (_runId: string, rows: unknown[]) => rows.length);
 });
 
@@ -188,5 +201,96 @@ describe("POST /api/job-ceo/ingest — derives the new run's source from the job
       if (previousBaseUrl === undefined) delete process.env.TALENTOS_BASE_URL;
       else process.env.TALENTOS_BASE_URL = previousBaseUrl;
     }
+  });
+});
+
+describe("POST /api/job-ceo/ingest — deferred multi-batch staging", () => {
+  const deferredRunId = "6bbcb726-cc70-4a2b-8b7e-3b3fd728cd14";
+
+  beforeEach(() => {
+    mocks.checkAndRecordDedup.mockImplementation(async (_runId: string, sigs: { signature: string }[]) => {
+      return new Set(sigs.map((s) => s.signature));
+    });
+  });
+
+  it("creates the initial deferred run in staging without dispatching it", async () => {
+    const res = await POST(req({ deferDispatch: true, jobs: [ACTALENT_GIS_1] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.runId).toBe(STAGING_RUN_ID);
+    expect(body.dispatch_deferred).toBe(true);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.findRunById).not.toHaveBeenCalled();
+    expect(mocks.stageDeferredJobs).toHaveBeenCalledWith(undefined, [ACTALENT_GIS_1], expect.any(Array), "actalentservices");
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("appends only to the exact existing staging run and still defers dispatch", async () => {
+    mocks.findRunById.mockResolvedValue({ id: deferredRunId, source: "actalentservices", status: "staging" });
+
+    const res = await POST(req({ runId: deferredRunId, deferDispatch: true, jobs: [ACTALENT_GIS_2] }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.runId).toBe(deferredRunId);
+    expect(body.dispatch_deferred).toBe(true);
+    expect(mocks.findRunById).toHaveBeenCalledWith(deferredRunId);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.stageDeferredJobs).toHaveBeenCalledWith(deferredRunId, [ACTALENT_GIS_2], expect.any(Array), "actalentservices");
+    expect(mocks.checkAndRecordDedup).not.toHaveBeenCalled();
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an append if the run is already dispatchable or terminal", async () => {
+    mocks.findRunById.mockResolvedValue({ id: deferredRunId, source: "actalentservices", status: "ingesting" });
+
+    const res = await POST(req({ runId: deferredRunId, deferDispatch: true, jobs: [ACTALENT_GIS_2] }));
+
+    expect(res.status).toBe(409);
+    expect(mocks.checkAndRecordDedup).not.toHaveBeenCalled();
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an append if the atomic staging check sees dispatch already started", async () => {
+    mocks.findRunById.mockResolvedValue({ id: deferredRunId, source: "actalentservices", status: "staging" });
+    mocks.stageDeferredJobs.mockResolvedValue({
+      runId: deferredRunId,
+      status: "ingesting",
+      source: "actalentservices",
+      accepted: false,
+      staged: 0,
+      skipped: 1,
+    });
+
+    const res = await POST(req({ runId: deferredRunId, deferDispatch: true, jobs: [ACTALENT_GIS_2] }));
+
+    expect(res.status).toBe(409);
+    expect(mocks.stageDeferredJobs).toHaveBeenCalled();
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an append whose source differs from the staging run", async () => {
+    mocks.findRunById.mockResolvedValue({ id: deferredRunId, source: "broadstaffglobal", status: "staging" });
+
+    const res = await POST(req({ runId: deferredRunId, deferDispatch: true, jobs: [ACTALENT_GIS_2] }));
+
+    expect(res.status).toBe(409);
+    expect(mocks.checkAndRecordDedup).not.toHaveBeenCalled();
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed deferred flags and run IDs", async () => {
+    const invalidFlag = await POST(req({ deferDispatch: "true", jobs: [ACTALENT_GIS_1] }));
+    const invalidRunId = await POST(req({ deferDispatch: true, runId: "not-a-uuid", jobs: [ACTALENT_GIS_1] }));
+
+    expect(invalidFlag.status).toBe(400);
+    expect(invalidRunId.status).toBe(400);
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.insertStaged).not.toHaveBeenCalled();
   });
 });

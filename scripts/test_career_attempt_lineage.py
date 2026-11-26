@@ -130,6 +130,73 @@ class CrawlAttemptLineageTests(unittest.TestCase):
         self.assertEqual([job["title"] for job in ready], ["Current source"])
         self.assertEqual(len(dispositions), 1)
 
+    def test_report_failure_reason_summary_is_private_and_reconciles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            source_names = (
+                "dns", "robots-transport", "robots-denied", "http-access", "authorization",
+                "parser", "complete", "not-started", "payload-mismatch", "revalidation",
+            )
+            with tracker.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.writer(stream)
+                writer.writerow(("career_page_status", "career_page_url", "evidence_url", "employer_name", "employer_key"))
+                for index, source_name in enumerate(source_names, 1):
+                    writer.writerow(("verified_official", f"https://{source_name}.example/careers", "", f"Private employer {index}", f"company_id:{index}"))
+
+            results_path = root / "source_results.jsonl"
+            results = []
+            result_fixtures = (
+                ("dns", "error", False, "failed", "DNS lookup failed: private.example", [] , "v2"),
+                ("robots-transport", "error", False, "failed", "robots.txt fetch failed: https://private.example/robots.txt", [], "v2"),
+                ("robots-denied", "blocked", False, "failed", "robots.txt disallows this URL", [], "v2"),
+                ("http-access", "error", False, "failed", "career page returned HTTP 403: https://private.example/careers", [], "v2"),
+                ("authorization", "blocked", False, "policy_hold", "requires written authorization and TalentOS reuse", [], "v2"),
+                ("parser", "partial", False, "sitemap_structured_data", None, ["no JobPosting JSON-LD found: https://private.example/jobs/1"], "v2"),
+                ("complete", "no_jobs", True, "fixture", None, [], "v2"),
+                ("payload-mismatch", "scraped", True, "fixture", None, [], "v2"),
+                ("revalidation", "scraped", True, "sitemap_structured_data", None, [], "v1"),
+            )
+            for source_name, status, complete, method, error, notes, version in result_fixtures:
+                source_url = f"https://{source_name}.example/careers"
+                results.append({
+                    "url": source_url,
+                    "normalized_url": source_url,
+                    "adapter_version": version,
+                    "status": status,
+                    "complete": complete,
+                    "method": method,
+                    "job_count": 1 if source_name == "payload-mismatch" else 0,
+                    "error": error,
+                    "notes": notes,
+                })
+            results_path.write_text("".join(json.dumps(result) + "\n" for result in results), encoding="utf-8")
+            jobs_path = root / "jobs.jsonl"
+            jobs_path.write_text("", encoding="utf-8")
+
+            summary = reporter.build_report(
+                tracker, results_path, jobs_path, root / "readiness", "v1,v2", "v2",
+            )
+
+        self.assertEqual(summary["failure_reason_counts_by_source_group"], {
+            "dns": 1,
+            "http_or_access": 1,
+            "not_started": 1,
+            "parser_or_extraction": 1,
+            "payload_count_mismatch": 1,
+            "revalidation_required": 1,
+            "robots_denied": 1,
+            "robots_transport_or_unavailable": 1,
+            "vendor_or_authorization_hold": 1,
+        })
+        self.assertEqual(
+            sum(summary["failure_reason_counts_by_source_group"].values()),
+            summary["normalized_source_groups_in_tracker"] - summary["complete_source_groups"],
+        )
+        failure_summary_text = json.dumps(summary["failure_reason_counts_by_source_group"])
+        self.assertNotIn("private.example", failure_summary_text)
+        self.assertNotIn("Private employer", failure_summary_text)
+
     def test_tagged_payload_from_another_run_is_held(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

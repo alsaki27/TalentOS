@@ -65,6 +65,7 @@ export const JOB_CEO_AGENT_METAS: Record<JobCeoAgentId, JobCeoAgentMeta> = {
 };
 
 export type JobCeoRunStatus =
+  | "staging"
   | "ingesting"
   | "qa"
   | "deep_fetch"

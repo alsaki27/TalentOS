@@ -579,6 +579,16 @@ export async function dispatchNextJobCeoWork(runId?: string): Promise<DispatchRe
     return { dispatched: false, runId: runId ?? null, stage: null, count: 0, needsDispatch: false };
   }
 
+  // Deferred batch uploads stay invisible to the global dispatcher. Only an
+  // explicit dispatch scoped to the returned run ID activates the staged run.
+  if (run.status === "staging") {
+    if (!runId) {
+      return { dispatched: false, runId: run.id, stage: "staging", count: 0, needsDispatch: false };
+    }
+    await updateRunStatus(run.id, "ingesting", { last_error: undefined });
+    run.status = "ingesting";
+  }
+
   // A scoped dispatcher must never fall through to another run when its target
   // is already terminal. The unscoped dispatcher keeps its historical behavior.
   if (!["ingesting", "qa", "deep_fetch", "matchmaking"].includes(run.status)) {

@@ -131,11 +131,30 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(_platform("https://trilongroup.pinpointhq.com/gonzalez-companies"), ("pinpoint", "trilongroup"))
         self.assertEqual(_platform("https://aceelectric.bamboohr.com/jobs/"), ("bamboohr", "aceelectric"))
         self.assertEqual(_platform("https://careers-quanta.icims.com/jobs/search?ss=1"), ("icims", "careers-quanta"))
+        self.assertEqual(_platform("https://careers-example.icims.com/careers"), ("icims", "careers-example"))
+        self.assertEqual(_platform("https://careers-example.icims.com/"), ("icims", "careers-example"))
+        self.assertEqual(_platform("https://tenant.icims.com/career-page"), ("icims", "tenant"))
+        self.assertEqual(_platform("https://tenant.icims.com/"), ("icims", "tenant"))
+        self.assertIsNone(_platform("https://www.icims.com/careers"))
         self.assertEqual(_platform("https://alertalarm.breezy.hr/p/example-role"), ("breezy", "alertalarm"))
         self.assertEqual(_platform("https://minagroup.na.teamtailor.com/jobs"), ("teamtailor", "minagroup.na.teamtailor.com"))
         self.assertEqual(_platform("https://heinekamp.jobs.personio.de/job/123"), ("personio", "heinekamp"))
         self.assertEqual(_platform("https://gis.applicantstack.com/x/openings?sort=1"), ("applicantstack", "gis"))
         self.assertEqual(_platform("https://mgccontractors.applicantpro.com/jobs/"), ("applicantpro", "mgccontractors"))
+        self.assertEqual(_platform("https://www.applicantpro.com/openings/acme/jobs"), ("applicantpro", "acme"))
+        self.assertEqual(_platform("https://www.applicantpro.com/openings/Acme-HQ/jobs/"), ("applicantpro", "acme-hq"))
+        for unsupported in (
+            "https://www.applicantpro.com/openings/acme/jobs/123",
+            "https://www.applicantpro.com/openings/acme.example/jobs",
+            "https://www.applicantpro.com/openings/acme%2Ftenant/jobs",
+            "https://www.applicantpro.com.evil.example/openings/acme/jobs",
+            "http://www.applicantpro.com/openings/acme/jobs",
+            "https://www.applicantpro.com:444/openings/acme/jobs",
+            "https://www.applicantpro.com/openings/acme/jobs?language=en",
+            "https://www.applicantpro.com/openings/acme/jobs;params",
+            "https://user@www.applicantpro.com/openings/acme/jobs",
+        ):
+            self.assertIsNone(_platform(unsupported), unsupported)
         self.assertEqual(_platform("https://recruiting.paylocity.com/Recruiting/Jobs/All/0935bfc4-232a-49ad-b4f2-b3a856505c67/Company"), ("paylocity", "0935bfc4-232a-49ad-b4f2-b3a856505c67"))
         self.assertEqual(_platform("https://acme.wd5.myworkdayjobs.com/External"), ("workday", "acme|External"))
         self.assertEqual(_platform("https://hdr.taleo.net/careersection/ex/jobsearch.ftl?portal=101430233"), ("taleo", "ex"))
@@ -948,6 +967,18 @@ class CareerScraperTests(unittest.TestCase):
             result = scraper.scrape_source(source)
         adapter.assert_called_once_with(url, "mgccontractors", "MGC Contractors")
         self.assertEqual(result["method"], "public_sitemap_postings:applicantpro-v1")
+
+    def test_scrape_source_derives_applicantpro_tenant_from_exact_verified_board_path(self):
+        url = "https://www.applicantpro.com/openings/acme/jobs"
+        source = {
+            "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
+            "employers": ["Example"], "employer_keys": ["company:example"],
+        }
+        with patch.object(scraper, "_applicantpro_jobs", return_value=([], True, [])) as adapter:
+            result = scraper.scrape_source(source)
+        adapter.assert_called_once_with(url, "acme", "Example")
+        self.assertEqual(result["method"], "public_sitemap_postings:applicantpro-v1")
+        self.assertEqual(result["status"], "no_jobs")
         self.assertTrue(result["complete"])
 
     def test_generic_career_page_uses_linked_applicantstack_adapter(self):

@@ -56,6 +56,7 @@ interface ScheduleRow {
 
 function statusBadge(status: string) {
   const labels: Record<string, string> = {
+    staging: "Staging",
     ingesting: "Ingesting",
     qa: "QA",
     deep_fetch: "Deep Fetch",
@@ -71,6 +72,7 @@ function statusBadge(status: string) {
   // isLive() already treats them as one undifferentiated bucket, so four
   // arbitrary distinct hues conveyed no real signal.
   const classMap: Record<string, string> = {
+    staging: "badge badge-in_progress",
     ingesting: "badge badge-in_progress",
     qa: "badge badge-in_progress",
     deep_fetch: "badge badge-in_progress",

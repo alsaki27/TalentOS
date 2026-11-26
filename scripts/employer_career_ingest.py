@@ -70,7 +70,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v31"
+ADAPTER_VERSION = "employer-career-ingest-v33"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -715,10 +715,32 @@ def _platform(url: str) -> tuple[str, str] | None:
         return "personio", host[: -len(personio_suffix)]
     if host.endswith(".bamboohr.com") and host != "www.bamboohr.com" and re.match(r"^/(?:careers|jobs)(?:/|$)", p.path, re.I):
         return "bamboohr", host[: -len(".bamboohr.com")]
-    if host.endswith(".icims.com") and re.match(r"^/jobs(?:/|$)", p.path, re.I):
+    if host.endswith(".icims.com") and (
+        re.match(r"^/jobs(?:/|$)", p.path, re.I)
+        or host != "www.icims.com"
+    ):
         return "icims", host[: -len(".icims.com")]
     if host.endswith(".applicantstack.com") and host != "www.applicantstack.com":
         return "applicantstack", host[: -len(".applicantstack.com")]
+    if host == "www.applicantpro.com":
+        try:
+            port = p.port
+        except ValueError:
+            port = -1
+        match = re.fullmatch(r"/openings/([^/]+)/jobs/?", p.path, re.I)
+        if (
+            p.scheme.lower() == "https"
+            and port in (None, 443)
+            and not p.username
+            and not p.password
+            and not p.params
+            and not p.query
+            and not p.fragment
+            and match
+        ):
+            tenant = urllib.parse.unquote(match.group(1))
+            if re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", tenant):
+                return "applicantpro", tenant.lower()
     if host.endswith(".applicantpro.com") and host != "www.applicantpro.com":
         return "applicantpro", host[: -len(".applicantpro.com")]
     if host.endswith(".applytojob.com"):

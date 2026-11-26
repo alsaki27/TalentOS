@@ -1,4 +1,5 @@
-import { query, queryOne, execute } from "@/server/db/neon";
+import { randomUUID } from "crypto";
+import { query, queryOne, execute, sql } from "@/server/db/neon";
 import type { StagedJob, StagedJobStage } from "@/lib/ai/job-agents/types";
 
 export interface StagedJobRow {
@@ -154,6 +155,170 @@ export async function checkAndRecordDedup(
   );
 
   return new Set(inserted.map((row) => row.signature));
+}
+
+/**
+ * Atomically verify a deferred run is still staging, reserve new dedup IDs,
+ * insert their jobs, and update run counts. The run-row lock serializes this
+ * with the dispatcher's status update, so a batch cannot arrive after ingest
+ * has started. A failed statement rolls back both the reservation and rows.
+ */
+export async function stageDeferredJobs(
+  runId: string | undefined,
+  rows: Partial<StagedJob>[],
+  signatures: string[],
+  expectedSource?: string
+): Promise<{
+  runId: string;
+  status: string;
+  source: string | null;
+  accepted: boolean;
+  staged: number;
+  skipped: number;
+} | null> {
+  if (rows.length === 0 || signatures.length !== rows.length) {
+    throw new Error("deferred staging requires one signature per job row");
+  }
+
+  // A batch can contain the same dedup signature more than once. The SQL
+  // unique_input CTE keeps its first row, while cardinality($2) still counts
+  // every received row so the response accounts for duplicate inputs.
+  const entries = rows.map((row, index) => {
+    const signature = signatures[index];
+    if (!signature) throw new Error("deferred staging received an empty dedup signature");
+    return [signature, row] as const;
+  });
+  const sourceMatch = (rowSource: string | undefined) =>
+    !expectedSource || !rowSource || rowSource.trim().toLowerCase() === expectedSource.trim().toLowerCase();
+
+  const validRows = entries.filter(([, row]) => sourceMatch(row.raw && typeof row.raw === "object" && !Array.isArray(row.raw)
+    ? String((row.raw as Record<string, unknown>).source ?? "") || undefined
+    : undefined));
+  if (validRows.length !== entries.length) {
+    throw new Error("deferred staging batch contains a source that does not match its run");
+  }
+
+  const effectiveRunId = runId ?? randomUUID();
+  const stageQuery = `WITH locked_run AS MATERIALIZED (
+       SELECT id, status, source
+       FROM job_ceo_runs
+       WHERE id = $1::uuid
+     ),
+     input AS MATERIALIZED (
+       SELECT signature, title, company, location, source_url, external_job_id,
+              snippet, description_text, raw_json::jsonb AS raw, ord
+       FROM UNNEST(
+         $2::text[], $3::text[], $4::text[], $5::text[], $6::text[],
+         $7::text[], $8::text[], $9::text[], $10::text[]
+       ) WITH ORDINALITY AS value(
+         signature, title, company, location, source_url, external_job_id,
+         snippet, description_text, raw_json, ord
+       )
+     ),
+     unique_input AS MATERIALIZED (
+       SELECT DISTINCT ON (signature) *
+       FROM input
+       ORDER BY signature, ord
+     ),
+     already_staged AS MATERIALIZED (
+       SELECT DISTINCT item.signature
+       FROM unique_input item
+       JOIN job_ceo_seen_signatures seen
+         ON seen.signature = item.signature AND seen.run_id = $1::uuid
+       JOIN job_ceo_staging staged
+         ON staged.run_id = seen.run_id AND staged.dedup_signature = item.signature
+       CROSS JOIN locked_run run
+       WHERE run.status = 'staging'
+         AND ($11::text IS NULL OR run.source IS NULL OR lower(run.source) = lower($11::text))
+     ),
+     reserved AS (
+       INSERT INTO job_ceo_seen_signatures (signature, run_id, title, company)
+       SELECT item.signature, run.id, item.title, item.company
+       FROM unique_input item
+       CROSS JOIN locked_run run
+       WHERE run.status = 'staging'
+         AND ($11::text IS NULL OR run.source IS NULL OR lower(run.source) = lower($11::text))
+       ON CONFLICT (signature) DO NOTHING
+       RETURNING signature
+     ),
+     inserted_jobs AS (
+       INSERT INTO job_ceo_staging (
+         run_id, stage, dedup_signature, title, company, location, source_url,
+         external_job_id, snippet, description_text, raw
+       )
+       SELECT run.id, 'ingested', item.signature, item.title, item.company,
+              item.location, item.source_url, item.external_job_id,
+              item.snippet, item.description_text, item.raw
+       FROM unique_input item
+       JOIN reserved ON reserved.signature = item.signature
+       CROSS JOIN locked_run run
+       RETURNING id
+     ),
+     updated_run AS (
+       UPDATE job_ceo_runs target
+       SET ingested_count = COALESCE(target.ingested_count, 0) + (SELECT COUNT(*)::int FROM inserted_jobs),
+           skipped_count = COALESCE(target.skipped_count, 0) + cardinality($2::text[])
+             - (SELECT COUNT(*)::int FROM inserted_jobs)
+             - (SELECT COUNT(*)::int FROM already_staged),
+           updated_at = NOW()
+       FROM locked_run run
+       WHERE target.id = run.id
+         AND run.status = 'staging'
+         AND ($11::text IS NULL OR run.source IS NULL OR lower(run.source) = lower($11::text))
+       RETURNING target.id
+     )
+     SELECT run.id AS run_id, run.status, run.source,
+            EXISTS (SELECT 1 FROM updated_run) AS accepted,
+            (SELECT COUNT(*)::int FROM inserted_jobs) + (SELECT COUNT(*)::int FROM already_staged) AS staged,
+            cardinality($2::text[]) - (SELECT COUNT(*)::int FROM inserted_jobs)
+              - (SELECT COUNT(*)::int FROM already_staged) AS skipped
+     FROM locked_run run`;
+  const stageParams = [
+    effectiveRunId,
+    entries.map(([signature]) => signature),
+    entries.map(([, row]) => row.title ?? null),
+    entries.map(([, row]) => row.company ?? null),
+    entries.map(([, row]) => row.location ?? null),
+    entries.map(([, row]) => row.source_url ?? null),
+    entries.map(([, row]) => row.external_job_id ?? null),
+    entries.map(([, row]) => row.snippet ?? null),
+    entries.map(([, row]) => row.description_text ?? null),
+    entries.map(([, row]) => row.raw != null ? JSON.stringify(row.raw) : null),
+    expectedSource ?? null,
+  ];
+
+  const transactionResults = runId
+    ? await sql().transaction((tx) => [
+        tx.query("SELECT id FROM job_ceo_runs WHERE id = $1::uuid FOR UPDATE", [effectiveRunId]),
+        tx.query(stageQuery, stageParams),
+      ])
+    : await sql().transaction((tx) => [
+        tx.query(
+          `INSERT INTO job_ceo_runs (id, source, trigger_type, status)
+           VALUES ($1::uuid, COALESCE(NULLIF($2::text, ''), 'openjobdata'), 'cron', 'staging')`,
+          [effectiveRunId, expectedSource ?? null]
+        ),
+        tx.query("SELECT id FROM job_ceo_runs WHERE id = $1::uuid FOR UPDATE", [effectiveRunId]),
+        tx.query(stageQuery, stageParams),
+      ]);
+  const stageResultIndex = runId ? 1 : 2;
+  const results = transactionResults[stageResultIndex] as Array<{
+    run_id: string;
+    status: string;
+    source: string | null;
+    accepted: boolean;
+    staged: number;
+    skipped: number;
+  }>;
+  const result = results[0];
+  return result ? {
+    runId: result.run_id,
+    status: result.status,
+    source: result.source,
+    accepted: result.accepted,
+    staged: Number(result.staged),
+    skipped: Number(result.skipped),
+  } : null;
 }
 
 export async function removeDedupSignature(signature: string): Promise<void> {

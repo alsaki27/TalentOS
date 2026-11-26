@@ -42,7 +42,7 @@ tracker were excluded from the denominator and payload output.
 The folder name `v28-overall-readiness-frozen` is a cohort label: its original
 report selected historical results only through v23. The new offline report
 adds saved Nov 13-14 attempts through v25, but the checked-in crawler is now
-v31; none of these counts proves a full crawl with the current adapter code.
+v33; none of these counts proves a full crawl with the current adapter code.
 The latest saved scheduler validation, dated 2026-11-14, had zero permission
 rows, selected zero sources, started no content fetch, and invoked no
 TalentOS ingest.
@@ -58,11 +58,13 @@ This leaves zero source groups cleared for scheduled content collection in the
 saved operational checkpoint, even though the code can schedule an approved
 subset once the private inputs are supplied.
 
-The current crawler recognizes 550 direct ATS/API routes in the tracker; the
-other 9,369 use generic discovery. Under the current route mapping, the v25
-offline report records 922 generic `scraped`, 232 `no_jobs`, 6,172 `partial`,
-1,381 `error`, 600 `blocked`, 56 `needs_revalidation`, five `held`, and one
-`payload_count_mismatch`. A direct route means that code has a source path; it
+The current crawler recognizes 565 direct ATS/API routes in the tracker; the
+other 9,354 use generic discovery. This includes 14 verified iCIMS host/path
+aliases and one exact ApplicantPro path-derived tenant route now handled by
+existing adapters. Under the current route mapping, the v25 offline report
+records 910 generic `scraped`, 232 `no_jobs`,
+6,172 `partial`, 1,380 `error`, 598 `blocked`, 56 `needs_revalidation`, five
+`held`, and one `payload_count_mismatch`. A direct route means that code has a source path; it
 does not mean the tenant is configured, permission is approved, or current
 coverage was verified. These are historical outcomes, not current-code
 validation or permission. The 9,074-host route audit found 8,834 hosts represented once,
@@ -78,6 +80,20 @@ broader hostname-pattern scan found 24 Paycom, 28 UKG / UltiPro, five
 AppliTrack, and five JobDiva groups. Extra Paycom, UKG, AppliTrack, and JobDiva
 host aliases remain generic until they match an exact route rule; these vendor
 host-pattern counts are not additional groups to add to the 9,919 denominator.
+The alias audit also found eight source groups on known ATS hostnames where the
+existing direct adapter lacks a required identifier: three Paylocity board
+UUIDs, three Workday site paths (all with historical DNS errors), and two
+Rippling board paths. They remain generic until the source-specific ID or route
+is verified; no tenant identifier is guessed. Vendor docs say Paylocity API
+access is provisioned through an integration agreement, Workday Career Site
+IDs are tenant-configured and can be excluded from third-party indexing, and
+Rippling recruiting APIs require company-scoped credentials and permissions;
+none documents public discovery of these missing identifiers. See [Paylocity
+Developer Portal](https://developer.paylocity.com/integrations/docs/using-developer-portal),
+[Workday Career Sites](https://doc.workday.com/workday-education/en-us/course-manuals/recruiting-for-administrators/career-sites.html),
+[Workday Recruiting API](https://developer.workday.com/documentation/axg1518029552225),
+[Rippling Talent API](https://developer.rippling.com/documentation/rest-api/guides/talent-getting-started),
+and [Rippling job requisitions](https://developer.rippling.com/documentation/rest-api/guides/job-requisitions).
 
 The largest incomplete method groups in the v25 offline report are 2,580
 partial `no_job_urls_in_sitemaps`, 1,828 partial
@@ -94,10 +110,23 @@ segment is absent; the historical reports do not preserve rejected path shapes,
 so recovery must be measured in a permitted current-version retry. The iCIMS
 robots cohort still needs source-specific permission or a supported feed.
 
+The v33 offline reconciliation assigns one privacy-safe primary reason to
+each incomplete source group: 5,411 parser/extraction, 1,151 DNS, 632
+HTTP/access, 503 robots transport/unavailable, 290 other, 243 robots denial,
+110 vendor/authorization hold, 44 transport/timeout, 56 revalidation, and two
+payload mismatches. Separately, the historical error audit found 1,134 DNS
+failures and 165 transient robots-fetch transport/TLS failures among 1,406
+error groups. These 1,299 groups are candidates for a controlled retry after
+each source has an approved permission row; they stay errors until a current
+attempt succeeds. The other 107 errors comprise career-page HTTP failures
+(47), application-form refusals (27), unavailable robots policy (15),
+timeouts (3), oversized responses (2), and other errors (13). A blocked
+status remains a policy/access disposition, not a retry instruction by itself.
+
 A November 26 terms/robots review identified ten source groups hosted directly
 on third-party job boards: four Indeed, four LinkedIn, one Lensa, and one
-ZipRecruiter. These are among the 9,369 generic groups, not extra groups in the
-9,919 denominator. v31 holds them before source requests and at the centralized
+ZipRecruiter. These are among the 9,354 generic groups, not extra groups in the
+9,919 denominator. v33 holds them before source requests and at the centralized
 request/redirect boundary. They need a vendor-authorized interface that grants
 TalentOS collection and reuse rights; an employer's career-page permission
 alone does not authorize scraping a third-party board. No current crawl has
@@ -106,7 +135,7 @@ reclassified these sources yet.
 A separate review found three employer records using `jobs.silkroad.com`.
 SilkRoad documents a customer RSS feed for its Candidate Experience site, but
 the feed reflects only configured public detail-page fields and does not prove
-complete ATS coverage or third-party reuse rights. v31 holds this host at source
+complete ATS coverage or third-party reuse rights. v33 holds this host at source
 preflight and the request/redirect boundary until the employer/vendor confirms
 feed coverage, robots access, and recurring TalentOS collection and reuse.
 
@@ -216,7 +245,7 @@ checkpoint:
 
 1. **Adapter cohorts:** fix partial/error groups only when a representative
    saved fixture or official API contract supports the change. Start with the
-   550 direct ATS/API routes and the largest technically actionable vendor groups.
+   565 direct ATS/API routes and the largest technically actionable vendor groups.
    Do not mark a route complete from host recognition or a successful HTTP
    response alone.
 2. **Failure cohorts:** separate parser gaps from DNS, rate limits, server
@@ -352,18 +381,24 @@ $trigger = New-ScheduledTaskTrigger -Daily -At '4:00AM'
 Register-ScheduledTask -TaskName 'TalentOS Employer Career Crawl' -Action $action -Trigger $trigger -Description 'Policy-gated dry-run employer career crawl'
 ```
 
-Automatic production import is not ready. Do not add `--ingest` to the
-recurring command: that flag does not provide the combined version-aware,
-incremental upload and stable retry state required for a schedule. The next
-developer step is an uploader from the combined readiness selection that sends
-only new or changed jobs with stable source/job IDs, preserves employer-key
-mapping, and records which staged items reached `jobs`. The CLI `--ingest`
-option is only a manual staging path after a separate reviewed approval. The
-crawler CLI does not check the scheduler's permission manifest: a direct
-`--ingest` invocation can stage sources that the scheduler would filter out.
-Any manual staging run must therefore use an independently reviewed,
-permission-filtered input file. Keep `BASE_URL` and `INGEST_SECRET` in the
-private secret store and out of logs.
+Automatic production import is not enabled. Do not add the crawler's
+`--ingest` to the recurring command: it is a manual staging path, not the
+combined version-aware incremental workflow. A separate
+`scripts/employer_career_incremental_upload.py` is now available and is
+dry-run by default. It accepts only current-adapter ready payloads, rechecks
+the active exact-source permission manifest and source/job-host policy holds,
+deduplicates stable external IDs, and stores a private resumable checkpoint.
+With explicit `--ingest`, it stages all batches with dispatch deferred, then
+dispatches the exact run once; `--wait-for-run` also checks terminal status and
+reports Job CEO's `logged_count` separately from staged count. The run uses
+`INGEST_SECRET` and `CRON_SECRET`. Apply
+`sql/neon_fixes/127_job_ceo_deferred_staging_status.sql` first. The uploader's
+14 offline tests passed; API-route tests and TypeScript checks still need to
+run in a development environment with Node dependencies. The private
+permission manifest is absent here, and the available v33 readiness snapshot
+is historical through Nov 14, so this code is not ready to activate against
+TalentOS. Keep `BASE_URL`, `INGEST_SECRET`, and `CRON_SECRET` in the private
+secret store and out of logs.
 
 ## Adapter gap work
 
@@ -378,7 +413,7 @@ outputs from the current audit, not part of this public handoff.
 ## Operational review files
 
 The current local offline readiness reconciliation is saved at
-`outputs/employer-career-ingest-run-2026-11-26-offline-checkpoint-consolidation-through-2026-11-14/`.
+`outputs/employer-career-ingest-run-2026-11-26-offline-v33-route-and-reason-reconciliation/`.
 It contains the full 9,919-row source disposition export and integration-ready
 payload snapshot, uses saved attempts through Nov 14, and remains gitignored.
 The Nov 14 audit report remains at
