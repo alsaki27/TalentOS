@@ -4,7 +4,7 @@ import { encryptCandidateSsnLast4 } from "@/server/privacy/candidateSsnCrypto";
 import { validateContractSigning } from "@/lib/contractSignature";
 import { saveSignedContract, processContractDeliveries } from "@/server/services/contractSigningService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { CANDIDATE_AGREEMENT_TEXT, CANDIDATE_AGREEMENT_VERSION } from "@/lib/candidatePortalAgreement";
+import { currentTerms } from "@/lib/candidateAgreementTerms";
 import { CANDIDATE_PRIVACY_NOTICE_VERSION } from "@/lib/candidatePortalAgreementVersion";
 
 export const dynamic = "force-dynamic";
@@ -15,13 +15,14 @@ export async function GET() {
   const { context, response } = await requireCurrentCandidate({ allowIncompleteOnboarding: true });
   if (response) return response;
 
+  const terms = currentTerms(context.candidate);
   const required = !context.candidate.has_contract && !context.candidate.onboarding_complete;
   return NextResponse.json({
     required,
     candidateName: context.candidate.name,
-    agreementVersion: CANDIDATE_AGREEMENT_VERSION,
+    agreementVersion: terms.version,
     privacyNoticeVersion: CANDIDATE_PRIVACY_NOTICE_VERSION,
-    ...(required ? { agreementText: CANDIDATE_AGREEMENT_TEXT } : {}),
+    ...(required ? { agreementText: terms.text, agreementRuns: terms.runs } : {}),
   }, { headers: NO_STORE });
 }
 
@@ -41,7 +42,8 @@ export async function POST(req: NextRequest) {
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "Submit the required onboarding choices." }, { status: 400, headers: NO_STORE });
   }
-  if (body.agreementVersion !== CANDIDATE_AGREEMENT_VERSION || body.privacyNoticeVersion !== CANDIDATE_PRIVACY_NOTICE_VERSION) {
+  const terms = currentTerms(context.candidate);
+  if (body.agreementVersion !== terms.version || body.privacyNoticeVersion !== CANDIDATE_PRIVACY_NOTICE_VERSION) {
     return NextResponse.json({ error: "The agreement has changed. Reload it and review the current version." }, { status: 409, headers: NO_STORE });
   }
   if (body.termsAccepted !== true || body.agreementScrolledToEnd !== true || body.dataProcessingConsent !== true) {
@@ -70,10 +72,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const saved = await saveSignedContract(context.candidateId, signing, body.hasSsn, encryptedLast4);
+    const saved = await saveSignedContract(context.candidateId, signing, body.hasSsn, encryptedLast4, terms);
     backgroundDispatch(processContractDeliveries());
     return NextResponse.json({ ok: true, contractId: saved.id, copyEmail: saved.signer_email, emailDelivery: "queued" }, { headers: NO_STORE });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "Agreement changed") return NextResponse.json({ error: "The agreement has changed. Reload and review the current terms." }, { status: 409, headers: NO_STORE });
     return NextResponse.json({ error: "Could not save onboarding. Please try again." }, { status: 500, headers: NO_STORE });
   }
 }

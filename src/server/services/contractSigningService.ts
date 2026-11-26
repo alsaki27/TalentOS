@@ -1,9 +1,7 @@
 import { query, queryOne } from "@/server/db/neon";
 import { sha256Hex } from "@/lib/sha256";
-import {
-  CANDIDATE_AGREEMENT_TEXT,
-  CANDIDATE_AGREEMENT_VERSION,
-} from "@/lib/candidatePortalAgreement";
+import { currentTerms } from "@/lib/candidateAgreementTerms";
+import { CANDIDATE_AGREEMENT_VERSION } from "@/lib/candidatePortalAgreementVersion";
 import { CANDIDATE_PRIVACY_NOTICE_VERSION } from "@/lib/candidatePortalAgreementVersion";
 import type { ContractSigningInput } from "@/lib/contractSignature";
 import { renderSignedContractPdf } from "./contractSigningPdf";
@@ -14,10 +12,11 @@ export async function saveSignedContract(
   input: ContractSigningInput,
   hasSsn: boolean,
   ciphertext: string | null,
+  terms = currentTerms({}),
 ) {
   const versions = [
     candidateId,
-    CANDIDATE_AGREEMENT_VERSION,
+    terms.version,
     CANDIDATE_PRIVACY_NOTICE_VERSION,
   ];
   const existing = await queryOne<{ id: string; signer_email: string }>(
@@ -27,20 +26,21 @@ export async function saveSignedContract(
   if (existing) return existing;
   const id = crypto.randomUUID(),
     signedAt = new Date().toISOString(),
-    agreementHash = await sha256Hex(CANDIDATE_AGREEMENT_TEXT);
+    agreementHash = await sha256Hex(terms.text);
   const pdf = await renderSignedContractPdf({
     ...input,
     id,
     signedAt,
-    agreement: CANDIDATE_AGREEMENT_TEXT,
-    agreementVersion: CANDIDATE_AGREEMENT_VERSION,
+    agreement: terms.text,
+    agreementRuns: terms.runs,
+    agreementVersion: terms.version,
     privacyVersion: CANDIDATE_PRIVACY_NOTICE_VERSION,
     agreementHash,
   });
   const saved = await queryOne<{ id: string; signer_email: string }>(
-    `WITH signed AS (
+    `WITH target AS (SELECT id FROM candidates WHERE id=$1 AND NOT has_contract AND COALESCE(contract_terms_version,$16)=$2 FOR UPDATE), signed AS (
  INSERT INTO candidate_signed_contracts(id,candidate_id,agreement_version,privacy_notice_version,agreement_text,agreement_sha256,signer_name,signer_email,signature,signing_date,signed_at,pdf_base64,pdf_sha256)
- VALUES($4,$1,$2,$3,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13)
+ SELECT $4,target.id,$2,$3,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13 FROM target
  ON CONFLICT(candidate_id,agreement_version,privacy_notice_version) DO NOTHING RETURNING id,candidate_id
  ), accepted AS (
  INSERT INTO candidate_portal_acceptances(candidate_id,agreement_version,privacy_notice_version,terms_accepted,agreement_scrolled_to_end,data_processing_consent)
@@ -59,7 +59,7 @@ export async function saveSignedContract(
     [
       ...versions,
       id,
-      CANDIDATE_AGREEMENT_TEXT,
+      terms.text,
       agreementHash,
       input.signerName,
       input.signerEmail,
@@ -70,6 +70,7 @@ export async function saveSignedContract(
       await sha256Hex(pdf),
       hasSsn,
       ciphertext,
+      CANDIDATE_AGREEMENT_VERSION,
     ],
   );
   const result =
@@ -78,7 +79,7 @@ export async function saveSignedContract(
       "SELECT id,signer_email FROM candidate_signed_contracts WHERE candidate_id=$1 AND agreement_version=$2 AND privacy_notice_version=$3",
       versions,
     ));
-  if (!result) throw new Error("Signing was not saved.");
+  if (!result) throw new Error("Agreement changed");
   return result;
 }
 

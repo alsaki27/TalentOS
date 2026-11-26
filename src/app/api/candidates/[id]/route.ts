@@ -105,7 +105,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (keys.length === 0) {
       return NextResponse.json({ error: "No fields to update" }, { status: 400 });
     }
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    let setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    if (updates.has_contract === false) {
+      // Reopening a signed agreement requires a fresh acceptance, even for identical text.
+      setClause += ", contract_terms_version = CASE WHEN has_contract THEN gen_random_uuid()::text ELSE contract_terms_version END";
+    }
     const values = Object.values(updates) as (string | number | boolean | object | Date | null)[];
     values.push(params.id);
     const sql = `UPDATE candidates SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;

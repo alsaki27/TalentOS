@@ -17,7 +17,7 @@ vi.mock("@/server/privacy/candidateSsnCrypto", () => ({
   encryptCandidateSsnLast4: mocks.encrypt,
 }));
 vi.mock("@/server/lib/waitUntil", () => ({ backgroundDispatch: vi.fn() }));
-import { POST } from "@/app/api/portal/me/onboarding/route";
+import { GET, POST } from "@/app/api/portal/me/onboarding/route";
 import {
   CANDIDATE_AGREEMENT_VERSION,
   CANDIDATE_PRIVACY_NOTICE_VERSION,
@@ -76,6 +76,7 @@ it("binds the signature to the session and queues copies only after persistence"
     expect.objectContaining({ signerEmail: "client@example.com" }),
     false,
     null,
+    expect.objectContaining({ version: CANDIDATE_AGREEMENT_VERSION }),
   );
   expect((await response.json()).emailDelivery).toBe("queued");
   expect(mocks.deliver).toHaveBeenCalledTimes(1);
@@ -92,4 +93,19 @@ it("requires authentication and does not send when save fails", async () => {
 it("rejects oversized requests before processing a signature", async () => {
   expect((await POST(request({ extra: "x".repeat(500001) }))).status).toBe(413);
   expect(mocks.save).not.toHaveBeenCalled();
+});
+
+it("shows and signs the session candidate's saved terms", async () => {
+  const runs = [{ text: "Candidate-specific payment terms", italic: true }];
+  mocks.auth.mockResolvedValue({ context: {
+    candidateId: "session-candidate",
+    candidate: { has_contract: false, contract_terms_version: "revision-2", agreement_runs: runs },
+  } });
+  expect(await (await GET()).json()).toMatchObject({
+    agreementVersion: "revision-2", agreementText: runs[0].text, agreementRuns: runs,
+  });
+  expect((await POST(request(body()))).status).toBe(409);
+  expect((await POST(request({ ...body(), agreementVersion: "revision-2", agreementText: "Other terms" }))).status).toBe(200);
+  expect(mocks.save).toHaveBeenCalledWith("session-candidate", expect.anything(), false, null,
+    { version: "revision-2", text: runs[0].text, runs });
 });

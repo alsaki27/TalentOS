@@ -5,6 +5,7 @@
 // pipeline (applications/jobs/resumes/AI routes) — read-only lookups against
 // candidates only.
 
+import type { AgreementRun } from "@/lib/candidateAgreementTerms";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createJWT, verifyJWT } from "@/server/auth/jwt";
@@ -23,6 +24,8 @@ export interface CandidateAccount {
   google_sub: string | null;
   password_hash: string | null;
   account_created_at: string | null;
+  contract_terms_version?: string | null;
+  agreement_runs?: AgreementRun[] | null;
   has_contract?: boolean;
   onboarding_complete?: boolean;
 }
@@ -55,11 +58,12 @@ export async function findCandidateByPortalToken(token: string) {
 export async function findCandidateById(id: string) {
   return queryOne<CandidateAccount>(
     `SELECT c.id, c.name, c.email, c.account_email, c.google_sub, c.password_hash, c.account_created_at,
-            c.has_contract,
+            c.has_contract, c.contract_terms_version,
+            CASE WHEN NOT c.has_contract THEN (SELECT runs FROM candidate_agreement_terms WHERE candidate_id = c.id) END AS agreement_runs,
             (c.has_contract OR EXISTS (
               SELECT 1 FROM candidate_portal_acceptances a
                WHERE a.candidate_id = c.id
-                 AND a.agreement_version = $2
+                 AND a.agreement_version = COALESCE(c.contract_terms_version, $2)
                  AND a.privacy_notice_version = $3
             )) AS onboarding_complete
        FROM candidates c WHERE c.id = $1`,
@@ -168,7 +172,7 @@ export async function candidatePortalAccessAllowed(candidateId: string): Promise
     `SELECT (c.has_contract OR EXISTS (
               SELECT 1 FROM candidate_portal_acceptances a
                WHERE a.candidate_id = c.id
-                 AND a.agreement_version = $2
+                 AND a.agreement_version = COALESCE(c.contract_terms_version, $2)
                  AND a.privacy_notice_version = $3
             )) AS allowed
        FROM candidates c WHERE c.id = $1`,

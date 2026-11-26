@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ContractSignatureFields, type SignatureFieldsValue } from "@/components/contracts/ContractSignatureFields";
 import { ContractSigningConfirmation } from "@/components/contracts/ContractSigningConfirmation";
 import { validateContractSigning } from "@/lib/contractSignature";
+import { agreementMarkup, type AgreementRun } from "@/lib/candidateAgreementTerms";
 import PortalLogo from "../PortalLogo";
 
 interface OnboardingData {
@@ -12,6 +13,7 @@ interface OnboardingData {
   candidateName: string;
   agreementVersion: string;
   privacyNoticeVersion: string;
+  agreementRuns?: AgreementRun[];
   agreementText?: string;
 }
 
@@ -147,7 +149,7 @@ export default function PortalOnboardingPage() {
           aria-label="Career Coaching, Training, and Placement Service Agreement. Scroll to the end to continue."
           onScroll={trackAgreementScroll}
         >
-          <pre>{data?.agreementText}</pre>
+          {data?.agreementRuns ? <pre dangerouslySetInnerHTML={{ __html: agreementMarkup(data.agreementRuns) }} /> : <pre>{data?.agreementText}</pre>}
         </div>
         <p className={`portal-agreement-read-status${fullyRead ? " is-complete" : ""}`} aria-live="polite">
           {fullyRead ? "You reached the end of the agreement." : "Scroll to the end of the agreement to enable the required choices."}

@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { CandidateAgreementEditor } from "./CandidateAgreementEditor";
 import { Download } from "lucide-react";
 import {
   Dialog,
@@ -156,6 +157,8 @@ export function CandidateContractsPanel({
             </select>
             {!hasContract && <p className="muted">The candidate must accept the portal agreement and complete onboarding before portal access is granted.</p>}
           </div>
+
+          {!hasContract && <CandidateAgreementEditor key={candidateId} candidateId={candidateId} />}
 
           <div className="candidate-contract-upload">
             <div>
