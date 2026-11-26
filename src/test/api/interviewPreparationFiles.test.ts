@@ -57,6 +57,7 @@ describe("Application preparation and interview audio", () => {
       .mockReset()
       .mockResolvedValueOnce({ candidate_id: candidateId, candidate_name: "Test candidate", job_id: applicationId, round_number: 2, status: "interview" })
       .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ can_access: false, has_stage: true });
     mocks.upload.mockResolvedValue({ itemId: "sharepoint-item" });
     mocks.remove.mockResolvedValue(undefined);

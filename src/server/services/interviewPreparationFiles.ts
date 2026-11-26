@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { deleteSharePointItem, openSharePointItem, uploadToSharePoint } from "@/lib/integrations/sharepoint";
 import { safeSegment } from "@/lib/integrations/sharepointResumeNaming";
-import { MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { AUDIO_SIZE_ERROR, MAX_INTERVIEW_AUDIO_BYTES, MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { startAudioUpload, receiveAudioChunk } from "./interviewAudioChunks";
 import { query, queryOne } from "@/server/db/neon";
 import { APPLICATION_INTERVIEW_ACCESS_SQL, canAccessInterviewDetails } from "@/lib/applicationInterviewAccess";
 
@@ -63,24 +64,71 @@ function error(message: string, status: number) {
 export async function uploadInterviewPreparation(request: Request, applicationId: string, scheduleId: string | null, actor: Actor, candidateId?: string) {
   const audio = scheduleId !== null;
   if (candidateId && !audio) return error("Candidates can only upload interview recordings.", 403);
+  if (scheduleId && request.method === "PUT") {
+    const scope = sessionScope(applicationId, scheduleId, actor, candidateId);
+    const result = await receiveAudioChunk(request, scope, matchesType);
+    if (result instanceof Response) return result;
+    return savePreparationFile(result.file, result.itemId, applicationId, scheduleId, actor, candidateId);
+  }
+  if (scheduleId && request.headers.get("content-type")?.split(";")[0] === "application/json") {
+    if (Number(request.headers.get("content-length")) > 4096) return error("Invalid recording metadata.", 400);
+    const data = await request.json().catch(() => null);
+    if (typeof data?.filename !== "string" || data.filename.length > 255) return error("Choose an audio recording.", 400);
+    if (!Number.isSafeInteger(data.size) || data.size < 1) return error("Invalid recording size.", 400);
+    if (data.size > MAX_INTERVIEW_AUDIO_BYTES) return error(AUDIO_SIZE_ERROR, 413);
+    const metadata = await prepareFile(data.filename, data.size, candidateId ? true : data.visible === true, applicationId, scheduleId, candidateId);
+    if (metadata instanceof Response) return metadata;
+    return startAudioUpload(metadata, sessionScope(applicationId, scheduleId, actor, candidateId));
+  }
+  const multipartLimitMessage = audio ? "Use the recording uploader for audio larger than 20 MB." : "Files must be 20 MB or smaller.";
   if (Number(request.headers.get("content-length")) > MAX_PREPARATION_FILE_BYTES + 65536) {
-    return error("Files must be 20 MB or smaller.", 413);
+    return error(multipartLimitMessage, 413);
   }
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File) || !file.size) return error("Choose a file.", 400);
-  if (file.size > MAX_PREPARATION_FILE_BYTES) return error("Files must be 20 MB or smaller.", 413);
+  if (file.size > MAX_PREPARATION_FILE_BYTES) return error(multipartLimitMessage, 413);
 
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  if (!matchesType(extension, new Uint8Array(await file.slice(0, 64).arrayBuffer()))) {
+    return error("The file does not match its extension.", 400);
+  }
+  const metadata = await prepareFile(file.name, file.size, candidateId ? true : form?.get("visible") === "true", applicationId, scheduleId, candidateId);
+  if (metadata instanceof Response) return metadata;
+  let itemId: string;
+  try {
+    const uploaded = await uploadToSharePoint(metadata.path, file, metadata.contentType);
+    itemId = uploaded.itemId;
+    if (!itemId) throw new Error("SharePoint did not return a drive item ID.");
+  } catch (cause) {
+    console.error("[interview-preparation] SharePoint upload failed", cause instanceof Error ? cause.name : "unknown");
+    return error("Could not upload to SharePoint. Check the storage connection and try again.", 502);
+  }
+
+  return savePreparationFile(metadata, itemId, applicationId, scheduleId, actor, candidateId);
+}
+
+function sessionScope(applicationId: string, scheduleId: string, actor: Actor, candidateId?: string) {
+  return JSON.stringify(["interview-audio-v1", applicationId, scheduleId, candidateId ? "candidate" : "staff", candidateId ?? actor.user_id]);
+}
+
+export interface PreparationUpload {
+  id: string;
+  filename: string;
+  size: number;
+  contentType: string;
+  path: string;
+  visible: boolean;
+}
+
+async function prepareFile(name: string, size: number, visible: boolean, applicationId: string, scheduleId: string | null, candidateId?: string) {
+  const audio = scheduleId !== null;
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
   const types: Readonly<Record<string, string>> = audio ? AUDIO_TYPES : DOCUMENT_TYPES;
   if (!Object.hasOwn(types, extension)) {
     return error(audio ? "Upload an MP3, M4A, WAV, OGG, Opus, or FLAC file." : "Upload a PDF, DOC, or DOCX file.", 400);
   }
   const contentType = types[extension];
-  if (!matchesType(extension, new Uint8Array(await file.slice(0, 64).arrayBuffer()))) {
-    return error("The file does not match its extension.", 400);
-  }
-
   const record = await queryOne<{ candidate_id: string; candidate_name: string; job_id: string | null; round_number: number | null; status: string; application_stage: string | null; ae_stage: string | null }>(
     `SELECT a.candidate_id, c.name AS candidate_name, a.job_id, s.round_number, a.status, a.application_stage, a.ae_stage
      FROM applications a JOIN candidates c ON c.id = a.candidate_id
@@ -95,7 +143,7 @@ export async function uploadInterviewPreparation(request: Request, applicationId
   }
 
   const id = crypto.randomUUID();
-  const fileLabel = Array.from(file.name.replace(/[/\\\u0000-\u001f\u007f]/g, "").replace(/\.[^.]+$/, "")).slice(0, 100).join("");
+  const fileLabel = Array.from(name.replace(/[/\\\u0000-\u001f\u007f]/g, "").replace(/\.[^.]+$/, "")).slice(0, 100).join("");
   const defaultName = audio ? "Interview audio" : "Preparation";
   const filename = `${fileLabel || defaultName}.${extension}`;
   const candidateFolder = `${safeSegment(record.candidate_name, "Candidate").slice(0, 48)} (${record.candidate_id})`;
@@ -104,16 +152,13 @@ export async function uploadInterviewPreparation(request: Request, applicationId
   const path = audio
     ? `${base}/Stage ${record.round_number} (${scheduleId})/Audio/${storedName}`
     : `${base}/Documents/${storedName}`;
-  let itemId: string;
-  try {
-    const uploaded = await uploadToSharePoint(path, file, contentType);
-    itemId = uploaded.itemId;
-    if (!itemId) throw new Error("SharePoint did not return a drive item ID.");
-  } catch (cause) {
-    console.error("[interview-preparation] SharePoint upload failed", cause instanceof Error ? cause.name : "unknown");
-    return error("Could not upload to SharePoint. Check the storage connection and try again.", 502);
-  }
+  return { id, filename, size, contentType, path, visible };
+}
 
+async function savePreparationFile(file: PreparationUpload, itemId: string, applicationId: string, scheduleId: string | null, actor: Actor, candidateId?: string) {
+  const { id, filename, contentType, visible } = file;
+  const audio = scheduleId !== null;
+  let insertFailed = false;
   try {
     const saved = await queryOne<InterviewPreparationFile>(
       `WITH added AS (
@@ -125,6 +170,7 @@ export async function uploadInterviewPreparation(request: Request, applicationId
          WHERE a.id = $2 AND ($3::uuid IS NULL OR s.id IS NOT NULL)
            AND ($12::uuid IS NULL OR a.candidate_id = $12)
            AND ${APPLICATION_INTERVIEW_ACCESS_SQL}
+         ON CONFLICT (id) DO NOTHING
          RETURNING *
        ), audit AS (
          INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata)
@@ -134,22 +180,27 @@ export async function uploadInterviewPreparation(request: Request, applicationId
        )
        SELECT ${FILE_COLUMNS} FROM added f`,
       [id, applicationId, scheduleId, filename, contentType, file.size, itemId,
-        candidateId ? true : form?.get("visible") === "true",
+        visible,
         actor.user_id, actor.email, actor.display_name || actor.email, candidateId ?? null]
     );
     if (saved) return NextResponse.json(saved, { status: 201 });
   } catch (cause) {
+    insertFailed = true;
     console.error("[interview-preparation] Could not save uploaded file", cause instanceof Error ? cause.name : "unknown");
-    // Check the durable record before cleaning up in case the insert committed
-    // but the database response was lost.
-    try {
-      const saved = await queryOne<InterviewPreparationFile>(
-        `SELECT ${FILE_COLUMNS} FROM interview_preparation_files f WHERE f.id = $1`, [id]
-      );
-      if (saved) return NextResponse.json(saved, { status: 201 });
-    } catch {
-      return error("Could not confirm the upload. Reload the application before trying again.", 503);
-    }
+  }
+  // A retry may arrive after the row committed, even after the stage changed.
+  // Never delete a linked recording or write its audit entry a second time.
+  try {
+    const saved = await queryOne<InterviewPreparationFile & { removed_at: string | null }>(
+      `SELECT ${FILE_COLUMNS}, f.removed_at FROM interview_preparation_files f WHERE f.id = $1 AND f.sharepoint_item_id = $2`,
+      [id, itemId]
+    );
+    if (saved?.removed_at) return error("This recording was already removed.", 410);
+    if (saved) return NextResponse.json(saved, { status: 201 });
+  } catch {
+    return error("Could not confirm the upload. Reload the application before trying again.", 503);
+  }
+  if (insertFailed) {
     await deleteSharePointItem(itemId).catch(() => console.error("[interview-preparation] Could not clean up unused upload"));
     return error("The upload could not be saved.", 503);
   }

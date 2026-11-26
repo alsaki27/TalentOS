@@ -14,3 +14,5 @@ export async function POST(request: Request, { params }: { params: { id: string;
     display_name: context.candidate.name,
   }, context.candidateId);
 }
+
+export const PUT = POST;

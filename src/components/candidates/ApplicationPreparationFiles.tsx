@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Download, FileText, Headphones, X } from "lucide-react";
-import { MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { MAX_INTERVIEW_AUDIO_MB, MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { uploadInterviewRecording } from "@/lib/uploadInterviewRecording";
 import styles from "./CandidateApplicationWorkspace.module.css";
 
 export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -105,13 +106,14 @@ export default function ApplicationPreparationFiles({ files, endpoint, audio = f
     const formNode = event.currentTarget;
     const form = new FormData(formNode);
     const file = form.get("file");
-    if (!(file instanceof File) || !file.size || file.size > MAX_PREPARATION_FILE_BYTES) {
-      setError("Choose a file up to 20 MB.");
+    if (!(file instanceof File) || !file.size || (!audio && file.size > MAX_PREPARATION_FILE_BYTES)) {
+      setError(audio ? "Choose a non-empty audio recording." : "Choose a file up to 20 MB.");
       return;
     }
     form.set("visible", String(form.has("publish")));
     void change(async () => {
-      await requestJson(endpoint, { method: "POST", body: form });
+      if (audio) await uploadInterviewRecording(endpoint, file, form.has("publish"));
+      else await requestJson(endpoint, { method: "POST", body: form });
       formNode.reset();
     });
   }
@@ -152,7 +154,7 @@ export default function ApplicationPreparationFiles({ files, endpoint, audio = f
           {audio ? "Choose an audio recording" : "Choose a preparation document"}
           <input name="file" type="file" accept={audio ? ".mp3,.m4a,.wav,.ogg,.opus,.flac" : ".pdf,.doc,.docx"} required disabled={busy} />
         </label>
-        <span className={styles.muted}>{audio ? "MP3, M4A, WAV, OGG, Opus, or FLAC" : "PDF, DOC, or DOCX"} · up to 20 MB per file</span>
+        <span className={styles.muted}>{audio ? "MP3, M4A, WAV, OGG, Opus, or FLAC" : "PDF, DOC, or DOCX"} · up to {audio ? MAX_INTERVIEW_AUDIO_MB : 20} MB per file</span>
         <label className={styles.checkbox}><input name="publish" type="checkbox" defaultChecked disabled={busy} /> Share with candidate in the portal</label>
         <button type="submit" disabled={busy}>{busy ? "Working…" : "Upload to SharePoint"}</button>
       </form>}

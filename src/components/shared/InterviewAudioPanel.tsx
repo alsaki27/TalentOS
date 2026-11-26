@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Headphones, RefreshCw, Trash2, Upload, X } from "lucide-react";
-import { MAX_PREPARATION_FILE_BYTES, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { MAX_INTERVIEW_AUDIO_MB, type InterviewPreparationFile } from "@/lib/applicationInterviewPreparation";
+import { uploadInterviewRecording } from "@/lib/uploadInterviewRecording";
 import styles from "./InterviewAudioPanel.module.css";
 
 async function readResult(response: Response) {
@@ -24,6 +25,7 @@ export default function InterviewAudioPanel({ endpoint, files, onChange, onBusyC
 }) {
   const [currentFiles, setCurrentFiles] = useState(files);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -39,17 +41,14 @@ export default function InterviewAudioPanel({ endpoint, files, onChange, onBusyC
     const input = form.elements.namedItem("file");
     const file = input instanceof HTMLInputElement ? input.files?.[0] : undefined;
     if (!file) return setError("Choose an audio recording first.");
-    if (file.size > MAX_PREPARATION_FILE_BYTES) return setError("Recordings must be 20 MB or smaller.");
-
+    setProgress(0);
     setBusy(true);
     onBusyChange?.(true);
     setError("");
     setMessage("");
     try {
       const replacingId = replacingFileId;
-      const formData = new FormData(form);
-      formData.set("visible", "true");
-      const added = await readResult(await fetch(endpoint, { method: "POST", body: formData, cache: "no-store" }));
+      const added = await uploadInterviewRecording(endpoint, file, true, setProgress);
       if (!added.id) throw new Error("The recording was uploaded but could not be confirmed.");
 
       if (replacingId) {
@@ -129,7 +128,7 @@ export default function InterviewAudioPanel({ endpoint, files, onChange, onBusyC
         <button type="button" className={styles.toggleUpload} onClick={() => {
           if (uploadOpen) closeUpload();
           else { setUploadOpen(true); setMessage(""); }
-        }} aria-expanded={uploadOpen}>
+        }} disabled={busy} aria-expanded={uploadOpen}>
           {uploadOpen ? <><X size={14} />Close</> : <><Upload size={14} />Upload</>}
         </button>
       </div>
@@ -157,8 +156,8 @@ export default function InterviewAudioPanel({ endpoint, files, onChange, onBusyC
           <span className={styles.browse}>Browse</span>
         </label>
         <div className={styles.uploadFooter}>
-          <span>MP3, M4A, WAV, OGG, Opus or FLAC · up to 20 MB</span>
-          <button type="submit" disabled={busy || !fileName}><Upload size={14} />{busy ? "Uploading…" : replacingFileId ? "Save replacement" : "Save recording"}</button>
+          <span>MP3, M4A, WAV, OGG, Opus or FLAC · up to {MAX_INTERVIEW_AUDIO_MB} MB</span>
+          <button type="submit" disabled={busy || !fileName}><Upload size={14} />{busy ? (progress ? `Uploading ${progress}%` : "Uploading…") : replacingFileId ? "Save replacement" : "Save recording"}</button>
         </div>
       </form>}
       {error && <p className={styles.error} role="alert">{error}</p>}

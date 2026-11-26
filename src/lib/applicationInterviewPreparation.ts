@@ -1,4 +1,9 @@
 export const MAX_PREPARATION_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_INTERVIEW_AUDIO_MB = 300;
+export const AUDIO_SIZE_ERROR = `Recordings must be ${MAX_INTERVIEW_AUDIO_MB} MB or smaller.`;
+export const MAX_INTERVIEW_AUDIO_BYTES = MAX_INTERVIEW_AUDIO_MB * 1024 * 1024;
+// Microsoft Graph requires non-final fragments to be multiples of 320 KiB.
+export const INTERVIEW_AUDIO_CHUNK_BYTES = 16 * 320 * 1024;
 
 export const INTERVIEW_STAGE_STATUS: Record<string, string> = {
   planned: "Planned",

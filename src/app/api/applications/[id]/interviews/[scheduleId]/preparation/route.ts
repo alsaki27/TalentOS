@@ -10,3 +10,5 @@ export async function POST(request: Request, { params }: { params: { id: string;
   }
   return uploadInterviewPreparation(request, params.id, params.scheduleId, context.profile);
 }
+
+export const PUT = POST;

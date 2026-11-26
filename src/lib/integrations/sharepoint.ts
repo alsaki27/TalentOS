@@ -163,6 +163,40 @@ export async function uploadToSharePoint(path: string, content: Uint8Array | Blo
   return { url: item.webUrl as string, itemId: item.id as string, name: item.name as string };
 }
 
+function archiveItemByPath(path: string) {
+  const siteId = requireEnv("SHAREPOINT_SITE_ID");
+  const folder = (process.env.SHAREPOINT_DRIVE_FOLDER || "resumes").replace(/^\/+|\/+$/g, "");
+  const graphPath = `${folder}/${path}`;
+  return { siteId, graphPath, url: `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeGraphPath(graphPath)}` };
+}
+
+export async function createSharePointUploadSession(path: string): Promise<string> {
+  const token = await getGraphToken();
+  const { siteId, graphPath, url } = archiveItemByPath(path);
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  const start = () => fetch(`${url}:/createUploadSession`, {
+    method: "POST", headers, body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "fail" } }),
+  });
+  let response = await start();
+  if (response.status === 404) {
+    await response.body?.cancel();
+    await ensureFolderPath(token, siteId, graphPath.slice(0, graphPath.lastIndexOf("/")));
+    response = await start();
+  }
+  if (!response.ok) throw new SharePointRequestError(response, "SharePoint could not start the upload.");
+  const { uploadUrl } = await response.json();
+  if (typeof uploadUrl !== "string" || new URL(uploadUrl).protocol !== "https:") throw new Error("Missing SharePoint upload URL.");
+  return uploadUrl;
+}
+
+export async function findSharePointUpload(path: string): Promise<{ id: string; size: number } | null> {
+  const token = await getGraphToken();
+  const response = await fetch(`${archiveItemByPath(path).url}?$select=id,size`, { headers: { Authorization: `Bearer ${token}` } });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new SharePointRequestError(response, "SharePoint could not confirm the recording.");
+  return response.json();
+}
+
 function driveItemUrl(itemId: string) {
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   return `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${encodeURIComponent(itemId)}`;
