@@ -14,6 +14,50 @@ from employer_career_ingest import _clean_description, extract_html_job, extract
 
 
 class CareerScraperTests(unittest.TestCase):
+    def test_direct_ingest_requires_permission_manifest_before_any_content_fetch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            tracker.write_text(
+                "career_page_status,career_page_url,evidence_url,employer_name,employer_key\n"
+                "verified_official,https://example.com/careers,,Example,company_id:1\n",
+                encoding="utf-8",
+            )
+            argv = [
+                "employer_career_ingest.py", "--input", str(tracker),
+                "--output-dir", str(root / "crawl"), "--ingest",
+            ]
+            with patch("sys.argv", argv), patch.object(scraper, "_request") as request:
+                with self.assertRaises(SystemExit) as raised:
+                    scraper.main()
+            self.assertEqual(raised.exception.code, 2)
+            request.assert_not_called()
+
+    def test_permission_manifest_must_approve_every_direct_crawler_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            tracker.write_text(
+                "career_page_status,career_page_url,evidence_url,employer_name,employer_key\n"
+                "verified_official,https://example.com/careers,,Example,company_id:1\n",
+                encoding="utf-8",
+            )
+            policy = root / "permissions.csv"
+            policy.write_text(
+                "normalized_url,permission_status,collection_scope,permission_evidence_ref,reviewed_at_utc,reviewed_by,expires_at_utc\n"
+                "https://example.com/careers,pending,,,,,\n",
+                encoding="utf-8",
+            )
+            argv = [
+                "employer_career_ingest.py", "--input", str(tracker),
+                "--permission-manifest", str(policy), "--output-dir", str(root / "crawl"),
+            ]
+            with patch("sys.argv", argv), patch.object(scraper, "_request") as request:
+                with self.assertRaises(SystemExit) as raised:
+                    scraper.main()
+            self.assertEqual(raised.exception.code, 2)
+            request.assert_not_called()
+
     def test_extracts_jobposting_and_namespaces_missing_identifier(self):
         html = '''<script type="application/ld+json">{
           "@context":"https://schema.org","@type":"JobPosting","title":"GIS Analyst",
@@ -956,6 +1000,100 @@ class CareerScraperTests(unittest.TestCase):
                 self.assertEqual(result["method"], "policy_hold")
                 self.assertFalse(result["complete"])
                 self.assertIn(reason, result["error"])
+
+    def test_applitrack_and_jobdiva_sources_are_held_without_network_requests(self):
+        for url, reason in (
+            ("https://www.applitrack.com/example/onlineapp/default.aspx", "Frontline AppliTrack"),
+            ("https://www1.jobdiva.com/portal/?a=jobs", "JobDiva"),
+        ):
+            with self.subTest(url=url):
+                source = {
+                    "url": url,
+                    "normalized_url": url,
+                    "source_urls": [url],
+                    "evidence_urls": [],
+                    "employers": ["Example"],
+                    "employer_keys": ["example"],
+                }
+                with patch.object(scraper, "_request") as request:
+                    result = scraper.scrape_source(source)
+                request.assert_not_called()
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["method"], "policy_hold")
+                self.assertFalse(result["complete"])
+                self.assertIn(reason, result["error"])
+
+    def test_third_party_job_boards_are_policy_held_before_source_or_redirect_requests(self):
+        cases = (
+            ("https://www.indeed.com/career/example", "Indeed"),
+            ("https://jobs.linkedin.com/careers/example", "LinkedIn"),
+            ("https://www.lensa.com/jobs/example", "Lensa"),
+            ("https://www.ziprecruiter.com/jobs/example", "ZipRecruiter"),
+            ("https://jobs.silkroad.com/careers/example", "SilkRoad"),
+        )
+        for url, label in cases:
+            with self.subTest(url=url):
+                source = {
+                    "url": url,
+                    "normalized_url": url,
+                    "source_urls": [url],
+                    "evidence_urls": [],
+                    "employers": ["Example"],
+                    "employer_keys": ["company:policy-hold-test"],
+                }
+                with patch.object(scraper, "_request") as request:
+                    result = scraper.scrape_source(source)
+                request.assert_not_called()
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(result["method"], "policy_hold")
+                self.assertIn(label, result["error"])
+
+        # The centralized boundary also blocks direct callers that reach an
+        # aggregator without going through source preflight.
+        for url, label in (
+            ("https://indeed.com/job/123", "Indeed"),
+            ("https://jobs.linkedin.com/jobs/view/123", "LinkedIn"),
+            ("https://lensa.com/job/123", "Lensa"),
+            ("https://api.ziprecruiter.com/jobs/123", "ZipRecruiter"),
+            ("https://jobs.silkroad.com/careers/example/RSS", "SilkRoad"),
+        ):
+            with self.subTest(request_url=url):
+                with patch.object(scraper, "_robots_parser") as robots, patch.object(scraper, "_thread_session") as session:
+                    with self.assertRaisesRegex(scraper.ScrapeFailure, "policy hold") as raised:
+                        scraper._request(url)
+                self.assertIn(label, str(raised.exception))
+                robots.assert_not_called()
+                session.assert_not_called()
+
+        class RedirectResponse:
+            status_code = 302
+            is_redirect = True
+            is_permanent_redirect = False
+            headers = {"Location": "https://jobs.linkedin.com/jobs/view/123"}
+
+            def close(self):
+                pass
+
+        class RedirectingSession:
+            def __init__(self):
+                self.requested_urls = []
+
+            def get(self, url, **_kwargs):
+                self.requested_urls.append(url)
+                return RedirectResponse()
+
+        session = RedirectingSession()
+        rules = SimpleNamespace(can_fetch=lambda _ua, _url: True, crawl_delay=lambda _ua: None)
+        with (
+            patch.object(scraper, "_public_https_url", side_effect=urllib.parse.urlparse),
+            patch.object(scraper, "_robots_parser", return_value=rules),
+            patch.object(scraper, "_thread_session", return_value=session),
+            patch.object(scraper, "_minimum_host_gap", return_value=0),
+        ):
+            with self.assertRaisesRegex(scraper.ScrapeFailure, "policy hold") as raised:
+                scraper._request("https://employer.example/careers")
+        self.assertIn("LinkedIn", str(raised.exception))
+        self.assertEqual(session.requested_urls, ["https://employer.example/careers"])
 
     def test_iSolved_sources_are_held_without_network_requests(self):
         for url in (

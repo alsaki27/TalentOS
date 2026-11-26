@@ -11,6 +11,8 @@ from workday_public_detail import fallback_source_url, parse_public_detail, publ
 BOARD = "https://mercy.wd1.myworkdayjobs.com/en-US/mercycareers/introduceYourself"
 PATH = "/job/Mercy-Hospital-Ada/New-Grad-RN---Med-Surg---Nights_JR277249"
 EXTERNAL_URL = "https://mercy.wd1.myworkdayjobs.com/mercycareers" + PATH
+SHORT_PATH = "/job/New-Grad-RN---Med-Surg---Nights_JR277249"
+SHORT_EXTERNAL_URL = "https://mercy.wd1.myworkdayjobs.com/mercycareers" + SHORT_PATH
 
 
 def clean(value: object) -> str | None:
@@ -45,6 +47,21 @@ class WorkdayPublicDetailTests(unittest.TestCase):
             fallback_source_url(BOARD, "mercycareers", PATH),
             "https://mercy.wd1.myworkdayjobs.com/en-US/mercycareers" + PATH,
         )
+
+    def test_accepts_public_job_path_without_location_segment(self):
+        self.assertEqual(
+            public_detail_url(BOARD, "mercy", "mercycareers", SHORT_PATH),
+            "https://mercy.wd1.myworkdayjobs.com/wday/cxs/mercy/mercycareers" + SHORT_PATH,
+        )
+        self.assertEqual(
+            fallback_source_url(BOARD, "mercycareers", SHORT_PATH),
+            "https://mercy.wd1.myworkdayjobs.com/en-US/mercycareers" + SHORT_PATH,
+        )
+        result = parse_public_detail(
+            payload(externalUrl=SHORT_EXTERNAL_URL), BOARD, "mercycareers", SHORT_PATH, clean
+        )
+        self.assertTrue(result.complete)
+        self.assertEqual(result.source_url, SHORT_EXTERNAL_URL)
 
     def test_rejects_absolute_application_and_traversal_paths(self):
         for bad in (

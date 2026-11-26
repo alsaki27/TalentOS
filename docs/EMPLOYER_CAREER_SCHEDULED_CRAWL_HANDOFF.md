@@ -20,9 +20,11 @@ repository.
   crawler's measured `content_request_count`; it calls a run complete only
   when the child summary matches the current adapter version and filtered
   tracker hash.
-- TalentOS staging remains off unless the operator supplies `--ingest` and
-  `INGEST_SECRET`. Only the scheduled wrapper applies the private permission
-  manifest; invoking the crawler CLI directly does not enforce that manifest.
+- TalentOS staging remains off unless the operator supplies `--ingest`, a
+  private permission manifest, and `INGEST_SECRET`. The scheduled wrapper
+  filters to exact approved URLs and passes the same manifest to the crawler,
+  which checks every input URL again before any request. A direct dry-run with
+  no manifest is still a raw crawl mode and must not be used for this inventory.
 
 ## What is not ready to enable across all sources
 
@@ -40,7 +42,7 @@ tracker were excluded from the denominator and payload output.
 The folder name `v28-overall-readiness-frozen` is a cohort label: its original
 report selected historical results only through v23. The new offline report
 adds saved Nov 13-14 attempts through v25, but the checked-in crawler is now
-v29; none of these counts proves a full crawl with the current adapter code.
+v31; none of these counts proves a full crawl with the current adapter code.
 The latest saved scheduler validation, dated 2026-11-14, had zero permission
 rows, selected zero sources, started no content fetch, and invoked no
 TalentOS ingest.
@@ -56,18 +58,57 @@ This leaves zero source groups cleared for scheduled content collection in the
 saved operational checkpoint, even though the code can schedule an approved
 subset once the private inputs are supplied.
 
-The current crawler recognizes 480 direct ATS/API routes in the tracker; the
-other 9,439 use generic discovery. For those generic routes, the offline
-consolidation records 923 `scraped`, 232 `no_jobs`, 6,235 `partial`, 1,387
-`error`, 600 `blocked`, 56 `needs_revalidation`, five `held`, and one
-`payload_count_mismatch`. These are historical outcomes through v25, not
-current-code validation or permission. The 9,074-host route audit found 8,834
-hosts represented once, so much of the remaining adapter work is a long tail of
-custom employer pages. Current exact-route cohorts identified in the audit
-include GovernmentJobs / SchoolJobs (69), ADP Workforce Now (23), UKG / UltiPro
+The current crawler recognizes 550 direct ATS/API routes in the tracker; the
+other 9,369 use generic discovery. Under the current route mapping, the v25
+offline report records 922 generic `scraped`, 232 `no_jobs`, 6,172 `partial`,
+1,381 `error`, 600 `blocked`, 56 `needs_revalidation`, five `held`, and one
+`payload_count_mismatch`. A direct route means that code has a source path; it
+does not mean the tenant is configured, permission is approved, or current
+coverage was verified. These are historical outcomes, not current-code
+validation or permission. The 9,074-host route audit found 8,834 hosts represented once,
+so much of the remaining adapter work is a long tail of custom employer pages.
+Current exact-route cohorts identified in the audit include GovernmentJobs /
+SchoolJobs (70), ADP Workforce Now (23), UKG / UltiPro
 (27), Paycom (22), Jobvite (7), Dayforce (9), USAJOBS (7), and Taleo Business
 Edition (7). The route match
 alone does not prove vendor identity or collection rights.
+
+These exact-route counts use the current normalizer and `_platform` mapping. A
+broader hostname-pattern scan found 24 Paycom, 28 UKG / UltiPro, five
+AppliTrack, and five JobDiva groups. Extra Paycom, UKG, AppliTrack, and JobDiva
+host aliases remain generic until they match an exact route rule; these vendor
+host-pattern counts are not additional groups to add to the 9,919 denominator.
+
+The largest incomplete method groups in the v25 offline report are 2,580
+partial `no_job_urls_in_sitemaps`, 1,828 partial
+`no_jobposting_structured_data_on_linked_pages`, and 1,120 partial
+`sitemap_structured_data` sources. In the first group, 2,305 sources also had
+candidate pages without recognized job schema. In the sitemap group, 862 had
+at least one detail without recognized schema and 132 hit a crawl or sitemap
+cap. These are source-group counts; detail-note counts can overlap. The same
+report has 184 partial linked Workday groups (107 recorded unavailable public
+details, 47 pagination/duplicate inconsistencies, and 16 robots issues) and
+104 partial linked iCIMS groups, 87 with robots restrictions. Workday v30 added
+acceptance of the validated public `/job/<slug>` detail path when its location
+segment is absent; the historical reports do not preserve rejected path shapes,
+so recovery must be measured in a permitted current-version retry. The iCIMS
+robots cohort still needs source-specific permission or a supported feed.
+
+A November 26 terms/robots review identified ten source groups hosted directly
+on third-party job boards: four Indeed, four LinkedIn, one Lensa, and one
+ZipRecruiter. These are among the 9,369 generic groups, not extra groups in the
+9,919 denominator. v31 holds them before source requests and at the centralized
+request/redirect boundary. They need a vendor-authorized interface that grants
+TalentOS collection and reuse rights; an employer's career-page permission
+alone does not authorize scraping a third-party board. No current crawl has
+reclassified these sources yet.
+
+A separate review found three employer records using `jobs.silkroad.com`.
+SilkRoad documents a customer RSS feed for its Candidate Experience site, but
+the feed reflects only configured public detail-page fields and does not prove
+complete ATS coverage or third-party reuse rights. v31 holds this host at source
+preflight and the request/redirect boundary until the employer/vendor confirms
+feed coverage, robots access, and recurring TalentOS collection and reuse.
 
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
@@ -82,6 +123,19 @@ membership but cannot verify ownership. It uses the documented 20-item pages
 and marks the source incomplete if the total, public job URL, or full
 description cannot be verified. ADP sources remain held without that exact
 private configuration.
+
+GovernmentJobs and SchoolJobs now have a customer RSS adapter in
+`scripts/neogov_customer_rss.py`. It never scrapes their public pages. Configure
+`TALENTOS_NEOGOV_RSS_CONFIG_JSON` with the exact normalized source URL and
+employer-key set, customer feed URL, exact feed/posting host allowlists, written
+permission and TalentOS reuse references, and a sanitized sample that confirms
+the item schema, full descriptions, and full-feed coverage. The crawler fetches
+only that customer feed through robots checks and same-host redirect allowlists;
+it never opens posting links. Without the complete configuration, the public
+NEOGOV source remains held. NEOGOV's [RSS setup notice](https://success.neogov.com/insight-product-updates-112/insight-summer-2025-release-notes-15859)
+documents customer feeds for external integrations, but does not grant
+TalentOS reuse rights or prove the feed's fields and coverage. Its [terms](https://www.neogov.com/terms-of-use)
+restrict scraping public career pages.
 
 Store ADP settings in `TALENTOS_ADP_WFN_CONFIG_JSON`, keyed by the exact
 normalized Workforce Now recruitment URL. The config must list the exact
@@ -137,16 +191,19 @@ authorization. NEOGOV's [customer RSS notice](https://success.neogov.com/insight
 documents feed URL templates but no item schema, full-description guarantee,
 or completeness semantics. Frontline / AppliTrack has no reviewed public feed
 schema; JobDiva's API listing endpoint and third-party vacancy rights are also
-unverified. Do not activate these cohorts until the vendor and employer supply
-the documented interface and written permission covering TalentOS collection
-and reuse.
+unverified. Both domains are hard-held in the crawler even if a permission row
+is mistakenly marked approved. Do not activate these cohorts until the vendor
+and employer supply the documented interface and written permission covering
+TalentOS collection and reuse.
 
 The generic page discovery path also recognizes linked TalentBrew and SAP
 SuccessFactors boards. This is the current code surface, not a claim that every
-tenant layout has been validated. Built-in holds for NEOGOV GovernmentJobs /
-SchoolJobs, Paycom, UKG, UKG Ready, and iSolved remain in force even if an entry
-is mistakenly marked approved in the ledger. ADP and Jobvite can run only when
-their strict customer API config validates in addition to the permission row.
+tenant layout has been validated. NEOGOV's public pages remain held; only its
+strict customer RSS config can enable the separately authorized feed. Built-in
+holds for Paycom, UKG, UKG Ready, iSolved, Frontline / AppliTrack, and JobDiva
+remain in force even if an entry is mistakenly marked approved in the ledger.
+ADP, Jobvite, Taleo Business Edition, and NEOGOV can run only when their exact
+customer config validates in addition to the permission row.
 NEOGOV's [terms](https://www.neogov.com/terms-of-use)
 prohibit automated page scraping and competitive-product use of public career
 pages; the RSS notice does not grant TalentOS reuse rights.
@@ -159,7 +216,7 @@ checkpoint:
 
 1. **Adapter cohorts:** fix partial/error groups only when a representative
    saved fixture or official API contract supports the change. Start with the
-   480 direct ATS/API routes and the largest technically actionable vendor groups.
+   550 direct ATS/API routes and the largest technically actionable vendor groups.
    Do not mark a route complete from host recognition or a successful HTTP
    response alone.
 2. **Failure cohorts:** separate parser gaps from DNS, rate limits, server

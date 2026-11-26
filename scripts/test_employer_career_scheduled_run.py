@@ -181,6 +181,8 @@ class ScheduledEmployerCareerRunTests(unittest.TestCase):
             child_env = run.call_args.kwargs["env"]
             summary = json.loads((output / "scheduled_run_summary.json").read_text(encoding="utf-8"))
         self.assertIn("--refresh-completed-after-hours", command)
+        self.assertIn("--permission-manifest", command)
+        self.assertEqual(command[command.index("--permission-manifest") + 1], str(policy))
         self.assertNotIn("--ingest", command)
         expected_budget_path = os.environ.get("TALENTOS_JOBVITE_CALL_BUDGET_DB") or str(
             output / "crawl_state" / "jobvite_api_call_budget.sqlite3"

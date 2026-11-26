@@ -46,7 +46,11 @@ def _job_path(external_path: str) -> tuple[str, str]:
         raise ValueError("Workday externalPath must be a relative job path")
     path = parsed.path if parsed.path.startswith("/") else "/" + parsed.path
     segments = tuple(unquote(segment) for segment in path.split("/") if segment)
-    if len(segments) < 3 or segments[0].lower() != "job" or any(segment in (".", "..") or "/" in segment or "\\" in segment for segment in segments):
+    # Workday normally includes a location between ``job`` and the title/id,
+    # but some public boards omit that segment. The detail endpoint and its
+    # returned canonical URL still validate the posting, so accept the narrow
+    # ``/job/<title_id>`` form as well.
+    if len(segments) < 2 or segments[0].lower() != "job" or any(segment in (".", "..") or "/" in segment or "\\" in segment for segment in segments):
         raise ValueError("Workday externalPath is not a job detail path")
     if any(segment.lower() in ("apply", "application", "applications", "apps") for segment in segments):
         raise ValueError("Workday externalPath points toward an application")

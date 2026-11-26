@@ -12,6 +12,8 @@ import employer_career_ingest as scraper
 BOARD = "https://mercy.wd1.myworkdayjobs.com/en-US/mercycareers"
 PATH = "/job/Mercy-Hospital-Ada/New-Grad-RN_JR277249"
 CANONICAL = "https://mercy.wd1.myworkdayjobs.com/mercycareers" + PATH
+SHORT_PATH = "/job/New-Grad-RN_JR277249"
+SHORT_CANONICAL = "https://mercy.wd1.myworkdayjobs.com/mercycareers" + SHORT_PATH
 
 
 def source(url: str) -> dict[str, object]:
@@ -72,6 +74,31 @@ class WorkdayDetailIntegrationTests(unittest.TestCase):
         self.assertIn("Care for patients", job["description_text"])
         self.assertTrue(job["raw"]["workday_detail_complete"])
         self.assertEqual(fetch.call_args.args[0], "https://mercy.wd1.myworkdayjobs.com/wday/cxs/mercy/mercycareers" + PATH)
+
+    def test_direct_workday_accepts_detail_path_without_location_segment(self):
+        row = {"title": "New Grad RN", "externalPath": SHORT_PATH, "bulletFields": ["JR277249"]}
+        response = SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "jobPostingInfo": {
+                    "title": "New Grad RN",
+                    "jobDescription": "<p>Care for patients on the medical surgical unit.</p>",
+                    "externalUrl": SHORT_CANONICAL,
+                    "jobReqId": "JR277249",
+                },
+            },
+        )
+        with patch.object(scraper, "_request_post", return_value=listing([row])), patch.object(
+            scraper, "_request", return_value=response
+        ) as fetch:
+            result = scraper.scrape_source(source(BOARD))
+        self.assertEqual(result["status"], "scraped")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["jobs"][0]["source_url"], SHORT_CANONICAL)
+        self.assertEqual(
+            fetch.call_args.args[0],
+            "https://mercy.wd1.myworkdayjobs.com/wday/cxs/mercy/mercycareers" + SHORT_PATH,
+        )
 
     def test_missing_detail_keeps_listing_job_but_source_is_partial(self):
         with patch.object(scraper, "_request_post", return_value=listing()), patch.object(scraper, "_request", return_value=detail(403)):

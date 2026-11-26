@@ -22,6 +22,7 @@ import sys
 import errno
 from typing import Any, Iterator
 
+from employer_career_permissions import APPROVED_SCOPE, PolicyManifestError, REQUIRED_POLICY_COLUMNS, _parse_datetime, load_collection_policy
 import employer_career_ingest as crawler
 
 try:
@@ -31,21 +32,7 @@ except ImportError:  # Windows uses msvcrt below.
 
 
 DEFAULT_OUTPUT_DIR = Path("outputs/employer-career-scheduled")
-REQUIRED_POLICY_COLUMNS = {
-    "normalized_url",
-    "permission_status",
-    "collection_scope",
-    "permission_evidence_ref",
-    "reviewed_at_utc",
-    "reviewed_by",
-    "expires_at_utc",
-}
-APPROVED_SCOPE = "job_listings_and_details"
 VERIFIED_ROUTE_STATUSES = {"verified_official", "verified_official_ats_link"}
-
-
-class PolicyManifestError(ValueError):
-    pass
 
 
 class RunLockBusy(OSError):
@@ -59,80 +46,6 @@ def _is_lock_contention(exc: OSError) -> bool:
             or (getattr(exc, "winerror", None) is None and exc.errno in {errno.EACCES, errno.EDEADLOCK})
         )
     return isinstance(exc, BlockingIOError) or exc.errno in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
-
-
-def _parse_datetime(value: str, field: str, row_number: int) -> datetime:
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except (AttributeError, ValueError) as exc:
-        raise PolicyManifestError(f"policy row {row_number}: invalid {field}") from exc
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def load_collection_policy(
-    path: Path,
-    *,
-    now: datetime | None = None,
-) -> tuple[set[str], dict[str, Any]]:
-    """Load exact URL approvals; incomplete/expired rows remain held."""
-    if not path.is_file():
-        raise PolicyManifestError(f"permission manifest does not exist: {path}")
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=timezone.utc)
-    current = current.astimezone(timezone.utc)
-
-    approved: set[str] = set()
-    seen: set[str] = set()
-    status_counts: dict[str, int] = {}
-    with path.open(newline="", encoding="utf-8-sig") as stream:
-        reader = csv.DictReader(stream)
-        fieldnames = set(reader.fieldnames or [])
-        missing = REQUIRED_POLICY_COLUMNS - fieldnames
-        if missing:
-            raise PolicyManifestError("permission manifest is missing columns: " + ", ".join(sorted(missing)))
-        for row_number, row in enumerate(reader, start=2):
-            raw_url = (row.get("normalized_url") or "").strip()
-            if not raw_url:
-                raise PolicyManifestError(f"policy row {row_number}: normalized_url is required")
-            normalized = crawler.normalize_source_url(raw_url)
-            if normalized in seen:
-                # Do not echo source URLs into console output or scheduled logs.
-                raise PolicyManifestError(f"policy row {row_number}: duplicate normalized_url")
-            seen.add(normalized)
-
-            status = (row.get("permission_status") or "").strip().casefold()
-            if status not in {"approved", "pending", "hold", "revoked"}:
-                raise PolicyManifestError(f"policy row {row_number}: permission_status must be approved, pending, hold, or revoked")
-            if status != "approved":
-                status_counts[status] = status_counts.get(status, 0) + 1
-                continue
-
-            if (row.get("collection_scope") or "").strip() != APPROVED_SCOPE:
-                raise PolicyManifestError(f"policy row {row_number}: approved rows require collection_scope={APPROVED_SCOPE}")
-            if not (row.get("permission_evidence_ref") or "").strip():
-                raise PolicyManifestError(f"policy row {row_number}: approved rows require permission_evidence_ref")
-            if not (row.get("reviewed_by") or "").strip():
-                raise PolicyManifestError(f"policy row {row_number}: approved rows require reviewed_by")
-            reviewed_at = _parse_datetime(row.get("reviewed_at_utc") or "", "reviewed_at_utc", row_number)
-            if reviewed_at > current:
-                raise PolicyManifestError(f"policy row {row_number}: reviewed_at_utc cannot be in the future")
-            expiry_text = (row.get("expires_at_utc") or "").strip()
-            if expiry_text and _parse_datetime(expiry_text, "expires_at_utc", row_number) <= current:
-                status_counts["expired"] = status_counts.get("expired", 0) + 1
-                continue
-            status_counts["approved"] = status_counts.get("approved", 0) + 1
-            approved.add(normalized)
-
-    return approved, {
-        "manifest_rows": sum(status_counts.values()),
-        "status_counts": status_counts,
-        "approved_url_count": len(approved),
-        "expired_rows": status_counts.get("expired", 0),
-        "manifest_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-    }
 
 
 def filter_tracker_by_permission(tracker_path: Path, approved_urls: set[str], output_path: Path) -> dict[str, int]:
@@ -321,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.executable,
             str(crawler_script),
             "--input", str(filtered_tracker),
+            "--permission-manifest", str(args.permission_manifest),
             "--output-dir", str(output_dir / "crawl_state"),
             "--workers", str(args.workers),
             "--refresh-completed-after-hours", str(args.refresh_completed_after_hours),

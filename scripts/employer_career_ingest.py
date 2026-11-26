@@ -42,8 +42,15 @@ from typing import Any, Callable, Iterable
 
 import requests
 from adp_wfn_adapter import fetch_jobs as fetch_adp_wfn_jobs, is_wfn_source_url, load_source_config as load_adp_wfn_source_config
+from employer_career_permissions import PolicyManifestError, load_collection_policy, normalize_source_url
 from jobvite_customer_feed import fetch_jobs as fetch_jobvite_customer_jobs, is_jobvite_host, load_source_config as load_jobvite_source_config
 from jazzhr_public_board import board_url_for, parse_board_listing
+from neogov_customer_rss import (
+    NeogovCustomerRSSConfig,
+    NeogovRSSConfigError,
+    load_neogov_customer_rss_source_config,
+    parse_neogov_customer_rss,
+)
 from open_position_links import detail_matches_open_position, discover_open_position_links
 from smartrecruiters_public_detail import merge_public_job_detail, public_job_path, public_job_url_from_card
 from successfactors_public_board import discover_all_jobs_link, enumerate_go_pages, is_public_all_jobs_url, validate_detail_html as validate_successfactors_detail
@@ -63,7 +70,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v29"
+ADAPTER_VERSION = "employer-career-ingest-v31"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -312,6 +319,11 @@ def _request(
             raise ScrapeFailure("application form target refused")
         current_parts = urllib.parse.urlparse(current)
         current_host = (current_parts.hostname or "").lower().rstrip(".")
+        restricted_source = _restricted_external_job_source(current_host)
+        if restricted_source:
+            raise ScrapeFailure(
+                f"{restricted_source} source policy hold: access denied without a vendor-authorized feed or API"
+            )
         if allowed_hostnames is not None and current_host not in allowed_hostnames:
             raise ScrapeFailure("request host is outside the approved host allowlist")
         if allowed_hostnames is not None and current_parts.port not in (None, 443):
@@ -598,13 +610,6 @@ def extract_postings(html: str, fallback_url: str, employer: str) -> list[dict[s
     return found
 
 
-def normalize_source_url(url: str) -> str:
-    """Dedup routing only: lower host, drop fragment/trailing slash, keep query."""
-    p = urllib.parse.urlparse(url.strip())
-    path = p.path.rstrip("/") or "/"
-    return urllib.parse.urlunparse((p.scheme.lower(), p.netloc.lower(), path, p.params, p.query, ""))
-
-
 def namespace_job_id(job: dict[str, Any]) -> dict[str, Any]:
     """Prevent vendor-local requisition IDs colliding across employer boards."""
     external_id = str(job.get("external_job_id") or "").strip()
@@ -638,10 +643,35 @@ def _is_taleo_business_edition_host(host: str) -> bool:
     return normalized == "tbe.taleo.net" or normalized.endswith(".tbe.taleo.net")
 
 
+def _is_neogov_source_host(host: str) -> bool:
+    normalized = host.lower().rstrip(".")
+    return any(
+        normalized == domain or normalized.endswith("." + domain)
+        for domain in ("governmentjobs.com", "schooljobs.com")
+    )
+
+
+def _restricted_external_job_source(host: str) -> str | None:
+    """Return an external job source whose content must not use generic crawling."""
+    normalized = host.lower().rstrip(".")
+    for domain, label in (
+        ("indeed.com", "Indeed"),
+        ("linkedin.com", "LinkedIn"),
+        ("lensa.com", "Lensa"),
+        ("ziprecruiter.com", "ZipRecruiter"),
+        ("jobs.silkroad.com", "SilkRoad"),
+    ):
+        if normalized == domain or normalized.endswith("." + domain):
+            return label
+    return None
+
+
 def _platform(url: str) -> tuple[str, str] | None:
     p = urllib.parse.urlparse(url)
     host = (p.hostname or "").lower()
     parts = [urllib.parse.unquote(x) for x in p.path.split("/") if x]
+    if _is_neogov_source_host(host):
+        return "neogov_rss", normalize_source_url(url)
     if _is_taleo_business_edition_host(host):
         return "taleo_tbe", normalize_source_url(url)
     if is_wfn_source_url(url):
@@ -3366,6 +3396,46 @@ def _jobvite_api_config(url: str, employer_keys: list[str] | None = None) -> dic
     return load_jobvite_source_config(normalize_source_url(url), employer_keys or [])
 
 
+def _neogov_customer_rss_config(
+    url: str,
+    employer_keys: list[str] | None = None,
+) -> NeogovCustomerRSSConfig | None:
+    """Load one exact, permission-gated GovernmentJobs/SchoolJobs feed mapping."""
+    host = (urllib.parse.urlparse(url).hostname or "").lower().rstrip(".")
+    if not _is_neogov_source_host(host):
+        return None
+    try:
+        return load_neogov_customer_rss_source_config(
+            normalize_source_url(url),
+            employer_keys or [],
+        )
+    except (NeogovRSSConfigError, ValueError, TypeError):
+        return None
+
+
+def _neogov_customer_rss_jobs(
+    url: str,
+    employer_keys: list[str],
+) -> tuple[list[dict[str, Any]], bool, list[str]]:
+    """Fetch only the configured customer feed, never the public NEOGOV pages."""
+    config = _neogov_customer_rss_config(url, employer_keys)
+    if config is None:
+        raise ScrapeFailure("NEOGOV requires an exact customer feed mapping, written permission, and a TalentOS reuse grant")
+    try:
+        response = _request(
+            config.feed_url,
+            check_robots=True,
+            headers={"Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml"},
+            allowed_hosts=set(config.allowed_feed_hosts),
+        )
+    except RobotsFetchFailure:
+        raise RobotsFetchFailure("NEOGOV customer feed robots policy could not be checked") from None
+    if response.status_code != 200:
+        raise ScrapeFailure(f"NEOGOV customer RSS returned HTTP {response.status_code}")
+    parsed = parse_neogov_customer_rss(response.content, config)
+    return parsed.jobs, parsed.complete, parsed.notes
+
+
 def _taleo_business_edition_config(
     url: str,
     employer_keys: list[str] | None = None,
@@ -3423,10 +3493,21 @@ def _taleo_business_edition_jobs(
 def _source_policy_hold(host: str, url: str = "", employer_keys: list[str] | None = None) -> tuple[str, str] | None:
     """Return a policy reason for sources that must not be crawled anonymously."""
     host = host.lower().rstrip(".")
+    restricted_source = _restricted_external_job_source(host)
+    if restricted_source == "SilkRoad":
+        return (
+            "SilkRoad documents a customer RSS feed, but robots access, full public-job coverage, and TalentOS reuse rights are unverified",
+            "SilkRoad source held pending employer/vendor confirmation of full feed coverage and recurring TalentOS collection and reuse rights",
+        )
+    if restricted_source:
+        return (
+            f"{restricted_source} third-party job-board terms prohibit TalentOS scraping or reuse without a vendor-authorized interface",
+            f"{restricted_source} source held pending a vendor-authorized feed/API and explicit TalentOS collection and reuse rights",
+        )
     if _is_taleo_business_edition_host(host) and _taleo_business_edition_config(url, employer_keys) is None:
         return "Taleo Business Edition requires an exact source mapping and explicit customer authorization", "Taleo Business Edition source held until its exact customer feed and authorization are configured"
-    if host == "governmentjobs.com" or host.endswith(".governmentjobs.com") or host == "schooljobs.com" or host.endswith(".schooljobs.com"):
-        return "NEOGOV terms prohibit automated scraping and competitive-product use of public career pages", "NEOGOV GovernmentJobs/SchoolJobs source held pending an authorized feed agreement"
+    if _is_neogov_source_host(host) and _neogov_customer_rss_config(url, employer_keys) is None:
+        return "NEOGOV public career pages are held; only an explicitly authorized customer feed may run", "NEOGOV GovernmentJobs/SchoolJobs source held pending exact customer feed, written permission, and TalentOS reuse configuration"
     if _is_usajobs_host(host) and _usajobs_api_config(url) is None:
         return "USAJOBS requires a registered API key and exact organization-code mapping", "USAJOBS source held until the official API integration is configured"
     if _is_dayforce_host(host) and _dayforce_api_config(url) is None:
@@ -3436,6 +3517,10 @@ def _source_policy_hold(host: str, url: str = "", employer_keys: list[str] | Non
             return "Jobvite public-site terms prohibit commercial scraping; paid feed access and TalentOS reuse authorization are required", "Jobvite source held until an exact customer feed contract and TalentOS reuse grant are configured"
     if host == "paycom.com" or host.endswith(".paycom.com") or host == "paycomonline.net" or host.endswith(".paycomonline.net"):
         return "Paycom terms prohibit automated extraction without written authorization", "Paycom source held pending written authorization"
+    if host == "applitrack.com" or host.endswith(".applitrack.com"):
+        return "Frontline AppliTrack has no reviewed public job-feed schema or verified TalentOS reuse authorization", "AppliTrack source held until a documented interface and written reuse permission are provided"
+    if host == "jobdiva.com" or host.endswith(".jobdiva.com"):
+        return "JobDiva job-listing interface and third-party vacancy reuse rights are unverified", "JobDiva source held until a documented interface and written reuse permission are provided"
     if host == "ultipro.com" or host.endswith(".ultipro.com") or host == "ukg.net" or host.endswith(".ukg.net"):
         return "UKG source held because no documented anonymous public job-feed contract is available", "UKG source held pending an authorized or documented public interface"
     if host == "saashr.com" or host.endswith(".saashr.com"):
@@ -3475,7 +3560,10 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
     try:
         p = _platform(url)
         if p:
-            if p[0] == "jobvite":
+            if p[0] == "neogov_rss":
+                jobs, complete, notes = _neogov_customer_rss_jobs(url, employer_keys)
+                method = "authorized_customer_rss:neogov-v1"
+            elif p[0] == "jobvite":
                 config = _jobvite_api_config(url, employer_keys)
                 if config is None:
                     raise ScrapeFailure("Jobvite requires an exact source, paid feed contract, TalentOS reuse grant, and persistent call budget")
@@ -3580,6 +3668,12 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
                 "Taleo Business Edition RSS robots policy could not be checked"
                 if isinstance(exc, RobotsFetchFailure)
                 else ("Taleo Business Edition RSS request was blocked by robots policy" if "robots" in raw_msg.lower() or "disallows" in raw_msg.lower() else "Taleo Business Edition RSS request failed")
+            )
+        elif _is_neogov_source_host(host):
+            msg = (
+                "NEOGOV customer feed robots policy could not be checked"
+                if isinstance(exc, RobotsFetchFailure)
+                else ("NEOGOV customer feed request was blocked by robots or access policy" if "robots" in raw_msg.lower() or "disallows" in raw_msg.lower() or "http 401" in raw_msg.lower() or "http 403" in raw_msg.lower() else "NEOGOV customer RSS request failed")
             )
         return {"url": url, "normalized_url": source["normalized_url"], "source_urls": source["source_urls"], "evidence_urls": source["evidence_urls"], "employers": source["employers"], "employer_keys": source["employer_keys"], "adapter_version": ADAPTER_VERSION, "status": status, "method": "failed", "complete": False, "notes": [], "jobs": [], "job_count": 0, "error": msg[:500]}
 
@@ -3708,6 +3802,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/employer-career-ingest"))
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=0, help="debug cap on unique career URLs")
+    parser.add_argument("--permission-manifest", type=Path, help="private per-URL permission ledger; validates every requested source")
     parser.add_argument("--ingest", action="store_true", help="POST scraped jobs to Job CEO after scraping")
     parser.add_argument("--include-completed", action="store_true", help="re-scrape completed URLs")
     parser.add_argument("--refresh-completed-after-hours", type=float, default=0, help="re-scrape complete sources whose latest current-version result is older than this many hours; 0 preserves legacy skip behavior")
@@ -3720,6 +3815,20 @@ def main() -> int:
         parser.error("--refresh-completed-after-hours must be a finite non-negative number")
     if args.ingest and args.limit:
         parser.error("--ingest cannot be combined with --limit; complete the full scrape first")
+    if args.ingest and not args.permission_manifest:
+        parser.error("--ingest requires --permission-manifest with an active approval for every source")
+    if args.ingest and not os.environ.get("INGEST_SECRET"):
+        parser.error("--ingest requires INGEST_SECRET in the environment")
+    permission_summary: dict[str, Any] | None = None
+    if args.permission_manifest:
+        try:
+            approved_urls, permission_summary = load_collection_policy(args.permission_manifest)
+        except (OSError, PolicyManifestError) as exc:
+            parser.error(f"permission manifest rejected: {exc}")
+        requested_urls = {source["normalized_url"] for source in load_sources(args.input)}
+        unapproved = requested_urls - approved_urls
+        if unapproved:
+            parser.error(f"{len(unapproved)} input source groups lack an active permission approval")
     _shared_host_rate_dir = args.shared_host_rate_dir.resolve() if args.shared_host_rate_dir else None
     with _content_request_counter_lock:
         _content_request_count = 0
@@ -3748,6 +3857,8 @@ def main() -> int:
         "workers": args.workers,
         "limit": args.limit,
         "ingest_requested": args.ingest,
+        "permission_manifest_sha256": permission_summary.get("manifest_sha256") if permission_summary else None,
+        "permission_approved_url_count": permission_summary.get("approved_url_count") if permission_summary else None,
         "include_completed": args.include_completed,
         "refresh_completed_after_hours": args.refresh_completed_after_hours,
         "skip_attempted": bool(args.skip_attempted and not args.include_completed),
