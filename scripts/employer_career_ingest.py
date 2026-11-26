@@ -70,7 +70,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v33"
+ADAPTER_VERSION = "employer-career-ingest-v34"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -682,13 +682,13 @@ def _platform(url: str) -> tuple[str, str] | None:
         return "usajobs", host
     if host == "dayforcehcm.com" or host.endswith(".dayforcehcm.com"):
         return "dayforce", host
-    if host.endswith("greenhouse.io") and parts:
+    if (host == "greenhouse.io" or host.endswith(".greenhouse.io")) and parts:
         return "greenhouse", parts[0]
-    if host.endswith("lever.co") and parts:
+    if (host == "lever.co" or host.endswith(".lever.co")) and parts:
         return "lever", parts[0]
-    if host.endswith("ashbyhq.com") and parts:
+    if (host == "ashbyhq.com" or host.endswith(".ashbyhq.com")) and parts:
         return "ashby", parts[0]
-    if host.endswith("smartrecruiters.com") and parts:
+    if (host == "smartrecruiters.com" or host.endswith(".smartrecruiters.com")) and parts:
         # The jobs domain may have /Company/job/ID, so ignore its detail path.
         # Public career sites can have a distinct second-segment sub-site slug;
         # preserve that in the board namespace to avoid ID collisions.

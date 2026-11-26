@@ -41,8 +41,8 @@ tracker were excluded from the denominator and payload output.
 
 The folder name `v28-overall-readiness-frozen` is a cohort label: its original
 report selected historical results only through v23. The new offline report
-adds saved Nov 13-14 attempts through v25, but the checked-in crawler is now
-v33; none of these counts proves a full crawl with the current adapter code.
+adds saved Nov 13-14 attempts through v25. The checked-in crawler is now v34;
+none of these counts proves a full crawl with the current adapter code.
 The latest saved scheduler validation, dated 2026-11-14, had zero permission
 rows, selected zero sources, started no content fetch, and invoked no
 TalentOS ingest.
@@ -55,14 +55,25 @@ is absent from this checkout; its template is blank. Private review queues
 have now been generated from the exact tracker/disposition join. They contain
 all 9,919 groups with `pending` status and blank evidence fields; one also has
 employer/route/history context. Neither queue grants permission. The current
-v33 scheduler was run against the enriched queue and selected zero groups,
+v34 scheduler was run against the enriched queue and selected zero groups,
 started zero content fetches, and invoked no ingest. The queues and preflight
 output are in the gitignored private reconciliation folder named in the
 Operational review files section. The scheduled runner must remain at zero
 sources until reviewers record approved, unexpired exact-source evidence.
 
 The current crawler recognizes 565 direct ATS/API routes in the tracker; the
-other 9,354 use generic discovery. This includes 14 verified iCIMS host/path
+other 9,354 use generic discovery. The v25 historical outcomes contain 335
+complete and 230 incomplete direct-route groups; the private
+`adapter_family_historical_matrix.csv` breaks these down by route family, and
+`direct_route_remediation_matrix.csv` breaks down incomplete work: 122 groups
+need exact configuration or authorization, 22 need access/freshness resolution,
+and 86 need a sanitized source fixture before a parser/payload change is
+justified. No direct-route group has a verified v34 attempt; even the historical
+complete outcomes still need a current approved run. These are not current v34
+validations. The v34 classifier also requires exact
+vendor domains or dot-boundary subdomains for Greenhouse, Lever, Ashby, and
+SmartRecruiters, preventing lookalike-domain false matches; none of the 9,919
+current rows changed route family. This includes 14 verified iCIMS host/path
 aliases and one exact ApplicantPro path-derived tenant route now handled by
 existing adapters. Under the current route mapping, the v25 offline report
 records 910 generic `scraped`, 232 `no_jobs`,
@@ -79,17 +90,20 @@ JobDiva are generic policy-held or unresolved groups, not direct adapter
 routes. A route match alone does not prove vendor identity or collection
 rights.
 
-The November 26 offline suffix audit used the current 9,919-row source
-disposition file and `_platform` mapping. Within the 9,354 generic groups, it
-found 26 `oraclecloud.com` sources (25 historical partials for missing
-JobPosting markup, one robots block), five JobDiva sources (all partial for
-missing JobPosting markup), 27 UKG sources and 23 Paycom sources (all policy
-holds), five AppliTrack sources (three errors, two partials), and two
-SilkRoad sources (one error, one partial). These are subset counts, not new
-groups to add to the denominator.
+The November 26 offline vendor audit used the current 9,919-row source
+disposition file. Within the 9,354 generic groups, it found 26 Oracle Cloud
+sources (25 historical partials for missing JobPosting markup, one robots
+block), one separate Oracle-branded source (partial), five JobDiva sources
+(all partial for missing JobPosting markup), 27 UKG / UltiPro sources, five
+UKG Ready sources, one `ukg.net` source, 24 Paycom-family sources, five
+AppliTrack sources (three errors, two partials), and two SilkRoad sources (one
+error, one partial). The UKG and Paycom groups are policy-held. These are
+subset counts, not new groups to add to the denominator.
 
-The Oracle and JobDiva parser cohorts have no saved fetched-HTML fixtures, so
-there is no evidence-backed parser change to make from the current artifacts.
+A local recursive scan found 23 HTML files in saved output folders, but none
+was provenance-linked to the Oracle or JobDiva groups, and none contained
+those vendors' source markers. Treat them as unsuitable parser fixtures. There
+is no evidence-backed parser change to make from the current artifacts.
 Oracle's published Candidate Experience requisition REST endpoints are marked
 internal-use, while its posted-job details endpoint is limited to approved
 Oracle Cloud Marketplace partners; do not treat them as an anonymous public
@@ -145,7 +159,7 @@ status remains a policy/access disposition, not a retry instruction by itself.
 A November 26 terms/robots review identified ten source groups hosted directly
 on third-party job boards: four Indeed, four LinkedIn, one Lensa, and one
 ZipRecruiter. These are among the 9,354 generic groups, not extra groups in the
-9,919 denominator. v33 holds them before source requests and at the centralized
+9,919 denominator. v34 holds them before source requests and at the centralized
 request/redirect boundary. They need a vendor-authorized interface that grants
 TalentOS collection and reuse rights; an employer's career-page permission
 alone does not authorize scraping a third-party board. No current crawl has
@@ -154,7 +168,7 @@ reclassified these sources yet.
 A separate review found three employer records using `jobs.silkroad.com`.
 SilkRoad documents a customer RSS feed for its Candidate Experience site, but
 the feed reflects only configured public detail-page fields and does not prove
-complete ATS coverage or third-party reuse rights. v33 holds this host at source
+complete ATS coverage or third-party reuse rights. v34 holds this host at source
 preflight and the request/redirect boundary until the employer/vendor confirms
 feed coverage, robots access, and recurring TalentOS collection and reuse.
 
@@ -416,9 +430,9 @@ reports Job CEO's `logged_count` separately from staged count. The run uses
 `sql/neon_fixes/127_job_ceo_deferred_staging_status.sql` first. The uploader's
 14 offline tests passed; API-route tests and TypeScript checks still need to
 run in a development environment with Node dependencies. The private
-permission manifest is absent here, and the available v33 readiness snapshot
-is historical through Nov 14, so this code is not ready to activate against
-TalentOS. Keep `BASE_URL`, `INGEST_SECRET`, and `CRON_SECRET` in the private
+permission manifest is absent here, and the v34 preflight still selects zero
+sources; crawl outcomes remain historical through Nov 14, so this code is not
+ready to activate against TalentOS. Keep `BASE_URL`, `INGEST_SECRET`, and `CRON_SECRET` in the private
 secret store and out of logs.
 
 ## Adapter gap work
@@ -430,6 +444,17 @@ adapter stays within the approved host, and keep the source partial when it
 cannot account for all visible listings. Do not probe undocumented vendor
 endpoints. The aggregate route inventory and terms review are local ignored
 outputs from the current audit, not part of this public handoff.
+To regenerate the privacy-safe route-family counts from a newer disposition
+export, run:
+
+```powershell
+python scripts/report_employer_career_family_matrix.py `
+  --dispositions <private-source-dispositions.csv> `
+  --output <private-adapter-family-matrix.csv>
+```
+
+The output contains adapter family, outcome totals, and status counts; it omits
+employer names and source URLs.
 
 ## Operational review files
 
@@ -437,10 +462,12 @@ The current local offline readiness reconciliation is saved at
 `outputs/employer-career-ingest-run-2026-11-26-offline-v33-route-and-reason-reconciliation/`.
 It contains the full 9,919-row source disposition export, an enriched permission
 review queue and a seven-column pending manifest (all rows pending, zero
-approved), the scheduler preflight selecting zero sources, and the
-integration-ready payload snapshot. The crawl data uses saved attempts through
-Nov 14. The entire folder remains gitignored; never publish the queues or job
-payloads.
+approved), an integration-ready payload snapshot, the direct adapter-family
+and remediation matrices, and a generic vendor gap audit. A current-code v34 scheduler preflight
+is in `pending-manifest-scheduler-preflight-v34/`; it selected zero groups,
+invoked no crawler, made zero content requests, and invoked no ingest. Crawl
+outcomes remain based on attempts through Nov 14. The entire folder remains
+gitignored; never publish the queues or job payloads.
 The Nov 14 audit report remains at
 `outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`;
 it contains the source-to-key map, robots outcomes, vendor route inventory,

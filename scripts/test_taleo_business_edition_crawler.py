@@ -143,7 +143,7 @@ class TaleoBusinessEditionCrawlerTests(unittest.TestCase):
             ("taleo", "ex"),
         )
         self.assertIsNone(crawler._platform("https://fake-tbe.taleo.net/pod/ats/careers/v2/searchResults"))
-        self.assertEqual(crawler.ADAPTER_VERSION, "employer-career-ingest-v33")
+        self.assertEqual(crawler.ADAPTER_VERSION, "employer-career-ingest-v34")
 
     def test_missing_config_is_held_before_any_request(self):
         with patch.dict(os.environ, {"TALENTOS_TALEO_TBE_CONFIG_JSON": ""}), \

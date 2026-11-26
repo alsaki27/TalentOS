@@ -122,6 +122,14 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(_platform("https://jobs.lever.co/acme"), ("lever", "acme"))
         self.assertEqual(_platform("https://jobs.ashbyhq.com/acme"), ("ashby", "acme"))
         self.assertEqual(_platform("https://careers.smartrecruiters.com/acme"), ("smartrecruiters", "acme"))
+        for lookalike in (
+            "https://notgreenhouse.io/acme",
+            "https://notlever.co/acme",
+            "https://notashbyhq.com/acme",
+            "https://notsmartrecruiters.com/acme",
+        ):
+            with self.subTest(lookalike=lookalike):
+                self.assertIsNone(_platform(lookalike))
         self.assertEqual(_platform("https://careers.smartrecruiters.com/Keenfinity/audio_career"), ("smartrecruiters", "Keenfinity|audio_career"))
         self.assertEqual(_platform("https://www.dayforcehcm.com/CandidatePortal/en-US/example"), ("dayforce", "www.dayforcehcm.com"))
         self.assertIsNone(_platform("https://dayforcehcm.com.attacker.example/careers"))
