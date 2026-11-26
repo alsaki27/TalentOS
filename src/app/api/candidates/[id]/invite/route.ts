@@ -3,6 +3,7 @@
 // either way, so staff always have a copy-able fallback if delivery isn't
 // configured (RESEND_API_KEY unset) or fails.
 
+import { candidateHasPortalAccount } from "@/lib/candidateHasPortalAccount";
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { queryOne, execute } from "@/server/db/neon";
@@ -16,14 +17,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const candidate = await queryOne<{
     id: string; name: string; email: string | null; portal_token: string;
+    last_login_at: string | null; account_email: string | null; google_sub: string | null; password_hash: string | null;
     portal_token_revoked_at: string | null; account_created_at: string | null;
   }>(
-    "SELECT id, name, email, portal_token, portal_token_revoked_at, account_created_at FROM candidates WHERE id = $1",
+    "SELECT id, name, email, portal_token, portal_token_revoked_at, account_created_at, last_login_at, account_email, google_sub, password_hash FROM candidates WHERE id = $1",
     [params.id]
   );
   if (!candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
 
-  if (candidate.account_created_at) {
+  if (candidateHasPortalAccount(candidate)) {
     return NextResponse.json({ error: "This candidate already has an active portal account." }, { status: 409 });
   }
 

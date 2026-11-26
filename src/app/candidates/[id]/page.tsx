@@ -111,6 +111,7 @@ interface CandidateDetail {
   eeo_veteran?: string | null;
   eeo_disability?: string | null;
   portal_token: string;
+  has_portal_account: boolean;
   account_created_at: string | null;
   account_email: string | null;
   last_login_at: string | null;
@@ -1074,7 +1075,7 @@ export default function CandidateProfilePage() {
         </div>
         <div className="candidate-profile-actions">
           <div className="candidate-profile-controls">
-            {!candidate.account_created_at && (
+            {candidate.has_portal_account === false && (
               <>
                 <button onClick={sendPortalInvite} disabled={inviteSending}>
                   {inviteSending ? "Inviting..." : "Invite to portal"}

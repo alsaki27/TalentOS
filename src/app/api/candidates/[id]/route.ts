@@ -3,6 +3,7 @@
 // PATCH  -> update candidate fields (incl. resume_url after upload)
 // DELETE -> remove a candidate (cascades to their applications + resume variants)
 
+import { candidateHasPortalAccount } from "@/lib/candidateHasPortalAccount";
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, isCandidateContractRoleKey, MASTER_DATA_MANAGER_ROLES, requireCurrentUser, getTeamRoleKey } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
@@ -15,6 +16,8 @@ import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
+
+export const dynamic = "force-dynamic";
 
 const profileFields = [
   "name", "email", "phone", "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
@@ -39,6 +42,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // with the candidates-list compatibility behavior until it is applied.
     if (typeof candidate.has_contract !== "boolean") candidate.has_contract = true;
     // Never send the candidate's password hash to the browser, even to staff.
+    candidate.has_portal_account = candidateHasPortalAccount(candidate);
     delete candidate.password_hash;
 
     const rawApplications = await query<Record<string, any>>(`
@@ -59,7 +63,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     const resumes = await query<Record<string, any>>('SELECT * FROM resumes WHERE candidate_id = $1 ORDER BY created_at DESC', [params.id]);
 
-    return NextResponse.json({ ...candidate, applications, resumes });
+    return NextResponse.json({ ...candidate, applications, resumes }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
