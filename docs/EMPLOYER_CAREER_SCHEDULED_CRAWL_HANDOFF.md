@@ -83,6 +83,13 @@ does not mean the tenant is configured, permission is approved, or current
 coverage was verified. These are historical outcomes, not current-code
 validation or permission. The 9,074-host route audit found 8,834 hosts represented once,
 so much of the remaining adapter work is a long tail of custom employer pages.
+Within the generic cohort, the same historical report has 1,142 complete and
+8,212 incomplete groups. Its privacy-safe primary incomplete-reason counts are
+5,281 parser/extraction, 1,136 DNS, 622 HTTP/access, 491 robots
+transport/unavailable, 270 other, 232 robots denial, 80 vendor/authorization
+hold, 56 revalidation, 43 transport/timeout, and one payload mismatch. These
+counts partition the 8,212 generic incomplete groups; they are historical and
+do not add to the full 9,919 denominator.
 Current exact-route cohorts identified in the audit include GovernmentJobs /
 SchoolJobs (70), ADP Workforce Now (23), Jobvite (7), Dayforce (9), USAJOBS
 (7), and Taleo Business Edition (7). UKG / UltiPro, Paycom, AppliTrack, and
@@ -110,14 +117,26 @@ Oracle Cloud Marketplace partners; do not treat them as an anonymous public
 feed. See [Oracle Candidate Experience requisitions](https://docs.oracle.com/en/cloud/saas/human-resources/farws/api-recruiting-ce-job-requisitions.html)
 and [Oracle posted jobs](https://docs.oracle.com/en/cloud/saas/human-resources/farws/api-job-site-posted-jobs.html).
 JobDiva's [official FAQ](https://www.jobdiva.com/faq) describes its candidate
-career/jobs portal, but the reviewed official pages do not provide a publicthird-party job-feed contract. Keep both groups partial until a sanitized
+career/jobs portal, but the reviewed official pages do not provide a public
+third-party job-feed contract. Keep both groups partial until a sanitized
 board/detail fixture and a supported, authorized collection route are
 available.
-The alias audit also found eight source groups on known ATS hostnames where the
-existing direct adapter lacks a required identifier: three Paylocity board
-UUIDs, three Workday site paths (all with historical DNS errors), and two
-Rippling board paths. They remain generic until the source-specific ID or route
-is verified; no tenant identifier is guessed. Vendor docs say Paylocity API
+
+A separate offline CareerPlug review covered eight source groups. The saved
+HTML did not establish a complete listing tied to an exact tracker URL, and
+the standalone parser keeps every result integration-incomplete. TalentOS skips
+downstream detail fetching only when a supplied description is at least 201
+characters; that behavior does not prove a board was fully enumerated. Keep
+CareerPlug out of the integration-ready set until an approved listing fixture
+proves the item count, visible IDs, and pagination are complete.
+
+The v34 primary-route reconciliation found six source groups on known ATS
+hostnames where the existing direct adapter lacks a required identifier: two
+Paylocity board UUIDs, three Workday site paths (all with historical DNS
+errors), and one Rippling board path. These correspond to six employer keys;
+no exact alternate route was present in the same employer record or normalized
+source group. They remain generic until the source-specific ID or route is
+verified; no tenant identifier is guessed. Vendor docs say Paylocity API
 access is provisioned through an integration agreement, Workday Career Site
 IDs are tenant-configured and can be excluded from third-party indexing, and
 Rippling recruiting APIs require company-scoped credentials and permissions;
