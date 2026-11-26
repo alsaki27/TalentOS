@@ -50,13 +50,16 @@ TalentOS ingest.
 The v26 robots audit recorded 5,932 source URLs allowed, 69 disallowed, and
 3,918 unresolved. Later November 14 retries covered only subsets and did not
 produce a new full-denominator audit. Robots allowance does not establish the
-right to collect and reuse jobs. The private per-source permission manifest
-is absent from this checkout; its template is blank. The scheduled runner
-therefore has no recorded approved sources and must make no content requests
-until the private manifest is populated with reviewed evidence.
-This leaves zero source groups cleared for scheduled content collection in the
-saved operational checkpoint, even though the code can schedule an approved
-subset once the private inputs are supplied.
+right to collect and reuse jobs. The approved per-source permission manifest
+is absent from this checkout; its template is blank. Private review queues
+have now been generated from the exact tracker/disposition join. They contain
+all 9,919 groups with `pending` status and blank evidence fields; one also has
+employer/route/history context. Neither queue grants permission. The current
+v33 scheduler was run against the enriched queue and selected zero groups,
+started zero content fetches, and invoked no ingest. The queues and preflight
+output are in the gitignored private reconciliation folder named in the
+Operational review files section. The scheduled runner must remain at zero
+sources until reviewers record approved, unexpired exact-source evidence.
 
 The current crawler recognizes 565 direct ATS/API routes in the tracker; the
 other 9,354 use generic discovery. This includes 14 verified iCIMS host/path
@@ -70,16 +73,32 @@ coverage was verified. These are historical outcomes, not current-code
 validation or permission. The 9,074-host route audit found 8,834 hosts represented once,
 so much of the remaining adapter work is a long tail of custom employer pages.
 Current exact-route cohorts identified in the audit include GovernmentJobs /
-SchoolJobs (70), ADP Workforce Now (23), UKG / UltiPro
-(27), Paycom (22), Jobvite (7), Dayforce (9), USAJOBS (7), and Taleo Business
-Edition (7). The route match
-alone does not prove vendor identity or collection rights.
+SchoolJobs (70), ADP Workforce Now (23), Jobvite (7), Dayforce (9), USAJOBS
+(7), and Taleo Business Edition (7). UKG / UltiPro, Paycom, AppliTrack, and
+JobDiva are generic policy-held or unresolved groups, not direct adapter
+routes. A route match alone does not prove vendor identity or collection
+rights.
 
-These exact-route counts use the current normalizer and `_platform` mapping. A
-broader hostname-pattern scan found 24 Paycom, 28 UKG / UltiPro, five
-AppliTrack, and five JobDiva groups. Extra Paycom, UKG, AppliTrack, and JobDiva
-host aliases remain generic until they match an exact route rule; these vendor
-host-pattern counts are not additional groups to add to the 9,919 denominator.
+The November 26 offline suffix audit used the current 9,919-row source
+disposition file and `_platform` mapping. Within the 9,354 generic groups, it
+found 26 `oraclecloud.com` sources (25 historical partials for missing
+JobPosting markup, one robots block), five JobDiva sources (all partial for
+missing JobPosting markup), 27 UKG sources and 23 Paycom sources (all policy
+holds), five AppliTrack sources (three errors, two partials), and two
+SilkRoad sources (one error, one partial). These are subset counts, not new
+groups to add to the denominator.
+
+The Oracle and JobDiva parser cohorts have no saved fetched-HTML fixtures, so
+there is no evidence-backed parser change to make from the current artifacts.
+Oracle's published Candidate Experience requisition REST endpoints are marked
+internal-use, while its posted-job details endpoint is limited to approved
+Oracle Cloud Marketplace partners; do not treat them as an anonymous public
+feed. See [Oracle Candidate Experience requisitions](https://docs.oracle.com/en/cloud/saas/human-resources/farws/api-recruiting-ce-job-requisitions.html)
+and [Oracle posted jobs](https://docs.oracle.com/en/cloud/saas/human-resources/farws/api-job-site-posted-jobs.html).
+JobDiva's [official FAQ](https://www.jobdiva.com/faq) describes its candidate
+career/jobs portal, but the reviewed official pages do not provide a publicthird-party job-feed contract. Keep both groups partial until a sanitized
+board/detail fixture and a supported, authorized collection route are
+available.
 The alias audit also found eight source groups on known ATS hostnames where the
 existing direct adapter lacks a required identifier: three Paylocity board
 UUIDs, three Workday site paths (all with historical DNS errors), and two
@@ -219,11 +238,13 @@ restrict automated extraction and third-party reuse without written
 authorization. NEOGOV's [customer RSS notice](https://success.neogov.com/insight-product-updates-112/insight-summer-2025-release-notes-15859)
 documents feed URL templates but no item schema, full-description guarantee,
 or completeness semantics. Frontline / AppliTrack has no reviewed public feed
-schema; JobDiva's API listing endpoint and third-party vacancy rights are also
-unverified. Both domains are hard-held in the crawler even if a permission row
-is mistakenly marked approved. Do not activate these cohorts until the vendor
-and employer supply the documented interface and written permission covering
-TalentOS collection and reuse.
+schema. JobDiva's [official FAQ](https://www.jobdiva.com/faq) confirms a
+candidate career/jobs portal, but the reviewed official material does not
+document a public listing API or third-party vacancy rights. No JobDiva
+adapter is enabled. These domains are hard-held in the crawler even if a
+permission row is mistakenly marked approved. Do not activate these cohorts
+until the vendor and employer supply the documented interface and written
+permission covering TalentOS collection and reuse.
 
 The generic page discovery path also recognizes linked TalentBrew and SAP
 SuccessFactors boards. This is the current code surface, not a claim that every
@@ -414,8 +435,12 @@ outputs from the current audit, not part of this public handoff.
 
 The current local offline readiness reconciliation is saved at
 `outputs/employer-career-ingest-run-2026-11-26-offline-v33-route-and-reason-reconciliation/`.
-It contains the full 9,919-row source disposition export and integration-ready
-payload snapshot, uses saved attempts through Nov 14, and remains gitignored.
+It contains the full 9,919-row source disposition export, an enriched permission
+review queue and a seven-column pending manifest (all rows pending, zero
+approved), the scheduler preflight selecting zero sources, and the
+integration-ready payload snapshot. The crawl data uses saved attempts through
+Nov 14. The entire folder remains gitignored; never publish the queues or job
+payloads.
 The Nov 14 audit report remains at
 `outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`;
 it contains the source-to-key map, robots outcomes, vendor route inventory,
