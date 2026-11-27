@@ -3,8 +3,9 @@
 
 The employer tracker and permission manifest are private operational inputs.
 Only exact normalized URLs with an unexpired approval record are passed to the
-existing crawler. This wrapper is dry-run by default; ``--ingest`` is required
-to stage complete results through TalentOS' existing Job CEO endpoint.
+existing crawler. Ingest staging is disabled by default. Any exact source URL
+with a valid approval is still fetched unless ``--preflight-only`` is used;
+that option validates the selection and makes no career-page requests.
 """
 from __future__ import annotations
 
@@ -183,11 +184,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--refresh-completed-after-hours", type=float, default=24, help="refresh complete source results older than this interval")
     parser.add_argument("--ingest", action="store_true", help="stage complete jobs through TalentOS; off by default")
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="validate the permission manifest and selected tracker groups without requesting source pages",
+    )
     args = parser.parse_args(argv)
     if not 1 <= args.workers <= 64:
         parser.error("--workers must be between 1 and 64")
     if not math.isfinite(args.refresh_completed_after_hours) or args.refresh_completed_after_hours <= 0:
         parser.error("--refresh-completed-after-hours must be a finite number greater than zero for scheduled runs")
+    if args.preflight_only and args.ingest:
+        parser.error("--preflight-only cannot be combined with --ingest")
     if args.ingest and not os.environ.get("INGEST_SECRET"):
         parser.error("--ingest requires INGEST_SECRET in the environment")
 
@@ -215,11 +223,28 @@ def main(argv: list[str] | None = None) -> int:
             "policy_rows": policy_summary,
             "selected_sources": selected_summary,
             "refresh_completed_after_hours": args.refresh_completed_after_hours,
+            "preflight_only": args.preflight_only,
             "ingest_requested": args.ingest,
             "ingest_post_phase_invoked": False,
             "content_fetch_started": False,
             "output_dir": str(output_dir),
         }
+        if args.preflight_only:
+            base_summary.update({
+                "run_finished_at_utc": datetime.now(timezone.utc).isoformat(),
+                "crawler_exit_code": 0,
+                "crawler_invoked": False,
+                "crawler_summary_valid": False,
+                "content_fetch_started": False,
+                "ingest_post_phase_invoked": False,
+                "result": "preflight only; crawler not invoked",
+            })
+            _write_summary(summary_path, base_summary)
+            print(
+                "Preflight complete; no source requests were made. "
+                f"Selected source groups={selected_summary['selected_source_groups']}; summary={summary_path}"
+            )
+            return 0
         if not selected_summary["selected_source_groups"]:
             base_summary.update({
                 "run_finished_at_utc": datetime.now(timezone.utc).isoformat(),

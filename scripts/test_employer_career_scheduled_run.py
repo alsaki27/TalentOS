@@ -179,6 +179,46 @@ class ScheduledEmployerCareerRunTests(unittest.TestCase):
         self.assertFalse(summary["content_fetch_started"])
         self.assertFalse(summary["ingest_post_phase_invoked"])
 
+    def test_preflight_only_reports_approved_selection_without_fetching_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = self._tracker(root / "tracker.csv")
+            policy = self._policy(root / "permissions.csv", [self._approved("https://one.example/careers")])
+            output = root / "scheduled-output"
+            argv = [
+                "employer_career_scheduled_run.py",
+                "--input", str(tracker),
+                "--permission-manifest", str(policy),
+                "--output-dir", str(output),
+                "--preflight-only",
+            ]
+            with patch("sys.argv", argv), patch.object(scheduled.subprocess, "run") as run:
+                self.assertEqual(scheduled.main(), 0)
+                run.assert_not_called()
+            summary = json.loads((output / "scheduled_run_summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(summary["selected_sources"]["selected_source_groups"], 1)
+        self.assertTrue(summary["preflight_only"])
+        self.assertFalse(summary["crawler_invoked"])
+        self.assertFalse(summary["content_fetch_started"])
+        self.assertFalse(summary["ingest_post_phase_invoked"])
+
+    def test_preflight_only_cannot_be_combined_with_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = self._tracker(root / "tracker.csv")
+            policy = self._policy(root / "permissions.csv", [])
+            argv = [
+                "employer_career_scheduled_run.py",
+                "--input", str(tracker),
+                "--permission-manifest", str(policy),
+                "--output-dir", str(root / "scheduled-output"),
+                "--preflight-only",
+                "--ingest",
+            ]
+            with patch("sys.argv", argv), self.assertRaises(SystemExit) as raised:
+                scheduled.main()
+        self.assertEqual(raised.exception.code, 2)
+
     def test_approved_schedule_invokes_checkpointed_crawler_without_ingest_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

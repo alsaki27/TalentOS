@@ -432,6 +432,13 @@ python scripts/employer_career_scheduled_run.py `
   --refresh-completed-after-hours 24
 ```
 
+Before allowing any source requests, run the same command with
+`--preflight-only`. It validates the manifest and reports the exact selected
+group and employer counts without invoking the crawler, even when approved
+rows exist. It writes the filtered tracker and summary under the private output
+directory. Review those counts and the ledger evidence before running the
+command without `--preflight-only`.
+
 The default behavior only fetches the URLs approved in the ledger and writes a
 private crawl checkpoint. It does not post to TalentOS. If there are zero
 approved sources, it records a summary and makes no career-page requests.
@@ -552,6 +559,17 @@ ingest. This supersedes the earlier v34 preflight and
 `pending-manifest-scheduler-preflight-v34/` for scheduler status. Crawl outcomes
 remain based on attempts through Nov 14. The entire folder remains gitignored;
 never publish the queues or job payloads.
+
+A second v35 run using `--preflight-only` is saved at
+`fresh-v35-scheduler-preflight-only-2026-11-27/`; it independently confirms
+9,919 pending rows, zero selected groups, and no crawler or content requests.
+The hash-keyed group ledger and aggregate reconciliation are in
+`full-source-readiness-v35-2026-11-27/`. They reconcile all 9,919 groups,
+partition all 565 direct-route groups by remediation class and all 9,354
+generic groups by the 15 offline taxonomy cohorts. Every row has a terminal
+current disposition of `held_pending_exact_source_permission_review`; the
+ledger contains SHA-256 group IDs and aggregate metadata, not names or URLs.
+Both new folders remain gitignored with the private reconciliation files.
 The Nov 14 audit report remains at
 `outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`;
 it contains the source-to-key map, robots outcomes, vendor route inventory,
