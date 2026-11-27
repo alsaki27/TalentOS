@@ -131,6 +131,26 @@ class ScheduledEmployerCareerRunTests(unittest.TestCase):
         self.assertEqual(summary["selected_employer_key_count"], 1)
         self.assertEqual([source["employers"] for source in loaded], [["Example One"]])
 
+    def test_filter_tracker_counts_unique_employers_across_multiple_source_groups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tracker = root / "tracker.csv"
+            tracker.write_text(
+                "employer_key,employer_name,career_page_status,career_page_url,evidence_url\n"
+                "company_id:1,Example One,verified_official,https://one.example/careers,https://one.example/about\n"
+                "company_id:1,Example One,verified_official,https://one.example/jobs,https://one.example/about\n",
+                encoding="utf-8",
+            )
+            filtered = root / "private-output" / "authorized.csv"
+            summary = scheduled.filter_tracker_by_permission(
+                tracker,
+                {"https://one.example/careers", "https://one.example/jobs"},
+                filtered,
+            )
+
+        self.assertEqual(summary["selected_source_groups"], 2)
+        self.assertEqual(summary["selected_employer_key_count"], 1)
+
     def test_pending_only_schedule_makes_no_content_requests(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

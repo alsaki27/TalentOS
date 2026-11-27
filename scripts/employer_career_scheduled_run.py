@@ -83,12 +83,17 @@ def filter_tracker_by_permission(tracker_path: Path, approved_urls: set[str], ou
         writer.writeheader()
         writer.writerows(selected)
     grouped = crawler.load_sources(output_path)
+    selected_employer_keys = {
+        employer_key
+        for source in grouped
+        for employer_key in source.get("employer_keys", [])
+    }
     return {
         "tracker_rows_total": len(rows),
         "verified_tracker_rows": sum(row.get("career_page_status") in VERIFIED_ROUTE_STATUSES for row in rows),
         "selected_tracker_rows": len(selected),
         "selected_source_groups": len(grouped),
-        "selected_employer_key_count": sum(len(source.get("employer_keys", [])) for source in grouped),
+        "selected_employer_key_count": len(selected_employer_keys),
         "approved_urls_not_in_tracker": len(unknown_approved),
     }
 

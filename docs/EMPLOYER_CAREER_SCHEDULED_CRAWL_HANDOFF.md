@@ -70,7 +70,12 @@ need exact configuration or authorization, 22 need access/freshness resolution,
 and 86 need a sanitized source fixture before a parser/payload change is
 justified. No direct-route group has a verified v34 attempt; even the historical
 complete outcomes still need a current approved run. These are not current v34
-validations. The v34 classifier also requires exact
+validations. A fresh offline review split the 86 fixture-needed groups across
+ApplicantPro (8), ApplicantStack (3), Greenhouse (1), iCIMS (12), JazzHR (29),
+Rippling (7), SmartRecruiters (12), and Workday (14). One private, source-linked
+ApplicantStack snapshot showed 74 of 74 listing links but no matching detail
+payloads, so it does not establish integration readiness. The v34 classifier
+also requires exact
 vendor domains or dot-boundary subdomains for Greenhouse, Lever, Ashby, and
 SmartRecruiters, preventing lookalike-domain false matches; none of the 9,919
 current rows changed route family. This includes 14 verified iCIMS host/path
