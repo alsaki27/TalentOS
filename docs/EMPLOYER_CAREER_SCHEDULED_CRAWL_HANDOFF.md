@@ -133,7 +133,39 @@ the standalone parser keeps every result integration-incomplete. TalentOS skips
 downstream detail fetching only when a supplied description is at least 201
 characters; that behavior does not prove a board was fully enumerated. Keep
 CareerPlug out of the integration-ready set until an approved listing fixture
-proves the item count, visible IDs, and pagination are complete.
+proves the item count, visible IDs, and pagination are complete. Its current
+[API and Data Feed AUP](https://www.careerplug.com/acceptable-use-policy/)
+limits those interfaces to customer hiring activity and prohibits delivering
+their data to a Competitive Platform. TalentOS may fall within that definition
+(inference), so get written CareerPlug clearance before enabling an API/XML
+feed route. That AUP applies to its API and XML-feed features; it does not by
+itself resolve the separate public-HTML route.
+
+Other vendor-contract reviews also did not support a shared public adapter:
+
+- **Fountain:** its Hire API lists employer-account openings through OAuth,
+  but the reviewed documentation does not specify the response fields needed
+  for candidate-facing descriptions and job URLs, or reliable pagination
+  completion. Do not confuse its Workforce `jobs` endpoint with public career
+  listings. A customer-authorized sample and documented complete-feed contract
+  are required. See Fountain's [API overview](https://developer.fountain.com/reference/overview),
+  [Hire openings endpoint](https://developer.fountain.com/reference/get_v2-funnels),
+  and [Workforce jobs endpoint](https://developer.fountain.com/reference/get_api-serviceworkforce-jobs).
+- **Cornerstone:** the Recruiting API exposes requisitions and advertised-job
+  details through a customer application and scoped credentials. The reviewed
+  docs do not establish requisition-list completeness for this use. Require
+  customer access, exact read scope, and a sanitized response/pagination
+  sample. See [Get Job Requisition](https://csod.dev/guides/recruiting/recruiting/get-job-requisition.html),
+  [Get Job Requisition Ad Details](https://csod.dev/guides/recruiting/recruiting/get-job-requisition-ad-details.html),
+  and [API access](https://csod.dev/guides/getting-started/getting-access.html).
+- **Avature, ClearCompany, JobApp Network/TalentReef, and HRMDIRECT:** the
+  reviewed official materials did not establish a uniform public third-party
+  job-listing contract suitable for a shared adapter. Customer-specific APIs,
+  partner integrations, or vendor accounts are not public feed permission or
+  a complete listing schema. Require an official listings contract and
+  authorized sample before implementation. See [Avature technical services](https://www.avature.net/avature-technical-services/),
+  [ClearCompany integrations](https://clearcompany.com/capabilities/integrations),
+  and [TalentReef API acceptable-use policy](https://mitratech.com/legal-notice/talentreef-api-acceptable-use-policy/).
 
 The v34 primary-route reconciliation found six source groups on known ATS
 hostnames where the existing direct adapter lacks a required identifier: two
