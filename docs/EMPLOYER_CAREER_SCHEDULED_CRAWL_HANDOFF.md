@@ -487,11 +487,15 @@ The current local offline readiness reconciliation is saved at
 It contains the full 9,919-row source disposition export, an enriched permission
 review queue and a seven-column pending manifest (all rows pending, zero
 approved), an integration-ready payload snapshot, the direct adapter-family
-and remediation matrices, and a generic vendor gap audit. A current-code v34 scheduler preflight
-is in `pending-manifest-scheduler-preflight-v34/`; it selected zero groups,
-invoked no crawler, made zero content requests, and invoked no ingest. Crawl
-outcomes remain based on attempts through Nov 14. The entire folder remains
-gitignored; never publish the queues or job payloads.
+and remediation matrices, and a generic vendor gap audit. A fresh v34 scheduler
+preflight on Nov 27 is in `fresh-v34-scheduler-preflight-2026-11-27/`. Its
+tracker and manifest hashes match the current inputs; it found 9,919 manifest
+rows and zero approved URLs, selected zero tracker rows, source groups, or
+employer keys, invoked no crawler, made no content requests, and invoked no
+ingest. This supersedes the earlier
+`pending-manifest-scheduler-preflight-v34/` for scheduler status. Crawl outcomes
+remain based on attempts through Nov 14. The entire folder remains gitignored;
+never publish the queues or job payloads.
 The Nov 14 audit report remains at
 `outputs/employer-career-ingest-run-2026-11-14-v26-remaining-robots-preflight/`;
 it contains the source-to-key map, robots outcomes, vendor route inventory,
