@@ -70,7 +70,7 @@ from workable_public_job_url import job_page_from_application_url
 
 UA = "TalentOS/1.0 (+https://talent.skarion.com)"
 SOURCE = "talentos_employer_career"
-ADAPTER_VERSION = "employer-career-ingest-v34"
+ADAPTER_VERSION = "employer-career-ingest-v35"
 DEFAULT_TRACKER = Path(__file__).resolve().parents[1] / "data" / "talentos-employer-careers" / "career_page_tracker.csv"
 JSON_LD_RE = re.compile(r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.I | re.S)
 JOB_PATH_RE = re.compile(r"(?:^|/)(?:job|jobs|career|careers|position|positions|opening|openings|vacancy|vacancies)(?:/|$)", re.I)
@@ -2058,28 +2058,51 @@ class _ApplicantStackOpeningsParser(HTMLParser):
     def __init__(self, board_host: str) -> None:
         super().__init__(convert_charrefs=True)
         self.board_host = board_host.lower()
-        self.links: list[dict[str, str]] = []
+        self.links: list[dict[str, Any]] = []
         self.current: dict[str, Any] | None = None
+        self.row_cells: list[str] | None = None
+        self.row_links: list[dict[str, Any]] = []
+        self.cell_text: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
-        if tag.lower() != "a":
-            return
-        attrs = dict(attrs_list)
-        href = urllib.parse.urljoin(f"https://{self.board_host}/", attrs.get("href") or "")
-        parsed = urllib.parse.urlparse(href)
-        if parsed.hostname == self.board_host and re.match(r"^/x/detail/[^/]+/?$", parsed.path, re.I):
-            self.current = {"url": href, "text": []}
+        normalized_tag = tag.lower()
+        if normalized_tag == "tr":
+            self.row_cells = []
+            self.row_links = []
+        elif normalized_tag in {"td", "th"} and self.row_cells is not None:
+            self.cell_text = []
+        elif normalized_tag == "a":
+            attrs = dict(attrs_list)
+            href = urllib.parse.urljoin(f"https://{self.board_host}/", attrs.get("href") or "")
+            parsed = urllib.parse.urlparse(href)
+            if parsed.hostname == self.board_host and re.match(r"^/x/detail/[^/]+/?$", parsed.path, re.I):
+                self.current = {"url": href, "text": []}
 
     def handle_data(self, data: str) -> None:
         if self.current is not None and data.strip():
             self.current["text"].append(data.strip())
+        if self.cell_text is not None and data.strip():
+            self.cell_text.append(data.strip())
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "a" and self.current is not None:
+        normalized_tag = tag.lower()
+        if normalized_tag == "a" and self.current is not None:
             title = re.sub(r"\s+", " ", " ".join(self.current["text"])).strip()
             if title:
-                self.links.append({"url": self.current["url"], "title": title})
+                item = {"url": self.current["url"], "title": title, "row_cells": []}
+                self.links.append(item)
+                if self.row_cells is not None:
+                    self.row_links.append(item)
             self.current = None
+        elif normalized_tag in {"td", "th"} and self.cell_text is not None:
+            if self.row_cells is not None:
+                self.row_cells.append(re.sub(r"\s+", " ", " ".join(self.cell_text)).strip())
+            self.cell_text = None
+        elif normalized_tag == "tr" and self.row_cells is not None:
+            for item in self.row_links:
+                item["row_cells"] = list(self.row_cells)
+            self.row_cells = None
+            self.row_links = []
 
 
 def _applicantstack_page_window(html: str) -> tuple[int, int, int] | None:
@@ -2113,7 +2136,7 @@ def _applicantstack_jobs(url: str, tenant: str, employer: str) -> tuple[list[dic
         parser.close()
     except Exception as exc:
         raise ScrapeFailure(f"ApplicantStack board HTML could not be parsed: {exc}") from exc
-    unique_links: dict[str, dict[str, str]] = {}
+    unique_links: dict[str, dict[str, Any]] = {}
     for item in parser.links:
         canonical = urllib.parse.urlunparse(urllib.parse.urlparse(item["url"])._replace(fragment=""))
         unique_links.setdefault(canonical, item)
@@ -2128,8 +2151,23 @@ def _applicantstack_jobs(url: str, tenant: str, employer: str) -> tuple[list[dic
         if start != 1 or end != total or len(links) != total:
             complete = False
             notes.append(f"ApplicantStack board window {start}-{end} of {total} did not match {len(links)} unique listing links")
+    # One source-linked board shows a generic application form as a detail link.
+    # Exclude only the evidenced row shape, not every vacancy with this title.
+    def is_general_application_form(item: dict[str, Any]) -> bool:
+        cells = [re.sub(r"\s+", " ", str(value)).strip().casefold() for value in item.get("row_cells", [])]
+        return (
+            item["title"].casefold() == "general application"
+            and len(cells) >= 5
+            and cells[2] in {"n/a", "na"}
+            and cells[3] in {"n/a", "na"}
+            and cells[4] == "general application"
+        )
+
+    job_links = [item for item in links if not is_general_application_form(item)]
+    if len(job_links) != len(links):
+        notes.append("ApplicantStack excluded an evidenced General Application form row from vacancy extraction")
     jobs: list[dict[str, Any]] = []
-    for item in links:
+    for item in job_links:
         try:
             detail = _request(item["url"], timeout=12)
             if detail.status_code != 200:
@@ -2150,7 +2188,7 @@ def _applicantstack_jobs(url: str, tenant: str, employer: str) -> tuple[list[dic
         except Exception as exc:
             complete = False
             notes.append(f"ApplicantStack detail failed: {item['url']} ({str(exc)[:120]})")
-    if len(jobs) != len(links):
+    if len(jobs) != len(job_links):
         complete = False
     return jobs, complete, list(dict.fromkeys(notes))
 
@@ -3073,7 +3111,7 @@ def _is_dayforce_host(host: str) -> bool:
     return normalized == "dayforcehcm.com" or normalized.endswith(".dayforcehcm.com")
 
 
-def _dayforce_api_config(url: str) -> tuple[str, str, str, str | None] | None:
+def _dayforce_api_config(url: str, employer_keys: list[str] | None = None) -> tuple[str, str, str, str | None] | None:
     """Return an explicitly configured Dayforce tenant path and customer credentials."""
     raw_mapping = os.environ.get("TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON", "")
     if not raw_mapping:
@@ -3089,8 +3127,17 @@ def _dayforce_api_config(url: str) -> tuple[str, str, str, str | None] | None:
     host = (parsed.hostname or "").lower().rstrip(".")
     if not _is_dayforce_host(host):
         return None
-    config = mapping.get(normalize_source_url(url)) or mapping.get(host)
+    normalized_url = normalize_source_url(url)
+    config = mapping.get(normalized_url)
     if not isinstance(config, dict):
+        return None
+    if (not isinstance(employer_keys, list) or not employer_keys
+            or any(not isinstance(key, str) or not key.strip() for key in employer_keys)):
+        return None
+    configured_keys = config.get("employer_keys")
+    if (not isinstance(configured_keys, list) or not configured_keys
+            or any(not isinstance(key, str) or not key.strip() for key in configured_keys)
+            or sorted(set(configured_keys)) != sorted(set(employer_keys))):
         return None
     username = config.get("username")
     password = config.get("password")
@@ -3121,9 +3168,9 @@ def _valid_dayforce_job_url(value: Any) -> str | None:
     return candidate
 
 
-def _dayforce_jobs(url: str, employer: str) -> tuple[list[dict[str, Any]], bool, list[str]]:
+def _dayforce_jobs(url: str, employer: str, employer_keys: list[str]) -> tuple[list[dict[str, Any]], bool, list[str]]:
     """Read active job postings from the employer-authorized Dayforce JobFeeds API."""
-    config = _dayforce_api_config(url)
+    config = _dayforce_api_config(url, employer_keys)
     if config is None:
         raise ScrapeFailure("Dayforce requires an authorized tenant JobFeeds configuration")
     username, password, company_name, board_code = config
@@ -3223,9 +3270,10 @@ def _usajobs_api_config(url: str) -> tuple[str, str, str] | None:
         return None
     if not isinstance(mapping, dict):
         return None
-    parsed = urllib.parse.urlparse(url)
-    host = (parsed.hostname or "").lower()
-    org_code = mapping.get(normalize_source_url(url)) or mapping.get(host)
+    # One USAJOBS host can contain source boards for multiple agencies. A
+    # hostname-level fallback can silently query the wrong Organization code
+    # for a distinct employer URL, so require an exact normalized source key.
+    org_code = mapping.get(normalize_source_url(url))
     if not isinstance(org_code, str) or not org_code.strip():
         return None
     return api_key, email, org_code.strip()
@@ -3532,7 +3580,7 @@ def _source_policy_hold(host: str, url: str = "", employer_keys: list[str] | Non
         return "NEOGOV public career pages are held; only an explicitly authorized customer feed may run", "NEOGOV GovernmentJobs/SchoolJobs source held pending exact customer feed, written permission, and TalentOS reuse configuration"
     if _is_usajobs_host(host) and _usajobs_api_config(url) is None:
         return "USAJOBS requires a registered API key and exact organization-code mapping", "USAJOBS source held until the official API integration is configured"
-    if _is_dayforce_host(host) and _dayforce_api_config(url) is None:
+    if _is_dayforce_host(host) and _dayforce_api_config(url, employer_keys) is None:
         return "Dayforce requires employer-authorized JobFeeds access and tenant credentials", "Dayforce source held until an authorized tenant configuration is supplied"
     if host == "jobvite.com" or host.endswith(".jobvite.com"):
         if _jobvite_api_config(url, employer_keys) is None:
@@ -3613,7 +3661,7 @@ def scrape_source(source: dict[str, Any]) -> dict[str, Any]:
                 jobs, complete, notes = _usajobs_jobs(url, employer)
                 method = "official_search_api:usajobs-v1"
             elif p[0] == "dayforce":
-                jobs, complete, notes = _dayforce_jobs(url, employer)
+                jobs, complete, notes = _dayforce_jobs(url, employer, employer_keys)
                 method = "authorized_customer_api:dayforce-jobfeeds-v1"
             elif p[0] == "rippling":
                 jobs, complete, notes = _rippling_jobs(url, p[1], employer)

@@ -559,6 +559,27 @@ class CareerScraperTests(unittest.TestCase):
         self.assertIn("registered API key", result["error"])
         request.assert_not_called()
 
+    def test_usajobs_rejects_hostname_only_organization_mapping_before_any_request(self):
+        url = "https://www.usajobs.gov/Search/Results?a=agency"
+        source = {
+            "url": url,
+            "normalized_url": url,
+            "source_urls": [url],
+            "evidence_urls": [],
+            "employers": ["Example Agency"],
+            "employer_keys": ["company_id:10"],
+        }
+        with patch.dict("os.environ", {
+            "USAJOBS_API_KEY": "test-api-key",
+            "USAJOBS_API_EMAIL": "jobs@example.test",
+            "TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON": json.dumps({"www.usajobs.gov": "EXAMPLE"}),
+        }), patch.object(scraper, "_request", side_effect=AssertionError("hostname-only mapping must not request")) as request:
+            result = scraper.scrape_source(source)
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["method"], "policy_hold")
+        self.assertIn("exact organization-code mapping", result["error"])
+        request.assert_not_called()
+
     def test_usajobs_search_api_paginates_with_exact_org_mapping_and_auth_headers(self):
         url = "https://www.usajobs.gov/Search/Results?a=agency"
         self.assertEqual(scraper._platform(url), ("usajobs", "www.usajobs.gov"))
@@ -599,7 +620,7 @@ class CareerScraperTests(unittest.TestCase):
         with patch.dict("os.environ", {
             "USAJOBS_API_KEY": "test-api-key",
             "USAJOBS_API_EMAIL": "jobs@example.test",
-            "TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON": json.dumps({"www.usajobs.gov": "EXAMPLE"}),
+            "TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON": json.dumps({scraper.normalize_source_url(url): "EXAMPLE"}),
         }), patch.object(scraper, "_request", side_effect=[response("R1", "Engineer"), response("R2", "Architect")]) as request:
             result = scraper.scrape_source(source)
 
@@ -754,6 +775,32 @@ class CareerScraperTests(unittest.TestCase):
         self.assertIn("tenant credentials", result["error"])
         request.assert_not_called()
 
+    def test_dayforce_config_requires_exact_source_and_employer_key_set(self):
+        url = "https://" + "www.dayforcehcm.com/CandidatePortal/en-US/Example"
+        normalized_url = scraper.normalize_source_url(url)
+        source = {
+            "url": url, "normalized_url": normalized_url, "source_urls": [url],
+            "evidence_urls": [], "employers": ["Example"],
+            "employer_keys": ["shared-key-a", "shared-key-b"],
+        }
+        host = urllib.parse.urlsplit(url).hostname
+        tenant_config = {"company_name": "Example", "username": "tenant-user", "password": "tenant-secret"}
+        cases = (
+            ("host-only mapping", {host: {**tenant_config, "employer_keys": source["employer_keys"]}}),
+            ("missing employer keys", {normalized_url: tenant_config}),
+            ("mismatched employer keys", {
+                normalized_url: {**tenant_config, "employer_keys": ["different-key"]},
+            }),
+        )
+        for label, config in cases:
+            with self.subTest(mapping=label), \
+                 patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
+                 patch.object(scraper, "_request", side_effect=AssertionError("invalid mapping must not request")) as request:
+                result = scraper.scrape_source(source)
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["method"], "policy_hold")
+            request.assert_not_called()
+
     def test_dayforce_jobfeeds_uses_configured_basic_auth_and_maps_public_postings(self):
         url = "https://prdemo.dayforcehcm.com/CandidatePortal/en-US/example"
         long_description = "Support the engineering team by planning, documenting, and delivering reliable customer services. " * 2
@@ -781,11 +828,12 @@ class CareerScraperTests(unittest.TestCase):
         response = SimpleNamespace(status_code=200, json=lambda: payload)
         source = {
             "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
-            "employers": ["Example"], "employer_keys": ["company_id:12"],
+            "employers": ["Example A", "Example B"], "employer_keys": ["shared-key-a", "shared-key-b"],
         }
         config = {scraper.normalize_source_url(url): {
             "company_name": "Example Co", "username": "tenant-user", "password": "tenant-secret",
             "internal_job_board_code": "CANDIDATEPORTAL",
+            "employer_keys": source["employer_keys"],
         }}
         with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
              patch.object(scraper, "_request", return_value=response) as request:
@@ -834,8 +882,9 @@ class CareerScraperTests(unittest.TestCase):
             "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
             "employers": ["Example"], "employer_keys": ["company_id:12"],
         }
-        config = {"www.dayforcehcm.com": {
+        config = {scraper.normalize_source_url(url): {
             "company_name": "Example", "username": "tenant-user", "password": "tenant-secret",
+            "employer_keys": source["employer_keys"],
         }}
         with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
              patch.object(scraper, "_request", return_value=response):
@@ -854,8 +903,9 @@ class CareerScraperTests(unittest.TestCase):
             "url": url, "normalized_url": url, "source_urls": [url], "evidence_urls": [],
             "employers": ["Example"], "employer_keys": ["company_id:12"],
         }
-        config = {"www.dayforcehcm.com": {
+        config = {scraper.normalize_source_url(url): {
             "company_name": "Example", "username": "tenant-user", "password": "tenant-secret",
+            "employer_keys": source["employer_keys"],
         }}
         with patch.dict("os.environ", {"TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON": json.dumps(config)}), \
              patch.object(scraper, "_request", return_value=SimpleNamespace(status_code=200, json=lambda: {"jobs": []})):
@@ -1236,6 +1286,59 @@ class CareerScraperTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
         self.assertEqual(len(jobs), 2)
         self.assertEqual({job["title"] for job in jobs}, {"Field Engineer", "GIS Analyst"})
+
+    def test_applicantstack_skips_evidenced_general_application_form_but_counts_board_row(self):
+        board_html = '''<table><tbody>
+          <tr><td><a href="https://gis.applicantstack.com/x/detail/job-101">Field Engineer</a></td>
+              <td>08/01/2026</td><td>California</td><td>Full-Time</td><td>GIS</td></tr>
+          <tr><td><a href="https://gis.applicantstack.com/x/detail/job-form">General Application</a></td>
+              <td>09/04/2020</td><td>N/A</td><td>N/A</td><td>General Application</td></tr>
+        </tbody></table><div>Showing 1 - 2 of 2</div>'''
+        detail_html = '''<script type="application/ld+json">{
+          "@context":"https://schema.org","@type":"JobPosting",
+          "title":"Field Engineer","url":"https://gis.applicantstack.com/x/detail/job-101",
+          "description":"Public engineering work and requirements."
+        }</script>'''
+
+        def fake_request(url, **kwargs):
+            if "/x/openings" in url:
+                return SimpleNamespace(status_code=200, text=board_html)
+            return SimpleNamespace(status_code=200, text=detail_html, url=url)
+
+        with patch.object(scraper, "_request", side_effect=fake_request) as request:
+            jobs, complete, notes = scraper._applicantstack_jobs(
+                "https://gis.applicantstack.com/x/openings", "gis", "GIS Field Services"
+            )
+
+        self.assertTrue(complete, notes)
+        self.assertEqual(request.call_count, 2)  # board plus the one actual vacancy
+        self.assertEqual([job["title"] for job in jobs], ["Field Engineer"])
+        self.assertTrue(any("evidenced General Application form row" in note for note in notes))
+
+    def test_applicantstack_keeps_general_application_title_without_form_row_markers(self):
+        board_html = '''<table><tbody>
+          <tr><td><a href="https://gis.applicantstack.com/x/detail/job-general">General Application</a></td>
+              <td>08/01/2026</td><td>California</td><td>Full-Time</td><td>Engineering</td></tr>
+        </tbody></table><div>Showing 1 - 1 of 1</div>'''
+        detail_html = '''<script type="application/ld+json">{
+          "@context":"https://schema.org","@type":"JobPosting",
+          "title":"General Application","url":"https://gis.applicantstack.com/x/detail/job-general",
+          "description":"Public engineering position details and requirements."
+        }</script>'''
+
+        def fake_request(url, **kwargs):
+            if "/x/openings" in url:
+                return SimpleNamespace(status_code=200, text=board_html)
+            return SimpleNamespace(status_code=200, text=detail_html, url=url)
+
+        with patch.object(scraper, "_request", side_effect=fake_request) as request:
+            jobs, complete, notes = scraper._applicantstack_jobs(
+                "https://gis.applicantstack.com/x/openings", "gis", "Example"
+            )
+
+        self.assertTrue(complete, notes)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual([job["title"] for job in jobs], ["General Application"])
 
     def test_applicantstack_incomplete_page_window_is_not_ready(self):
         self.assertEqual(scraper._applicantstack_page_window("<div>Showing 1 - 50 of 74</div>"), (1, 50, 74))

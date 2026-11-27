@@ -41,11 +41,11 @@ tracker were excluded from the denominator and payload output.
 
 The folder name `v28-overall-readiness-frozen` is a cohort label: its original
 report selected historical results only through v23. The new offline report
-adds saved Nov 13-14 attempts through v25. The checked-in crawler is now v34;
+adds saved Nov 13-14 attempts through v25. The checked-in crawler is now v35;
 none of these counts proves a full crawl with the current adapter code.
-The latest saved scheduler validation, dated 2026-11-14, had zero permission
-rows, selected zero sources, started no content fetch, and invoked no
-TalentOS ingest.
+The Nov 14 scheduler validation had zero permission rows, selected zero
+sources, started no content fetch, and invoked no TalentOS ingest. The newer
+v35 preflight is summarized under Operational review files.
 
 The v26 robots audit recorded 5,932 source URLs allowed, 69 disallowed, and
 3,918 unresolved. Later November 14 retries covered only subsets and did not
@@ -55,7 +55,7 @@ is absent from this checkout; its template is blank. Private review queues
 have now been generated from the exact tracker/disposition join. They contain
 all 9,919 groups with `pending` status and blank evidence fields; one also has
 employer/route/history context. Neither queue grants permission. The current
-v34 scheduler was run against the enriched queue and selected zero groups,
+v35 scheduler was run against the enriched queue and selected zero groups,
 started zero content fetches, and invoked no ingest. The queues and preflight
 output are in the gitignored private reconciliation folder named in the
 Operational review files section. The scheduled runner must remain at zero
@@ -66,16 +66,19 @@ other 9,354 use generic discovery. The v25 historical outcomes contain 335
 complete and 230 incomplete direct-route groups; the private
 `adapter_family_historical_matrix.csv` breaks these down by route family, and
 `direct_route_remediation_matrix.csv` breaks down incomplete work: 122 groups
-need exact configuration or authorization, 22 need access/freshness resolution,
-and 86 need a sanitized source fixture before a parser/payload change is
-justified. No direct-route group has a verified v34 attempt; even the historical
-complete outcomes still need a current approved run. These are not current v34
-validations. A fresh offline review split the 86 fixture-needed groups across
-ApplicantPro (8), ApplicantStack (3), Greenhouse (1), iCIMS (12), JazzHR (29),
-Rippling (7), SmartRecruiters (12), and Workday (14). One private, source-linked
-ApplicantStack snapshot showed 74 of 74 listing links but no matching detail
-payloads, so it does not establish integration readiness. The v34 classifier
-also requires exact
+were assigned configuration or authorization gates, 22 access/freshness gates,
+and 86 fixture-needed review candidates. These are historical triage buckets,
+not confirmed code defects. No direct-route group has a verified v35 attempt;
+even the historical complete outcomes still need a current approved run. These
+are not current v35 validations. A fresh offline review split the 86 candidates
+across ApplicantPro (8), ApplicantStack (3), Greenhouse (1), iCIMS (12),
+JazzHR (29), Rippling (7), SmartRecruiters (12), and Workday (14). One private,
+source-linked ApplicantStack snapshot showed all 74 listing links, including
+one row marked `General Application` with N/A state/type fields. The v35 adapter keeps that
+row in the board-total check and excludes only that exact row pattern from
+vacancy extraction; this does not current-validate the source. No other
+fixture-needed cohort had source-linked response evidence proving a parser fix.
+The v34 classifier also requires exact
 vendor domains or dot-boundary subdomains for Greenhouse, Lever, Ashby, and
 SmartRecruiters, preventing lookalike-domain false matches; none of the 9,919
 current rows changed route family. This includes 14 verified iCIMS host/path
@@ -102,6 +105,13 @@ SchoolJobs (70), ADP Workforce Now (23), Jobvite (7), Dayforce (9), USAJOBS
 JobDiva are generic policy-held or unresolved groups, not direct adapter
 routes. A route match alone does not prove vendor identity or collection
 rights.
+
+The v34 generic-host audit separately found 9,354 groups across 9,044 hosts:
+8,810 groups are on singleton hosts, while 234 repeated hosts cover the other
+544 groups. Vendor/path signatures assign 111 generic groups to named cohorts
+(confidence varies); 9,243 remain unmatched. Do not assign an ATS adapter from
+a brand or path token alone. These cohort counts partition the 9,354 generic
+groups and stay within the 9,919 total.
 
 The November 26 offline vendor audit used the current 9,919-row source
 disposition file. Within the 9,354 generic groups, it found 26 Oracle Cloud
@@ -225,7 +235,7 @@ status remains a policy/access disposition, not a retry instruction by itself.
 A November 26 terms/robots review identified ten source groups hosted directly
 on third-party job boards: four Indeed, four LinkedIn, one Lensa, and one
 ZipRecruiter. These are among the 9,354 generic groups, not extra groups in the
-9,919 denominator. v34 holds them before source requests and at the centralized
+9,919 denominator. v35 holds them before source requests and at the centralized
 request/redirect boundary. They need a vendor-authorized interface that grants
 TalentOS collection and reuse rights; an employer's career-page permission
 alone does not authorize scraping a third-party board. No current crawl has
@@ -234,14 +244,16 @@ reclassified these sources yet.
 A separate review found three employer records using `jobs.silkroad.com`.
 SilkRoad documents a customer RSS feed for its Candidate Experience site, but
 the feed reflects only configured public detail-page fields and does not prove
-complete ATS coverage or third-party reuse rights. v34 holds this host at source
+complete ATS coverage or third-party reuse rights. v35 holds this host at source
 preflight and the request/redirect boundary until the employer/vendor confirms
 feed coverage, robots access, and recurring TalentOS collection and reuse.
 
 The direct URL adapters cover Greenhouse, Lever, Ashby, SmartRecruiters,
 Workable, Recruitee, Pinpoint, Breezy, Teamtailor, Personio, BambooHR, iCIMS,
 ApplicantStack, ApplicantPro, JazzHR, Paylocity, Rippling, Workday, and Taleo
-Enterprise. ADP Workforce Now now has a strict customer API adapter in
+Enterprise. ApplicantStack excludes one evidenced non-vacancy form row by its
+exact title and row fields, while retaining it in the full board-total check.
+ADP Workforce Now now has a strict customer API adapter in
 `scripts/adp_wfn_adapter.py`. It requires an exact source/employer mapping,
 written authorization evidence, provisioned read scope, confirmed response
 fields, mutual-TLS credentials, and an operator-verified exact candidate-host
@@ -276,11 +288,11 @@ confirm the description field before configuring that source. Credentials and
 sample evidence stay in private storage.
 
 The Dayforce adapter calls the customer `GET JobFeeds` API for nine mapped
-routes, but each source stays held until the employer provides tenant
-configuration and an approved permission-manifest row. The USAJOBS adapter
-uses the official Search API for seven mapped routes, but they stay held until
-the private runner has an API key, API email, and exact URL-or-host-to-
-organization-code map.
+routes, but each source stays held until the employer provides an exact-URL
+configuration bound to that source's employer-key set and an approved
+permission-manifest row. The USAJOBS adapter uses the official Search API for
+seven mapped routes, but they stay held until the private runner has an API key,
+API email, and exact normalized-URL-to-organization-code map.
 
 For Jobvite, store `TALENTOS_JOBVITE_FEED_CONFIG_JSON` in the private secret
 store, keyed by the exact normalized career-source URL. Each entry must match
@@ -427,7 +439,8 @@ approved sources, it records a summary and makes no career-page requests.
 For USAJOBS sources, register TalentOS for an API key and keep `USAJOBS_API_KEY`,
 `USAJOBS_API_EMAIL`, and `TALENTOS_USAJOBS_ORGANIZATION_MAP_JSON` in the
 runner's private secret/config store. The map must match each source's exact
-normalized URL or hostname to its official USAJOBS `Organization` code. The
+normalized URL to its official USAJOBS `Organization` code. Hostname-only
+entries are rejected because one host can serve multiple agencies. The
 adapter requests only the documented Search API, checks page totals, uses the
 official announcement URL for each job, and refuses to run without all three
 settings. The current API terms allow lawful commercial use of Public Data;
@@ -442,10 +455,11 @@ URL; record the API registration and accepted terms as the evidence reference.
 
 For Dayforce, the private runner must provide
 `TALENTOS_DAYFORCE_JOBFEED_CONFIG_JSON`, keyed by the exact normalized source
-URL or its Dayforce hostname. Each value must provide `company_name` (the
-Dayforce API CompanyName path segment), `username`, and `password`; use the
-optional `internal_job_board_code` when one tenant serves distinct career
-sites. Store this
+URL and include the exact source `employer_keys` list. Hostname-only keys or a
+different employer-key set are rejected because one Dayforce host may serve
+multiple source groups. Each value must provide `company_name` (the Dayforce
+API CompanyName path segment), `username`, and `password`; use the optional
+`internal_job_board_code` when one tenant serves distinct career sites. Store this
 JSON in the private secret store; do not add credentials to the tracker or
 repository. The employer must enable external job-board sourcing and grant the
 required web-services role access. The adapter requests active postings only,
@@ -496,7 +510,7 @@ reports Job CEO's `logged_count` separately from staged count. The run uses
 `sql/neon_fixes/127_job_ceo_deferred_staging_status.sql` first. The uploader's
 14 offline tests passed; API-route tests and TypeScript checks still need to
 run in a development environment with Node dependencies. The private
-permission manifest is absent here, and the v34 preflight still selects zero
+permission manifest is absent here, and the v35 preflight still selects zero
 sources; crawl outcomes remain historical through Nov 14, so this code is not
 ready to activate against TalentOS. Keep `BASE_URL`, `INGEST_SECRET`, and `CRON_SECRET` in the private
 secret store and out of logs.
@@ -529,12 +543,12 @@ The current local offline readiness reconciliation is saved at
 It contains the full 9,919-row source disposition export, an enriched permission
 review queue and a seven-column pending manifest (all rows pending, zero
 approved), an integration-ready payload snapshot, the direct adapter-family
-and remediation matrices, and a generic vendor gap audit. A fresh v34 scheduler
-preflight on Nov 27 is in `fresh-v34-scheduler-preflight-2026-11-27/`. Its
+and remediation matrices, and a generic vendor gap audit. A fresh v35 scheduler
+preflight on Nov 27 is in `fresh-v35-scheduler-preflight-2026-11-27/`. Its
 tracker and manifest hashes match the current inputs; it found 9,919 manifest
 rows and zero approved URLs, selected zero tracker rows, source groups, or
 employer keys, invoked no crawler, made no content requests, and invoked no
-ingest. This supersedes the earlier
+ingest. This supersedes the earlier v34 preflight and
 `pending-manifest-scheduler-preflight-v34/` for scheduler status. Crawl outcomes
 remain based on attempts through Nov 14. The entire folder remains gitignored;
 never publish the queues or job payloads.
