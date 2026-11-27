@@ -94,7 +94,8 @@ Within the generic cohort, the same historical report has 1,142 complete and
 transport/unavailable, 270 other, 232 robots denial, 80 vendor/authorization
 hold, 56 revalidation, 43 transport/timeout, and one payload mismatch. These
 counts partition the 8,212 generic incomplete groups; they are historical and
-do not add to the full 9,919 denominator.
+do not add to the full 9,919 denominator. This is an exclusive primary-reason
+classification; crawler-method counts below use a different axis and subset.
 Current exact-route cohorts identified in the audit include GovernmentJobs /
 SchoolJobs (70), ADP Workforce Now (23), Jobvite (7), Dayforce (9), USAJOBS
 (7), and Taleo Business Edition (7). UKG / UltiPro, Paycom, AppliTrack, and
@@ -166,6 +167,13 @@ Other vendor-contract reviews also did not support a shared public adapter:
   authorized sample before implementation. See [Avature technical services](https://www.avature.net/avature-technical-services/),
   [ClearCompany integrations](https://clearcompany.com/capabilities/integrations),
   and [TalentReef API acceptable-use policy](https://mitratech.com/legal-notice/talentreef-api-acceptable-use-policy/).
+- **HRMDIRECT:** the three saved HTML captures are career-site shells with an
+  external widget loader, not rendered listings; they contain no job IDs,
+  detail records, or pagination proof. The historical robots preflight marked
+  those three sample routes unreachable after off-route HTTP 302 responses.
+  No complete, source-linked fixture or public feed contract is available.
+  Keep them unresolved until a permitted listing/detail capture proves
+  coverage and the exact-source robots behavior is resolved.
 
 The v34 primary-route reconciliation found six source groups on known ATS
 hostnames where the existing direct adapter lacks a required identifier: two
@@ -190,7 +198,9 @@ partial `no_job_urls_in_sitemaps`, 1,828 partial
 `sitemap_structured_data` sources. In the first group, 2,305 sources also had
 candidate pages without recognized job schema. In the sitemap group, 862 had
 at least one detail without recognized schema and 132 hit a crawl or sitemap
-cap. These are source-group counts; detail-note counts can overlap. The same
+cap. These are source-group counts; detail-note counts can overlap. Method
+labels are not the one-reason-per-group classification above and are not
+directly comparable or additive to those reason buckets. The same
 report has 184 partial linked Workday groups (107 recorded unavailable public
 details, 47 pagination/duplicate inconsistencies, and 16 robots issues) and
 104 partial linked iCIMS groups, 87 with robots restrictions. Workday v30 added
